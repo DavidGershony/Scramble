@@ -115,6 +115,115 @@ public class HeadlessGroupMemberTests : HeadlessTestBase
             It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>()), Times.AtLeastOnce);
     }
 
+    // --- Multi-device Add Member ---
+
+    [AvaloniaTheory]
+    [InlineData("managed")]
+    public async Task AddMember_MultipleDevices_PublishesWelcomePerDevice(string backend)
+    {
+        if (ShouldSkip(backend)) return;
+
+        var creator = await CreateRealContext(backend);
+        await creator.MessageService.InitializeAsync();
+
+        // Two joiner "devices" — same Nostr identity, different MLS services
+        var joinerDevice1 = await CreateRealContext(backend);
+        await joinerDevice1.MessageService.InitializeAsync();
+        var joinerDevice2 = await CreateRealContext(backend);
+        await joinerDevice2.MessageService.InitializeAsync();
+
+        // Use device1's pubkey as the shared Nostr identity
+        var joinerPubKey = joinerDevice1.User.PublicKeyHex;
+
+        // Creator creates a group
+        var groupInfo = await creator.MlsService.CreateGroupAsync("Multi-Device Group", new[] { "wss://relay.test" });
+        var chat = new Chat
+        {
+            Id = Guid.NewGuid().ToString(),
+            Name = "Multi-Device Group",
+            Type = ChatType.Group,
+            MlsGroupId = groupInfo.GroupId,
+            MlsEpoch = groupInfo.Epoch,
+            ParticipantPublicKeys = new List<string> { creator.User.PublicKeyHex },
+            CreatedAt = DateTime.UtcNow,
+            LastActivityAt = DateTime.UtcNow
+        };
+        await creator.Storage.SaveChatAsync(chat);
+
+        // Generate KPs from each device (different MLS leaves)
+        var kp1 = await joinerDevice1.MlsService.GenerateKeyPackageAsync();
+        PrepareKeyPackageForAddMember(kp1, joinerPubKey);
+        kp1.SlotId = "device1-slot-" + Guid.NewGuid().ToString("N");
+
+        var kp2 = await joinerDevice2.MlsService.GenerateKeyPackageAsync();
+        PrepareKeyPackageForAddMember(kp2, joinerPubKey);
+        kp2.SlotId = "device2-slot-" + Guid.NewGuid().ToString("N");
+
+        // Mock relay to return both KPs for the same pubkey
+        creator.MockNostr.Setup(n => n.FetchKeyPackagesAsync(joinerPubKey))
+            .ReturnsAsync((IEnumerable<KeyPackage>)new[] { kp1, kp2 });
+
+        // Act: add member — should send Welcome to both devices
+        await creator.MessageService.AddMemberAsync(chat.Id, joinerPubKey);
+
+        // Assert: exactly 2 Welcomes published (one per device)
+        creator.MockNostr.Verify(n => n.PublishWelcomeAsync(
+            It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()), Times.Exactly(2));
+
+        // Assert: participant list only has one entry (same Nostr identity, not per-device)
+        var stored = await creator.Storage.GetChatAsync(chat.Id);
+        Assert.Contains(joinerPubKey, stored!.ParticipantPublicKeys);
+    }
+
+    [AvaloniaTheory]
+    [InlineData("managed")]
+    public async Task AddMember_SameSlotMultipleKPs_TakesLatestOnly(string backend)
+    {
+        if (ShouldSkip(backend)) return;
+
+        var creator = await CreateRealContext(backend);
+        await creator.MessageService.InitializeAsync();
+
+        var joiner = await CreateRealContext(backend);
+        await joiner.MessageService.InitializeAsync();
+
+        var groupInfo = await creator.MlsService.CreateGroupAsync("Dedup Test Group", new[] { "wss://relay.test" });
+        var chat = new Chat
+        {
+            Id = Guid.NewGuid().ToString(),
+            Name = "Dedup Test Group",
+            Type = ChatType.Group,
+            MlsGroupId = groupInfo.GroupId,
+            MlsEpoch = groupInfo.Epoch,
+            ParticipantPublicKeys = new List<string> { creator.User.PublicKeyHex },
+            CreatedAt = DateTime.UtcNow,
+            LastActivityAt = DateTime.UtcNow
+        };
+        await creator.Storage.SaveChatAsync(chat);
+
+        // Two KPs with SAME SlotId but different timestamps (rotation scenario)
+        var kpOld = await joiner.MlsService.GenerateKeyPackageAsync();
+        PrepareKeyPackageForAddMember(kpOld, joiner.User.PublicKeyHex);
+        kpOld.SlotId = "same-slot";
+        kpOld.CreatedAt = DateTime.UtcNow.AddHours(-1); // older
+
+        var kpNew = await joiner.MlsService.GenerateKeyPackageAsync();
+        PrepareKeyPackageForAddMember(kpNew, joiner.User.PublicKeyHex);
+        kpNew.SlotId = "same-slot";
+        kpNew.CreatedAt = DateTime.UtcNow; // newer
+
+        // Mock relay to return both KPs (old rotation + new)
+        creator.MockNostr.Setup(n => n.FetchKeyPackagesAsync(joiner.User.PublicKeyHex))
+            .ReturnsAsync((IEnumerable<KeyPackage>)new[] { kpOld, kpNew });
+
+        // Act: dedup should pick only the latest KP per slot
+        await creator.MessageService.AddMemberAsync(chat.Id, joiner.User.PublicKeyHex);
+
+        // Assert: only 1 Welcome (dedup removed the older KP with same SlotId)
+        creator.MockNostr.Verify(n => n.PublishWelcomeAsync(
+            It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+    }
+
     // --- Leave Group ---
 
     [AvaloniaTheory]

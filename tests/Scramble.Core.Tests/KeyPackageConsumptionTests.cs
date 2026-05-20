@@ -183,6 +183,56 @@ public class KeyPackageConsumptionTests
     }
 
     /// <summary>
+    /// MIP-00 §"Rotating KeyPackages": proactive rotation triggered by the hourly timer.
+    /// When no valid (unexpired, unused) KeyPackages remain, AutoPublishKeyPackageIfNeededAsync
+    /// must generate and publish a fresh one — even with no Welcome received.
+    /// This covers devices that have not received a Welcome in >30 days (KP expired by time).
+    /// </summary>
+    [Fact]
+    public async Task AutoPublishKeyPackageIfNeeded_AllKpsExpired_PublishesNewOne()
+    {
+        var storageMock = new Mock<IStorageService>();
+        storageMock.Setup(s => s.InitializeAsync()).Returns(Task.CompletedTask);
+        storageMock.Setup(s => s.GetCurrentUserAsync()).ReturnsAsync(new User
+        {
+            Id = "user_rotation",
+            PublicKeyHex = "e9b03d7d" + new string('0', 56),
+            PrivateKeyHex = new string('0', 64),
+            IsCurrentUser = true
+        });
+        storageMock.Setup(s => s.GetAllChatsAsync()).ReturnsAsync(new List<Chat>());
+        storageMock.Setup(s => s.GetPendingInvitesAsync()).ReturnsAsync(new List<PendingInvite>());
+        // Empty: all KPs are past ExpiresAt so GetUnusedKeyPackagesAsync returns nothing
+        storageMock.Setup(s => s.GetUnusedKeyPackagesAsync(It.IsAny<string>()))
+            .ReturnsAsync(new List<KeyPackage>());
+        storageMock.Setup(s => s.SaveKeyPackageAsync(It.IsAny<KeyPackage>())).Returns(Task.CompletedTask);
+
+        var nostrMock = new Mock<INostrService>();
+        nostrMock.Setup(n => n.Events)
+            .Returns(new System.Reactive.Subjects.Subject<NostrEventReceived>());
+        nostrMock.Setup(n => n.ConnectedRelayUrls).Returns(new List<string>());
+        nostrMock.Setup(n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>>()))
+            .ReturnsAsync("rotated_kp_" + Guid.NewGuid().ToString("N")[..16]);
+
+        var mlsMock = new Mock<IMlsService>();
+        mlsMock.Setup(m => m.InitializeAsync(It.IsAny<string>(), It.IsAny<string>())).Returns(Task.CompletedTask);
+        mlsMock.Setup(m => m.GenerateKeyPackageAsync())
+            .ReturnsAsync(KeyPackage.Create("e9b03d7d" + new string('0', 56), new byte[] { 0x01 }));
+
+        var messageService = new MessageService(storageMock.Object, nostrMock.Object, mlsMock.Object);
+        await messageService.InitializeAsync();
+
+        // Act: same code path as the hourly _kpRotationTimer
+        await messageService.AutoPublishKeyPackageIfNeededAsync();
+
+        mlsMock.Verify(m => m.GenerateKeyPackageAsync(), Times.Once,
+            "Proactive rotation: should generate a new KP when all existing ones are expired");
+        nostrMock.Verify(
+            n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>>()), Times.Once,
+            "Proactive rotation: should publish the new KP to relays");
+    }
+
+    /// <summary>
     /// Fix 3: When there are still unused KeyPackages remaining, do NOT auto-publish.
     /// </summary>
     [Fact]

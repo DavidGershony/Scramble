@@ -293,6 +293,49 @@ public class KeyPackageAuditPersistenceTests : IAsyncLifetime
     //  Test 8: Export/Import state preserves KeyPackage material
     // ──────────────────────────────────────────────────────────────
 
+    // ──────────────────────────────────────────────────────────────
+    //  Test 9: MarkKeyPackageUsed sets ConsumedAt in the database
+    //           (MIP-00 §"Deletion Timing" DB lifecycle tracking)
+    // ──────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task MarkKeyPackageUsed_SetsConsumedAt_InDatabase()
+    {
+        var (storage, _) = await CreateAndInitialize();
+
+        var kp = new KeyPackage
+        {
+            Id = Guid.NewGuid().ToString(),
+            OwnerPublicKey = _pubKeyHex,
+            Data = new byte[] { 0x01, 0x02, 0x03 },
+            NostrEventId = "test_event_" + Guid.NewGuid().ToString("N"),
+            IsUsed = false,
+            ConsumedAt = null,
+            ExpiresAt = DateTime.UtcNow.AddDays(30),
+            CreatedAt = DateTime.UtcNow
+        };
+        await storage.SaveKeyPackageAsync(kp);
+
+        var before = DateTime.UtcNow.AddSeconds(-1);
+        await storage.MarkKeyPackageUsedAsync(kp.Id);
+        var after = DateTime.UtcNow.AddSeconds(1);
+
+        var updated = await storage.GetKeyPackageAsync(kp.Id);
+        Assert.NotNull(updated);
+        Assert.True(updated!.IsUsed, "IsUsed should be set after MarkKeyPackageUsedAsync");
+        Assert.NotNull(updated.ConsumedAt);
+        Assert.True(updated.ConsumedAt!.Value >= before,
+            $"ConsumedAt ({updated.ConsumedAt:O}) should be >= time before mark ({before:O})");
+        Assert.True(updated.ConsumedAt.Value <= after,
+            $"ConsumedAt ({updated.ConsumedAt:O}) should be <= time after mark ({after:O})");
+
+        _output.WriteLine($"ConsumedAt = {updated.ConsumedAt:O}");
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    //  Test 8: Export/Import state preserves KeyPackage material
+    // ──────────────────────────────────────────────────────────────
+
     [Fact]
     public async Task ExportImportState_PreservesKeyPackageMaterial()
     {

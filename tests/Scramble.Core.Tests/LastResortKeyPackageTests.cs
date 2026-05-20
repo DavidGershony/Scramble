@@ -181,6 +181,109 @@ public class LastResortKeyPackageTests : IAsyncLifetime
         _output.WriteLine("Both groups accepted successfully with the same KeyPackage");
     }
 
+    /// <summary>
+    /// After a last-resort KeyPackage is consumed by a Welcome, the key material must remain
+    /// accessible within the 24-hour MIP-00 grace window so that concurrent senders can still
+    /// have their Welcomes processed.
+    /// </summary>
+    [Fact]
+    public async Task ConsumedLastResortKp_StillAccessible_Within24HWindow()
+    {
+        var keyPackageB = await _mlsB.GenerateKeyPackageAsync();
+        _output.WriteLine($"User B KeyPackage: {keyPackageB.Data.Length} bytes");
+
+        var kpCountBefore = _mlsB.GetStoredKeyPackageCount();
+
+        var groupA = await _mlsA.CreateGroupAsync("Group from A", new[] { "wss://relay.test" });
+        var kpForA = new KeyPackage
+        {
+            Data = keyPackageB.Data,
+            NostrTags = keyPackageB.NostrTags,
+            EventJson = CreateFakeKeyPackageEventJson(_pubKeyB, keyPackageB.Data, keyPackageB.NostrTags),
+            NostrEventId = "fakekp_a_" + Guid.NewGuid().ToString("N")
+        };
+        var welcomeA = await _mlsA.AddMemberAsync(groupA.GroupId, kpForA);
+
+        var inviteTask = WaitForObservable(_msgServiceB.NewInvites, TimeSpan.FromSeconds(5));
+        _eventsB.OnNext(BuildWelcomeEvent(_pubKeyA, _pubKeyB, groupA.GroupId, welcomeA.WelcomeData, kpForA.NostrEventId!));
+        var invite = await inviteTask;
+        await _msgServiceB.AcceptInviteAsync(invite.Id);
+
+        // Key material must still be accessible (MIP-00 §"Deletion Timing": 24 h grace window)
+        Assert.True(_mlsB.HasKeyMaterialForKeyPackage(keyPackageB.Data),
+            "Last-resort KP key material must remain accessible after the first Welcome (24 h grace window)");
+        Assert.Equal(kpCountBefore, _mlsB.GetStoredKeyPackageCount());
+
+        _output.WriteLine("Last-resort KP retained correctly after first Welcome");
+    }
+
+    /// <summary>
+    /// A consumed last-resort KP's ConsumedAt timestamp must survive
+    /// ExportServiceStateAsync / ImportServiceStateAsync (service state v5).
+    /// Within the 24 h grace window the KP must still be recognised after reimport.
+    /// </summary>
+    [Fact]
+    public async Task ConsumedKeyPackage_ConsumedAtSurvivesServiceStateRoundtrip()
+    {
+        var keyPackageB = await _mlsB.GenerateKeyPackageAsync();
+
+        // Process a Welcome so ConsumedAt gets stamped on the in-memory KP
+        var groupA = await _mlsA.CreateGroupAsync("Group from A", new[] { "wss://relay.test" });
+        var kpForA = new KeyPackage
+        {
+            Data = keyPackageB.Data,
+            NostrTags = keyPackageB.NostrTags,
+            EventJson = CreateFakeKeyPackageEventJson(_pubKeyB, keyPackageB.Data, keyPackageB.NostrTags),
+            NostrEventId = "fakekp_a_" + Guid.NewGuid().ToString("N")
+        };
+        var welcomeA = await _mlsA.AddMemberAsync(groupA.GroupId, kpForA);
+
+        var inviteTask = WaitForObservable(_msgServiceB.NewInvites, TimeSpan.FromSeconds(5));
+        _eventsB.OnNext(BuildWelcomeEvent(_pubKeyA, _pubKeyB, groupA.GroupId, welcomeA.WelcomeData, kpForA.NostrEventId!));
+        var invite = await inviteTask;
+        await _msgServiceB.AcceptInviteAsync(invite.Id);
+
+        // Export state — v5 format encodes ConsumedAt per KP
+        var stateBytes = await _mlsB.ExportServiceStateAsync();
+        Assert.NotNull(stateBytes);
+        _output.WriteLine($"Exported service state: {stateBytes!.Length} bytes");
+
+        // Import into a fresh MLS service instance
+        var mls2 = new ManagedMlsService(_storageB);
+        await mls2.InitializeAsync(_privKeyB, _pubKeyB);
+        await mls2.ImportServiceStateAsync(stateBytes);
+
+        _output.WriteLine($"After reimport: stored KP count = {mls2.GetStoredKeyPackageCount()}");
+
+        // ConsumedAt was preserved and is still within the 24 h grace window — KP must be accessible
+        Assert.True(mls2.GetStoredKeyPackageCount() > 0,
+            "Consumed last-resort KP must survive service state export/import (v5 format)");
+        Assert.True(mls2.HasKeyMaterialForKeyPackage(keyPackageB.Data),
+            "Consumed last-resort KP key material must be accessible after reimport (within 24 h grace window)");
+    }
+
+    private NostrEventReceived BuildWelcomeEvent(
+        string senderPubKey, string recipientPubKey,
+        byte[] groupId, byte[] welcomeData, string kpEventId)
+    {
+        return new NostrEventReceived
+        {
+            Kind = 444,
+            EventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"),
+            PublicKey = senderPubKey,
+            Content = Convert.ToBase64String(welcomeData),
+            CreatedAt = DateTime.UtcNow,
+            Tags = new List<List<string>>
+            {
+                new() { "p", recipientPubKey },
+                new() { "h", Convert.ToHexString(groupId).ToLowerInvariant() },
+                new() { "e", kpEventId },
+                new() { "encoding", "base64" }
+            },
+            RelayUrl = "wss://test.relay"
+        };
+    }
+
     private static string CreateFakeKeyPackageEventJson(string ownerPubKey, byte[] keyPackageData, List<List<string>>? tags = null)
     {
         var contentBase64 = Convert.ToBase64String(keyPackageData);
