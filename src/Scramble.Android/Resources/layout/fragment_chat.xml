@@ -13,6 +13,43 @@
         app:navigationIcon="?attr/homeAsUpIndicator"
         app:menu="@menu/menu_chat" />
 
+    <!-- Out-of-sync banner -->
+    <LinearLayout
+        android:id="@+id/out_of_sync_banner"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="#FF9800"
+        android:padding="10dp"
+        android:gravity="center_vertical"
+        android:visibility="gone">
+        <TextView
+            android:id="@+id/out_of_sync_text"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="This device is out of sync — messages may be missing."
+            android:textColor="@android:color/white"
+            android:textStyle="bold"
+            android:textSize="13sp" />
+        <Button
+            android:id="@+id/resync_button"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Resync"
+            android:textColor="@android:color/white"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:visibility="visible" />
+        <TextView
+            android:id="@+id/resync_pending_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Resync requested…"
+            android:textColor="@android:color/white"
+            android:textSize="13sp"
+            android:visibility="gone" />
+    </LinearLayout>
+
     <!-- Messages -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/messages_recycler"

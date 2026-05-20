@@ -253,6 +253,21 @@ public interface IMessageService
     Task AutoPublishKeyPackageIfNeededAsync();
 
     /// <summary>
+    /// Post a device-presence announcement to the DeviceSync group ("Private Notes").
+    /// Sends a system message of the form "[Device] {osName} · {shortSlotId} online".
+    /// No-op if the DeviceSync group does not exist yet or has no slot ID.
+    /// </summary>
+    /// <param name="osName">Human-readable OS name, e.g. "Windows", "Android", "macOS".</param>
+    Task AnnounceDeviceToSyncGroupAsync(string osName);
+
+    /// <summary>
+    /// Rotate the local KeyPackage and post a structured resync request to the DeviceSync
+    /// group so other devices of the same identity can re-invite this device to the
+    /// affected group. Sets <see cref="Chat.IsResyncPending"/> on the chat.
+    /// </summary>
+    Task RequestResyncAsync(string chatId);
+
+    /// <summary>
     /// Fetches NIP-17 (kind 14) DM history from relays and routes each unwrapped event
     /// through the normal incoming-message path so bot/agent chats are auto-created and
     /// missed messages persisted. Idempotent — dedup by NostrEventId. Used on login to

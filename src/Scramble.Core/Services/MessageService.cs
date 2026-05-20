@@ -1011,86 +1011,123 @@ public class MessageService : IMessageService, IDisposable
 
         var groupIdHex = Convert.ToHexString(chat.MlsGroupId).ToLowerInvariant();
 
-        // Fetch member's KeyPackage — only use supported cipher suites
+        // Fetch ALL of the member's KeyPackages — each represents a separate device.
+        // In MLS, each device must be added individually with its own Commit + Welcome
+        // so that every device can join the group (multi-device support).
         _logger.LogDebug("AddMember: fetching KeyPackages for {Member}", memberPublicKey[..Math.Min(16, memberPublicKey.Length)]);
         var keyPackages = await _nostrService.FetchKeyPackagesAsync(memberPublicKey);
-        var keyPackage = keyPackages.FirstOrDefault(kp => kp.IsCipherSuiteSupported)
-            ?? throw new InvalidOperationException(
+        var supportedKps = keyPackages.Where(kp => kp.IsCipherSuiteSupported).ToList();
+
+        if (supportedKps.Count == 0)
+            throw new InvalidOperationException(
                 keyPackages.Any()
                     ? $"No KeyPackage with a supported cipher suite found for member (found {keyPackages.Count()} with unsupported suites)"
                     : "No KeyPackage found for member");
-        _logger.LogInformation("AddMember: found KeyPackage {KpId}, {Len} bytes",
-            keyPackage.NostrEventId?[..Math.Min(16, keyPackage.NostrEventId?.Length ?? 0)] ?? "none",
-            keyPackage.Data.Length);
 
-        // MIP-03 §"Commit Message Race Conditions" — sending steps 1-4:
-        // 1. Stage the commit (do NOT advance local MLS state yet)
-        var staged = await _mlsService.StageAddMemberAsync(chat.MlsGroupId, keyPackage);
-        _logger.LogInformation("AddMember: staged commit, welcome={WelcomeLen} bytes, commit={CommitLen} bytes",
-            staged.WelcomeData.Length, staged.CommitData?.Length ?? 0);
+        // Deduplicate: keep only the latest KeyPackage per device (SlotId / d-tag).
+        // Kind 30443 is an addressable event — each device publishes under a unique,
+        // stable d-tag. Relays should return only the latest per d-tag, but we
+        // guard against duplicates here (multiple relays, timing, etc.).
+        // KPs without a SlotId are treated as unique (legacy single-device publishes).
+        var latestPerDevice = supportedKps
+            .GroupBy(kp => kp.SlotId ?? kp.NostrEventId ?? Guid.NewGuid().ToString())
+            .Select(g => g.OrderByDescending(kp => kp.CreatedAt).First())
+            .ToList();
 
-        try
+        _logger.LogInformation("AddMember: found {Total} supported KP(s), {Devices} unique device(s) for {Member}",
+            supportedKps.Count, latestPerDevice.Count, memberPublicKey[..Math.Min(16, memberPublicKey.Length)]);
+
+        var addedCount = 0;
+        foreach (var keyPackage in latestPerDevice)
         {
-            // 2. Publish commit and wait for relay confirmation
-            if (_currentUser != null && staged.CommitData != null && staged.CommitData.Length > 0)
+            _logger.LogInformation("AddMember: adding KP {KpId} (slot={SlotId}), {Len} bytes",
+                keyPackage.NostrEventId?[..Math.Min(16, keyPackage.NostrEventId?.Length ?? 0)] ?? "none",
+                keyPackage.SlotId?[..Math.Min(16, keyPackage.SlotId?.Length ?? 0)] ?? "none",
+                keyPackage.Data.Length);
+
+            // MIP-03 §"Commit Message Race Conditions" — sending steps 1-4:
+            // 1. Stage the commit (do NOT advance local MLS state yet)
+            var staged = await _mlsService.StageAddMemberAsync(chat.MlsGroupId, keyPackage);
+            _logger.LogInformation("AddMember: staged commit, welcome={WelcomeLen} bytes, commit={CommitLen} bytes",
+                staged.WelcomeData.Length, staged.CommitData?.Length ?? 0);
+
+            try
             {
-                var nostrGroupId = _mlsService.GetNostrGroupId(chat.MlsGroupId);
-                var commitGroupId = nostrGroupId != null
-                    ? Convert.ToHexString(nostrGroupId).ToLowerInvariant()
-                    : groupIdHex;
-                var commitEventId = await _nostrService.PublishCommitAsync(
-                    staged.CommitData, commitGroupId, _currentUser.PrivateKeyHex);
-                // ↑ throws PublishUnconfirmedException on no-OK (Phase 3)
-                _logger.LogInformation("AddMember: commit confirmed by relay, event {EventId}", commitEventId);
-
-                // 3. Only NOW advance local MLS state (MIP-03 step 3)
-                await _mlsService.MergeStagedAsync(chat.MlsGroupId);
-                _logger.LogInformation("AddMember: local MLS state merged to new epoch");
-
-                // Mark commit as processed to prevent re-processing our own relay echo
-                await _storageService.SaveMessageAsync(new Message
+                // 2. Publish commit and wait for relay confirmation
+                if (_currentUser != null && staged.CommitData != null && staged.CommitData.Length > 0)
                 {
-                    Id = Guid.NewGuid().ToString(),
-                    ChatId = chatId,
-                    Content = "[commit]",
-                    SenderPublicKey = _currentUser.PublicKeyHex,
-                    NostrEventId = commitEventId,
-                    Timestamp = DateTime.UtcNow,
-                    Type = MessageType.System,
-                    Status = MessageStatus.Sent
-                });
+                    var nostrGroupId = _mlsService.GetNostrGroupId(chat.MlsGroupId);
+                    var commitGroupId = nostrGroupId != null
+                        ? Convert.ToHexString(nostrGroupId).ToLowerInvariant()
+                        : groupIdHex;
+                    var commitEventId = await _nostrService.PublishCommitAsync(
+                        staged.CommitData, commitGroupId, _currentUser.PrivateKeyHex);
+                    // ↑ throws PublishUnconfirmedException on no-OK (Phase 3)
+                    _logger.LogInformation("AddMember: commit confirmed by relay, event {EventId}", commitEventId);
 
-                // 4. Only THEN send the Welcome (MIP-02 §"Timing Requirements")
-                var welcomeEventId = await _nostrService.PublishWelcomeAsync(
-                    staged.WelcomeData, staged.RecipientPublicKey, _currentUser.PrivateKeyHex,
-                    staged.KeyPackageEventId);
-                _logger.LogInformation("AddMember: published Welcome event {EventId} for {Recipient}",
-                    welcomeEventId, staged.RecipientPublicKey[..Math.Min(16, staged.RecipientPublicKey.Length)]);
+                    // 3. Only NOW advance local MLS state (MIP-03 step 3)
+                    await _mlsService.MergeStagedAsync(chat.MlsGroupId);
+                    _logger.LogInformation("AddMember: local MLS state merged to new epoch");
+
+                    // Mark commit as processed to prevent re-processing our own relay echo
+                    await _storageService.SaveMessageAsync(new Message
+                    {
+                        Id = Guid.NewGuid().ToString(),
+                        ChatId = chatId,
+                        Content = "[commit]",
+                        SenderPublicKey = _currentUser.PublicKeyHex,
+                        NostrEventId = commitEventId,
+                        Timestamp = DateTime.UtcNow,
+                        Type = MessageType.System,
+                        Status = MessageStatus.Sent
+                    });
+
+                    // 4. Only THEN send the Welcome (MIP-02 §"Timing Requirements")
+                    var welcomeEventId = await _nostrService.PublishWelcomeAsync(
+                        staged.WelcomeData, staged.RecipientPublicKey, _currentUser.PrivateKeyHex,
+                        staged.KeyPackageEventId);
+                    _logger.LogInformation("AddMember: published Welcome event {EventId} for {Recipient} (slot={SlotId})",
+                        welcomeEventId, staged.RecipientPublicKey[..Math.Min(16, staged.RecipientPublicKey.Length)],
+                        keyPackage.SlotId?[..Math.Min(16, keyPackage.SlotId?.Length ?? 0)] ?? "none");
+
+                    addedCount++;
+                }
             }
-
-            // Update chat participants
-            if (!chat.ParticipantPublicKeys.Any(p => string.Equals(p, memberPublicKey, StringComparison.OrdinalIgnoreCase)))
+            catch (PublishUnconfirmedException ex) when (!_mlsService.HasPendingCommit(chat.MlsGroupId))
             {
-                chat.ParticipantPublicKeys.Add(memberPublicKey);
-                await _storageService.SaveChatAsync(chat);
-                _chatUpdates.OnNext(chat);
-                _logger.LogInformation("AddMember: updated participants for group {GroupId}, now {Count} members",
-                    groupIdHex[..Math.Min(16, groupIdHex.Length)], chat.ParticipantPublicKeys.Count);
+                // Commit was confirmed but Welcome failed — recoverable state.
+                // Local MLS state already advanced; this device can be re-invited.
+                // Continue adding remaining devices instead of aborting all.
+                _logger.LogWarning(ex, "AddMember: Welcome publish failed after commit was confirmed for KP {KpId} — continuing",
+                    keyPackage.NostrEventId?[..Math.Min(16, keyPackage.NostrEventId?.Length ?? 0)] ?? "none");
+            }
+            catch (PublishUnconfirmedException ex) when (_mlsService.HasPendingCommit(chat.MlsGroupId))
+            {
+                // Commit was NOT confirmed — rollback local MLS state
+                _logger.LogWarning(ex, "AddMember: commit publish failed for KP {KpId}, rolling back staged commit — continuing",
+                    keyPackage.NostrEventId?[..Math.Min(16, keyPackage.NostrEventId?.Length ?? 0)] ?? "none");
+                await _mlsService.ClearStagedAsync(chat.MlsGroupId);
+            }
+            catch (Exception ex)
+            {
+                // Unexpected error — clear staged state and continue with remaining devices
+                _logger.LogWarning(ex, "AddMember: failed to add KP {KpId} — clearing staged state and continuing",
+                    keyPackage.NostrEventId?[..Math.Min(16, keyPackage.NostrEventId?.Length ?? 0)] ?? "none");
+                try { await _mlsService.ClearStagedAsync(chat.MlsGroupId); } catch { }
             }
         }
-        catch (PublishUnconfirmedException ex) when (!_mlsService.HasPendingCommit(chat.MlsGroupId))
+
+        if (addedCount == 0)
+            throw new InvalidOperationException($"Failed to add any device for member {memberPublicKey[..Math.Min(16, memberPublicKey.Length)]}");
+
+        // Update chat participants (once for the member, regardless of how many devices were added)
+        if (!chat.ParticipantPublicKeys.Any(p => string.Equals(p, memberPublicKey, StringComparison.OrdinalIgnoreCase)))
         {
-            // Commit was confirmed but Welcome failed — recoverable state.
-            // Local MLS state already advanced; the member can be re-invited.
-            _logger.LogWarning(ex, "AddMember: Welcome publish failed after commit was confirmed");
-            throw;
-        }
-        catch (PublishUnconfirmedException ex) when (_mlsService.HasPendingCommit(chat.MlsGroupId))
-        {
-            // Commit was NOT confirmed — rollback local MLS state
-            _logger.LogWarning(ex, "AddMember: commit publish failed, rolling back staged commit");
-            await _mlsService.ClearStagedAsync(chat.MlsGroupId);
-            throw;
+            chat.ParticipantPublicKeys.Add(memberPublicKey);
+            await _storageService.SaveChatAsync(chat);
+            _chatUpdates.OnNext(chat);
+            _logger.LogInformation("AddMember: updated participants for group {GroupId}, now {Count} members ({DeviceCount} device(s) added)",
+                groupIdHex[..Math.Min(16, groupIdHex.Length)], chat.ParticipantPublicKeys.Count, addedCount);
         }
     }
 
@@ -1970,6 +2007,17 @@ public class MessageService : IMessageService, IDisposable
                 ErrorMessage = ex.Message,
                 Timestamp = DateTime.UtcNow
             });
+
+            // If the error mentions an epoch mismatch the device has fallen behind and can no
+            // longer decrypt future messages — mark it so the UI can surface a resync banner.
+            if (!chat.IsOutOfSync && ex.Message?.Contains("epoch", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                chat.IsOutOfSync = true;
+                await _storageService.SaveChatAsync(chat);
+                _chatUpdates.OnNext(chat);
+                _logger.LogWarning("HandleGroupMessage: chat {ChatId} marked out-of-sync (epoch error)", chat.Id);
+            }
+
             return;
         }
 
@@ -2029,6 +2077,14 @@ public class MessageService : IMessageService, IDisposable
                 await _storageService.SaveMessageAsync(reactionMarker);
             }
             return;
+        }
+
+        // DeviceSync resync request: fire handler in background so the message still
+        // renders in Private Notes, but the re-invite logic runs asynchronously.
+        if (chat.Type == ChatType.DeviceSync &&
+            decrypted.Plaintext?.StartsWith("[ResyncRequest] ", StringComparison.Ordinal) == true)
+        {
+            _ = HandleResyncRequestAsync(decrypted.Plaintext);
         }
 
         // Determine message type and content based on imeta/image metadata
@@ -3038,6 +3094,106 @@ public class MessageService : IMessageService, IDisposable
         {
             _logger.LogWarning(ex, "Failed to download avatar for {PubKey}", publicKeyHex[..16]);
             return null;
+        }
+    }
+
+    public async Task AnnounceDeviceToSyncGroupAsync(string osName)
+    {
+        var syncChatId = await _storageService.GetSettingAsync("device_sync_chat_id");
+        if (string.IsNullOrEmpty(syncChatId)) return;
+
+        var slotId = _mlsService.GetLocalKeyPackageSlotId();
+        var shortSlot = string.IsNullOrEmpty(slotId) ? "unknown" : slotId[..Math.Min(8, slotId.Length)];
+        var content = $"[Device] {osName} · {shortSlot} online";
+
+        try
+        {
+            await SendMessageAsync(syncChatId, content);
+            _logger.LogInformation("AnnounceDevice: posted presence for {OS} device {ShortSlot}", osName, shortSlot);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "AnnounceDevice: failed to post device announcement");
+        }
+    }
+
+    public async Task RequestResyncAsync(string chatId)
+    {
+        if (_currentUser == null)
+            throw new InvalidOperationException("No current user");
+
+        var chat = await _storageService.GetChatAsync(chatId)
+            ?? throw new InvalidOperationException($"Chat {chatId} not found");
+        if (chat.NostrGroupId == null)
+            throw new InvalidOperationException("Chat has no NostrGroupId");
+
+        var slotId = _mlsService.GetLocalKeyPackageSlotId();
+        if (string.IsNullOrEmpty(slotId))
+            throw new InvalidOperationException("No local KeyPackage slot ID — publish a KeyPackage first");
+
+        _logger.LogInformation("RequestResync: posting resync request for chat {ChatId}", chatId);
+
+        // No KP rotation needed — AutoPublishKeyPackageIfNeededAsync already runs after every
+        // Welcome is processed, so a fresh KP is already on the relay for the other device to use.
+
+        // Post structured request to DeviceSync group
+        var syncChatId = await _storageService.GetSettingAsync("device_sync_chat_id");
+        if (!string.IsNullOrEmpty(syncChatId))
+        {
+            var groupNostrIdHex = Convert.ToHexString(chat.NostrGroupId).ToLowerInvariant();
+            var payload = System.Text.Json.JsonSerializer.Serialize(
+                new { slotId, groupNostrId = groupNostrIdHex });
+            await SendMessageAsync(syncChatId, $"[ResyncRequest] {payload}");
+            _logger.LogInformation("RequestResync: sent [ResyncRequest] to sync group for group {GroupId}",
+                groupNostrIdHex[..Math.Min(16, groupNostrIdHex.Length)]);
+        }
+
+        chat.IsResyncPending = true;
+        await _storageService.SaveChatAsync(chat);
+        _chatUpdates.OnNext(chat);
+    }
+
+    private async Task HandleResyncRequestAsync(string messageContent)
+    {
+        try
+        {
+            var jsonPart = messageContent["[ResyncRequest] ".Length..];
+            using var doc = System.Text.Json.JsonDocument.Parse(jsonPart);
+            var requestingSlotId = doc.RootElement.GetProperty("slotId").GetString();
+            var groupNostrId = doc.RootElement.GetProperty("groupNostrId").GetString();
+
+            if (string.IsNullOrEmpty(requestingSlotId) || string.IsNullOrEmpty(groupNostrId))
+                return;
+
+            // Skip if this is our own request
+            var localSlotId = _mlsService.GetLocalKeyPackageSlotId();
+            if (string.Equals(requestingSlotId, localSlotId, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            _logger.LogInformation("HandleResyncRequest: received from slot {SlotId} for group {GroupId}",
+                requestingSlotId[..Math.Min(8, requestingSlotId.Length)],
+                groupNostrId[..Math.Min(16, groupNostrId.Length)]);
+
+            // Find the affected group chat locally
+            var allChats = await _storageService.GetAllChatsAsync();
+            var affectedChat = allChats.FirstOrDefault(c =>
+                c.NostrGroupId != null &&
+                Convert.ToHexString(c.NostrGroupId).Equals(groupNostrId, StringComparison.OrdinalIgnoreCase));
+
+            if (affectedChat == null)
+            {
+                _logger.LogWarning("HandleResyncRequest: no local chat found for group {GroupId}", groupNostrId);
+                return;
+            }
+
+            // Re-invite our own identity — the MLS backend will send Welcomes to all our
+            // active KeyPackages, including the freshly-rotated one from the requesting device.
+            _logger.LogInformation("HandleResyncRequest: re-inviting own identity to chat {ChatId}", affectedChat.Id);
+            await AddMemberAsync(affectedChat.Id, _currentUser!.PublicKeyHex);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "HandleResyncRequest: failed to process resync request");
         }
     }
 

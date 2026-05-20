@@ -103,6 +103,18 @@ public class Chat
     /// Public keys of group admins (from MIP-01 0xF2EE extension).
     /// </summary>
     public List<string> AdminPublicKeys { get; set; } = new();
+
+    /// <summary>
+    /// Set when this device can no longer decrypt messages due to missed MLS commits.
+    /// Cleared when the device successfully rejoins via a new Welcome.
+    /// </summary>
+    public bool IsOutOfSync { get; set; }
+
+    /// <summary>
+    /// Set after <see cref="IsOutOfSync"/> when the device has sent a resync request
+    /// to the DeviceSync group and is waiting for another device to re-invite it.
+    /// </summary>
+    public bool IsResyncPending { get; set; }
 }
 
 public enum ChatType

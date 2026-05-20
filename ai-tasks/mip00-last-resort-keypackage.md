@@ -1,6 +1,12 @@
 # Implement MIP-00 last_resort KeyPackage lifecycle
 
-## Status: Not Started
+## Status: Partially Complete
+
+### What was implemented (2026-05-20)
+- **24 h init_key retention** (MIP-00 §"Deletion Timing"): `StoredKeyPackageMaterial` now carries a `ConsumedAt` timestamp. When `ProcessWelcomeAsync` matches a last-resort KP the material is kept but stamped instead of silently retained forever. `PruneExpiredConsumedKeyPackages()` zeroizes material once 24 h have elapsed; called on state restore, before generating a new KP, and before processing Welcomes.
+- **Service state v5**: serialization bumped to v5 to persist `ConsumedAt` per KP; v4 state is migrated on load (ConsumedAt = null for all KPs).
+
+### Still needed
 
 ## Problem
 

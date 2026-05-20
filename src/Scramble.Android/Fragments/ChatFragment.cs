@@ -99,6 +99,9 @@ public class ChatFragment : Fragment
         var messageInputLayout = view.FindViewById<TextInputLayout>(Resource.Id.message_input_layout)!;
         var sendButton = view.FindViewById<FloatingActionButton>(Resource.Id.send_button)!;
         var uploadStatus = view.FindViewById<TextView>(Resource.Id.upload_status)!;
+        var outOfSyncBanner = view.FindViewById<LinearLayout>(Resource.Id.out_of_sync_banner)!;
+        var resyncButton = view.FindViewById<Android.Widget.Button>(Resource.Id.resync_button)!;
+        var resyncPendingText = view.FindViewById<TextView>(Resource.Id.resync_pending_text)!;
         var recordingIndicator = view.FindViewById<LinearLayout>(Resource.Id.recording_indicator)!;
         var recordingDuration = view.FindViewById<TextView>(Resource.Id.recording_duration)!;
         var cancelRecordingButton = view.FindViewById<ImageButton>(Resource.Id.cancel_recording_button)!;
@@ -281,6 +284,20 @@ public class ChatFragment : Fragment
             {
                 uploadStatus.Text = status ?? "";
                 uploadStatus.Visibility = string.IsNullOrEmpty(status) ? ViewStates.Gone : ViewStates.Visible;
+            })
+            .DisposeWith(_disposables);
+
+        // Bind out-of-sync banner
+        resyncButton.Click += (s, e) =>
+            ViewModel.ResyncCommand.Execute().Subscribe().DisposeWith(_disposables);
+
+        ViewModel.WhenAnyValue(x => x.IsOutOfSync, x => x.IsResyncPending)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(((bool outOfSync, bool pending) t) =>
+            {
+                outOfSyncBanner.Visibility = t.outOfSync ? ViewStates.Visible : ViewStates.Gone;
+                resyncButton.Visibility = t.pending ? ViewStates.Gone : ViewStates.Visible;
+                resyncPendingText.Visibility = t.pending ? ViewStates.Visible : ViewStates.Gone;
             })
             .DisposeWith(_disposables);
 

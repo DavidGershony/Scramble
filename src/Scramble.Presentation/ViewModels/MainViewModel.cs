@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Runtime.InteropServices;
 using ReactiveUI;
 using ReactiveUI.SourceGenerators;
 using Microsoft.Extensions.Logging;
@@ -413,7 +414,11 @@ public partial class MainViewModel : ViewModelBase
         IsHeaderLoading = string.IsNullOrEmpty(CurrentUser.DisplayName);
 
         _logger.LogDebug("Initializing message service");
-        await _messageService.InitializeAsync();
+        // Run heavy service initialization (SQLite, MLS crypto) on a thread pool
+        // thread to avoid blocking the Android UI thread (ANR). The await resumes
+        // on the UI thread via the captured SynchronizationContext, keeping
+        // subsequent reactive property sets safe.
+        await Task.Run(() => _messageService.InitializeAsync());
 
         // Start notification orchestrator (delegates to platform-specific INotificationService)
         _notificationOrchestrator = new NotificationOrchestrator(_messageService);
@@ -431,7 +436,7 @@ public partial class MainViewModel : ViewModelBase
             try
             {
                 _logger.LogDebug("Initializing MLS service");
-                await _mlsService.InitializeAsync(mlsPrivateKey, CurrentUser.PublicKeyHex);
+                await Task.Run(() => _mlsService.InitializeAsync(mlsPrivateKey, CurrentUser.PublicKeyHex));
 
                 // NOTE: InitializeAsync already restores service state (KeyPackage private keys,
                 // signing keys) from persistence internally via SaveServiceStateAsync/LoadState.
@@ -1004,6 +1009,17 @@ public partial class MainViewModel : ViewModelBase
                             var syncChat = await _messageService.GetOrCreateDeviceSyncGroupAsync();
                             _logger.LogInformation("Device-sync group ready: {ChatId}", syncChat.Id);
 
+                            // Announce this device's OS + slot ID so the user can see which
+                            // devices are alive and what they're running from Private Notes.
+                            try
+                            {
+                                await _messageService.AnnounceDeviceToSyncGroupAsync(GetCurrentOsName());
+                            }
+                            catch (Exception announceEx)
+                            {
+                                _logger.LogWarning(announceEx, "Failed to post device announcement");
+                            }
+
                             // Invite newly-detected peers to the sync group
                             if (peerKps.Count > 0)
                             {
@@ -1231,6 +1247,13 @@ public partial class MainViewModel : ViewModelBase
             IsRequestingDeviceAdd = false;
         }
     }
+
+    private static string GetCurrentOsName() =>
+        OperatingSystem.IsAndroid() ? "Android" :
+        OperatingSystem.IsWindows() ? "Windows" :
+        OperatingSystem.IsMacOS() ? "macOS" :
+        OperatingSystem.IsLinux() ? "Linux" :
+        RuntimeInformation.OSDescription;
 }
 
 public partial class RelayStatusViewModel : ViewModelBase

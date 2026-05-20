@@ -49,10 +49,17 @@ public class ManagedMlsService : IMlsService
         public byte[] InitPrivateKey { get; init; } = Array.Empty<byte>();
         public byte[] HpkePrivateKey { get; init; } = Array.Empty<byte>();
         public bool IsLastResort { get; init; }
+        // Timestamp when this last-resort KP was consumed by a Welcome. Key material is
+        // retained for 24 h after consumption so that concurrent senders who fetched the
+        // same KP before rotation propagated can still complete their Welcomes.
+        // Null = not yet consumed. After 24 h the material is zeroized (MIP-00 §"Deletion Timing").
+        public DateTimeOffset? ConsumedAt { get; set; }
     }
 
-    // All stored KeyPackages with their private keys (supports multiple)
+    // All stored KeyPackages with their private keys (supports multiple).
+    // IMPORTANT: All reads/writes must be performed under lock(_kpLock).
     private readonly List<StoredKeyPackageMaterial> _storedKeyPackages = new();
+    private readonly object _kpLock = new();
 
     // Stable d-tag (slot ID) for kind 30443 KeyPackage events. MIP-00 requires this to be
     // generated once per slot and reused on every rotation so the relay replaces the previous
@@ -68,6 +75,7 @@ public class ManagedMlsService : IMlsService
 
     private const string ServiceStateKey = "__service__";
     private const byte ServiceStateVersion = 4;
+    private const byte ServiceStateVersion5 = 5;
     private const byte ServiceStateVersion1 = 1;
     private const byte ServiceStateVersion2 = 2;
     private const byte ServiceStateVersion3 = 3;
@@ -211,16 +219,19 @@ public class ManagedMlsService : IMlsService
             if (_identity != null) CryptographicOperations.ZeroMemory(_identity);
             if (_signingPrivateKey != null) CryptographicOperations.ZeroMemory(_signingPrivateKey);
             if (_signingPublicKey != null) CryptographicOperations.ZeroMemory(_signingPublicKey);
-            foreach (var kp in _storedKeyPackages)
+            lock (_kpLock)
             {
-                CryptographicOperations.ZeroMemory(kp.InitPrivateKey);
-                CryptographicOperations.ZeroMemory(kp.HpkePrivateKey);
+                foreach (var kp in _storedKeyPackages)
+                {
+                    CryptographicOperations.ZeroMemory(kp.InitPrivateKey);
+                    CryptographicOperations.ZeroMemory(kp.HpkePrivateKey);
+                }
+                _storedKeyPackages.Clear();
             }
 
             _identity = null;
             _signingPrivateKey = null;
             _signingPublicKey = null;
-            _storedKeyPackages.Clear();
             _keyPackageSlotId = null;
             _nostrEventSigner = null;
 
@@ -246,6 +257,7 @@ public class ManagedMlsService : IMlsService
     public async Task<KeyPackage> GenerateKeyPackageAsync()
     {
         EnsureInitialized();
+        PruneExpiredConsumedKeyPackages();
 
         // Call MlsGroup.CreateKeyPackage directly to capture initPriv/hpkePriv.
         // Advertise support for required extensions:
@@ -258,13 +270,16 @@ public class ManagedMlsService : IMlsService
 
         // Store for later ProcessWelcomeAsync (add to list, don't overwrite)
         byte[] kpBytes = TlsCodec.Serialize(writer => mlsKp.WriteTo(writer));
-        _storedKeyPackages.Add(new StoredKeyPackageMaterial
+        lock (_kpLock)
         {
-            KeyPackageBytes = kpBytes,
-            InitPrivateKey = initPrivateKey,
-            HpkePrivateKey = hpkePrivateKey,
-            IsLastResort = true
-        });
+            _storedKeyPackages.Add(new StoredKeyPackageMaterial
+            {
+                KeyPackageBytes = kpBytes,
+                InitPrivateKey = initPrivateKey,
+                HpkePrivateKey = hpkePrivateKey,
+                IsLastResort = true
+            });
+        }
 
         // Build Nostr event tags using the protocol builder.
         // Lazily generate the per-identity KeyPackage slot ID on first publish, then reuse it for
@@ -398,11 +413,20 @@ public class ManagedMlsService : IMlsService
     {
         EnsureInitialized();
 
-        if (_storedKeyPackages.Count == 0)
-            throw new InvalidOperationException("No stored KeyPackage data. Call GenerateKeyPackageAsync first.");
+        PruneExpiredConsumedKeyPackages();
+
+        // Snapshot under lock for iteration — the loop body does async MLS work,
+        // so we can't hold the lock across it.
+        StoredKeyPackageMaterial[] kpSnapshot;
+        lock (_kpLock)
+        {
+            if (_storedKeyPackages.Count == 0)
+                throw new InvalidOperationException("No stored KeyPackage data. Call GenerateKeyPackageAsync first.");
+            kpSnapshot = _storedKeyPackages.ToArray();
+        }
 
         _logger.LogInformation("ProcessWelcomeAsync: wrapperEventId={EventId}, welcomeData={Len} bytes, {KpCount} stored KeyPackages (managed)",
-            wrapperEventId[..Math.Min(16, wrapperEventId.Length)], welcomeData.Length, _storedKeyPackages.Count);
+            wrapperEventId[..Math.Min(16, wrapperEventId.Length)], welcomeData.Length, kpSnapshot.Length);
 
         // The welcome data may be either:
         // 1. Raw TLS bytes (from managed/C# MDK sender) — ready to use directly
@@ -417,15 +441,15 @@ public class ManagedMlsService : IMlsService
         // MLS allows clients to publish multiple KeyPackages (RFC 9420 Section 16.8).
         // Randomize attempt order to prevent timing side-channel leaking which index matched.
         Exception? lastError = null;
-        var indices = Enumerable.Range(0, _storedKeyPackages.Count).ToList();
+        var indices = Enumerable.Range(0, kpSnapshot.Length).ToList();
         Random.Shared.Shuffle(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(indices));
         foreach (var i in indices)
         {
-            var kp = _storedKeyPackages[i];
+            var kp = kpSnapshot[i];
             try
             {
                 _logger.LogDebug("ProcessWelcome: trying stored KeyPackage {Index}/{Total} ({Len} bytes)",
-                    i + 1, _storedKeyPackages.Count, kp.KeyPackageBytes.Length);
+                    i + 1, kpSnapshot.Length, kp.KeyPackageBytes.Length);
 
                 var preview = await _mdk!.PreviewWelcomeAsync(
                     mlsWelcomeBytes,
@@ -442,27 +466,34 @@ public class ManagedMlsService : IMlsService
                     _signingPrivateKey!);
 
                 _logger.LogInformation("ProcessWelcome: matched stored KeyPackage {Index}/{Total}",
-                    i + 1, _storedKeyPackages.Count);
+                    i + 1, kpSnapshot.Length);
 
                 // MIP-00 §"Rotating KeyPackages": SHOULD rotate after successfully joining.
                 // MIP-02 §"Processing Requirements" step 5: publish fresh kind:30443 under same d-tag.
                 // MIP-02 §"Processing Requirements" step 6: securely delete init_key.
                 //
-                // For last-resort KeyPackages (RFC 9420 §17.3), we keep the key material
-                // available so the same KP can be reused by other senders until a fresh
-                // package is rotated in. Non-last-resort packages are zeroized immediately.
+                // Non-last-resort KPs: zeroize immediately.
+                // Last-resort KPs (RFC 9420 §17.3 / MIP-00 §"Deletion Timing"): mark consumed and
+                // retain key material for 24 h so concurrent senders who fetched the same KP before
+                // rotation propagated can still get their Welcome processed. PruneExpiredConsumedKeyPackages
+                // removes the material once the grace window elapses.
                 if (!kp.IsLastResort)
                 {
                     _logger.LogInformation("ProcessWelcome: matched KeyPackage {Index}/{Total}, zeroizing consumed init_key (MIP-02 step 6)",
-                        i + 1, _storedKeyPackages.Count);
+                        i + 1, kpSnapshot.Length);
                     CryptographicOperations.ZeroMemory(kp.InitPrivateKey);
                     CryptographicOperations.ZeroMemory(kp.HpkePrivateKey);
-                    _storedKeyPackages.RemoveAt(i);
+                    lock (_kpLock)
+                    {
+                        _storedKeyPackages.Remove(kp);
+                    }
                 }
                 else
                 {
-                    _logger.LogInformation("ProcessWelcome: matched last-resort KeyPackage {Index}/{Total}, keeping key material for reuse (RFC 9420 §17.3)",
-                        i + 1, _storedKeyPackages.Count);
+                    kp.ConsumedAt = DateTimeOffset.UtcNow;
+                    _logger.LogInformation(
+                        "ProcessWelcome: marked last-resort KeyPackage {Index}/{Total} consumed at {Time} — init_key retained for 24 h grace window (MIP-00)",
+                        i + 1, kpSnapshot.Length, kp.ConsumedAt.Value.UtcDateTime);
                 }
 
                 await PersistGroupStateAsync(preview.GroupId);
@@ -484,25 +515,33 @@ public class ManagedMlsService : IMlsService
             }
         }
 
+        int currentCount;
+        lock (_kpLock) { currentCount = _storedKeyPackages.Count; }
         throw new InvalidOperationException(
-            $"None of the {_storedKeyPackages.Count} stored KeyPackages match this Welcome. " +
+            $"None of the {currentCount} stored KeyPackages match this Welcome. " +
             "The private key material for the targeted KeyPackage may have been lost.",
             lastError);
     }
 
     public async Task<bool> CanProcessWelcomeAsync(byte[] welcomeData)
     {
-        if (_storedKeyPackages.Count == 0)
+        // Snapshot under lock — the loop body does async MLS work
+        StoredKeyPackageMaterial[] kpSnapshot;
+        lock (_kpLock)
         {
-            _logger.LogInformation("CanProcessWelcome: no stored KeyPackages — cannot process welcome");
-            return false;
+            if (_storedKeyPackages.Count == 0)
+            {
+                _logger.LogInformation("CanProcessWelcome: no stored KeyPackages — cannot process welcome");
+                return false;
+            }
+            kpSnapshot = _storedKeyPackages.ToArray();
         }
 
         var mlsWelcomeBytes = ExtractMlsWelcomeBytes(welcomeData);
         _logger.LogDebug("CanProcessWelcome: checking {KpCount} stored KeyPackage(s) against welcome ({Len} bytes)",
-            _storedKeyPackages.Count, mlsWelcomeBytes.Length);
+            kpSnapshot.Length, mlsWelcomeBytes.Length);
 
-        foreach (var kp in _storedKeyPackages)
+        foreach (var kp in kpSnapshot)
         {
             try
             {
@@ -1037,11 +1076,21 @@ public class ManagedMlsService : IMlsService
         if (_signingPrivateKey == null || _signingPublicKey == null)
             return Task.FromResult<byte[]?>(null);
 
+        // Snapshot KeyPackages under lock to avoid racing with Add/Remove/Clear
+        // on other threads (GenerateKeyPackageAsync, ProcessWelcomeAsync, ImportServiceStateAsync).
+        StoredKeyPackageMaterial[] kpSnapshot;
+        lock (_kpLock)
+        {
+            kpSnapshot = _storedKeyPackages.ToArray();
+        }
+
         var stateBytes = TlsCodec.Serialize(writer =>
         {
-            writer.WriteUint8(ServiceStateVersion);
-            // v4: identity + signing keys + KeyPackage slot ID + stored KeyPackages.
-            // The slot ID is the stable d-tag for kind 30443 events (see GenerateKeyPackageAsync).
+            writer.WriteUint8(ServiceStateVersion5);
+            // v5: identity + signing keys + KeyPackage slot ID + stored KeyPackages with ConsumedAt.
+            // Identical to v4 except each KP entry gains a length-prefixed ConsumedAt field:
+            //   empty bytes  = not consumed
+            //   8 bytes BE   = Unix seconds (int64) when the KP was consumed by a Welcome
             writer.WriteOpaqueV(_identity ?? Array.Empty<byte>());
             writer.WriteOpaqueV(_signingPrivateKey);
             writer.WriteOpaqueV(_signingPublicKey);
@@ -1053,13 +1102,17 @@ public class ManagedMlsService : IMlsService
                 : Encoding.UTF8.GetBytes(_keyPackageSlotId);
             writer.WriteOpaqueV(slotBytes);
 
-            // Write count of stored KeyPackages, then each one
-            writer.WriteUint16((ushort)_storedKeyPackages.Count);
-            foreach (var kp in _storedKeyPackages)
+            // Write count of stored KeyPackages, then each one (from snapshot)
+            writer.WriteUint16((ushort)kpSnapshot.Length);
+            foreach (var kp in kpSnapshot)
             {
                 writer.WriteOpaqueV(kp.KeyPackageBytes);
                 writer.WriteOpaqueV(kp.InitPrivateKey);
                 writer.WriteOpaqueV(kp.HpkePrivateKey);
+                var consumedAtBytes = kp.ConsumedAt.HasValue
+                    ? EncodeBigEndianInt64(kp.ConsumedAt.Value.ToUnixTimeSeconds())
+                    : Array.Empty<byte>();
+                writer.WriteOpaqueV(consumedAtBytes);
             }
         });
 
@@ -1077,11 +1130,54 @@ public class ManagedMlsService : IMlsService
         var reader = new TlsReader(state);
         byte version = reader.ReadUint8();
 
-        _storedKeyPackages.Clear();
+        // Build KPs into a temp list, then swap atomically under _kpLock.
+        // This eliminates the window where _storedKeyPackages is empty during parsing,
+        // which previously allowed concurrent ExportServiceStateAsync to persist zero KPs.
+        var parsed = new List<StoredKeyPackageMaterial>();
 
-        if (version == ServiceStateVersion)
+        if (version == ServiceStateVersion5)
         {
-            // v4 format: identity + signing keys + KeyPackage slot ID + KeyPackages
+            // v5 format: identity + signing keys + KeyPackage slot ID + KeyPackages with ConsumedAt
+            var storedIdentity = reader.ReadOpaqueV();
+
+            if (_identity != null && !storedIdentity.SequenceEqual(_identity))
+            {
+                _logger.LogWarning("Persisted MLS state identity mismatch (stored={Stored}, current={Current}). Discarding stale state.",
+                    Convert.ToHexString(storedIdentity).ToLowerInvariant()[..Math.Min(16, storedIdentity.Length * 2)],
+                    Convert.ToHexString(_identity).ToLowerInvariant()[..Math.Min(16, _identity.Length * 2)]);
+                return Task.CompletedTask;
+            }
+
+            _signingPrivateKey = reader.ReadOpaqueV();
+            _signingPublicKey = reader.ReadOpaqueV();
+
+            var slotBytes = reader.ReadOpaqueV();
+            _keyPackageSlotId = slotBytes.Length == 0 ? null : Encoding.UTF8.GetString(slotBytes);
+
+            ushort count = reader.ReadUint16();
+            for (int i = 0; i < count; i++)
+            {
+                var kpBytes = reader.ReadOpaqueV();
+                var initPriv = reader.ReadOpaqueV();
+                var hpkePriv = reader.ReadOpaqueV();
+                var consumedAtBytes = reader.ReadOpaqueV();
+                DateTimeOffset? consumedAt = consumedAtBytes.Length == 8
+                    ? DateTimeOffset.FromUnixTimeSeconds(DecodeBigEndianInt64(consumedAtBytes))
+                    : null;
+                parsed.Add(new StoredKeyPackageMaterial
+                {
+                    KeyPackageBytes = kpBytes,
+                    InitPrivateKey = initPriv,
+                    HpkePrivateKey = hpkePriv,
+                    IsLastResort = true,
+                    ConsumedAt = consumedAt
+                });
+            }
+        }
+        else if (version == ServiceStateVersion)
+        {
+            // v4 format: identity + signing keys + KeyPackage slot ID + KeyPackages (no ConsumedAt)
+            // Migrate: set ConsumedAt = null for all KPs (treat as freshly published).
             var storedIdentity = reader.ReadOpaqueV();
 
             // Verify identity matches current user
@@ -1104,14 +1200,17 @@ public class ManagedMlsService : IMlsService
             ushort count = reader.ReadUint16();
             for (int i = 0; i < count; i++)
             {
-                _storedKeyPackages.Add(new StoredKeyPackageMaterial
+                parsed.Add(new StoredKeyPackageMaterial
                 {
                     KeyPackageBytes = reader.ReadOpaqueV(),
                     InitPrivateKey = reader.ReadOpaqueV(),
                     HpkePrivateKey = reader.ReadOpaqueV(),
-                    IsLastResort = true // All KPs from this implementation include LastResort extension
+                    IsLastResort = true,
+                    ConsumedAt = null
                 });
             }
+
+            _logger.LogInformation("Migrated MLS service state v4 -> v5 (ConsumedAt = null for all KPs)");
         }
         else if (version == ServiceStateVersion3)
         {
@@ -1138,7 +1237,7 @@ public class ManagedMlsService : IMlsService
             ushort count = reader.ReadUint16();
             for (int i = 0; i < count; i++)
             {
-                _storedKeyPackages.Add(new StoredKeyPackageMaterial
+                parsed.Add(new StoredKeyPackageMaterial
                 {
                     KeyPackageBytes = reader.ReadOpaqueV(),
                     InitPrivateKey = reader.ReadOpaqueV(),
@@ -1165,6 +1264,16 @@ public class ManagedMlsService : IMlsService
         {
             throw new InvalidOperationException($"Unsupported service state version: {version}");
         }
+
+        // Atomically swap under lock — no window where _storedKeyPackages is empty
+        lock (_kpLock)
+        {
+            _storedKeyPackages.Clear();
+            _storedKeyPackages.AddRange(parsed);
+        }
+
+        // Remove KPs whose 24 h retention window expired while the app was closed
+        PruneExpiredConsumedKeyPackages();
 
         _logger.LogInformation("Restored MLS service state (signingKey={Len} bytes, storedKeyPackages={Count}, slotId={HasSlot})",
             _signingPrivateKey.Length, _storedKeyPackages.Count, _keyPackageSlotId != null);
@@ -1225,12 +1334,18 @@ public class ManagedMlsService : IMlsService
         return _mdk!.GetExporterSecret(groupId);
     }
 
-    public int GetStoredKeyPackageCount() => _storedKeyPackages.Count;
+    public int GetStoredKeyPackageCount()
+    {
+        lock (_kpLock) { return _storedKeyPackages.Count; }
+    }
 
     public bool HasKeyMaterialForKeyPackage(byte[] keyPackageData)
     {
-        return _storedKeyPackages.Any(kp =>
-            kp.KeyPackageBytes.AsSpan().SequenceEqual(keyPackageData.AsSpan()));
+        lock (_kpLock)
+        {
+            return _storedKeyPackages.Any(kp =>
+                kp.KeyPackageBytes.AsSpan().SequenceEqual(keyPackageData.AsSpan()));
+        }
     }
 
     public void SetNostrEventSigner(INostrEventSigner signer)
@@ -1266,7 +1381,9 @@ public class ManagedMlsService : IMlsService
             return false;
         }
 
-        if (_storedKeyPackages.Count == 0)
+        int kpCount;
+        lock (_kpLock) { kpCount = _storedKeyPackages.Count; }
+        if (kpCount == 0)
         {
             _logger.LogDebug("TryReconcileSlotId: no stored KeyPackages locally, cannot match");
             return false;
@@ -1721,6 +1838,42 @@ public class ManagedMlsService : IMlsService
             _logger.LogWarning(ex, "Failed to persist MLS state for group");
         }
     }
+
+    /// <summary>
+    /// Zeroizes and removes consumed last-resort KeyPackages whose 24 h MIP-00 grace window has elapsed.
+    /// Called on app startup (after state restore), before generating a new KP, and before processing Welcomes.
+    /// </summary>
+    private void PruneExpiredConsumedKeyPackages()
+    {
+        var cutoff = DateTimeOffset.UtcNow.AddHours(-24);
+        lock (_kpLock)
+        {
+            for (int i = _storedKeyPackages.Count - 1; i >= 0; i--)
+            {
+                var kp = _storedKeyPackages[i];
+                if (kp.ConsumedAt.HasValue && kp.ConsumedAt.Value < cutoff)
+                {
+                    _logger.LogInformation(
+                        "PruneExpiredConsumedKeyPackages: zeroizing last-resort init_key consumed at {Time} (24 h grace elapsed, MIP-00)",
+                        kp.ConsumedAt.Value.UtcDateTime);
+                    CryptographicOperations.ZeroMemory(kp.InitPrivateKey);
+                    CryptographicOperations.ZeroMemory(kp.HpkePrivateKey);
+                    _storedKeyPackages.RemoveAt(i);
+                }
+            }
+        }
+    }
+
+    private static byte[] EncodeBigEndianInt64(long value) =>
+        new byte[]
+        {
+            (byte)(value >> 56), (byte)(value >> 48), (byte)(value >> 40), (byte)(value >> 32),
+            (byte)(value >> 24), (byte)(value >> 16), (byte)(value >> 8), (byte)value
+        };
+
+    private static long DecodeBigEndianInt64(byte[] bytes) =>
+        (long)bytes[0] << 56 | (long)bytes[1] << 48 | (long)bytes[2] << 40 | (long)bytes[3] << 32
+        | (long)bytes[4] << 24 | (long)bytes[5] << 16 | (long)bytes[6] << 8 | (long)bytes[7];
 
     private void EnsureInitialized()
     {

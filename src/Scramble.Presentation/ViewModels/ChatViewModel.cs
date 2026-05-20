@@ -142,6 +142,11 @@ public partial class ChatViewModel : ViewModelBase
     // Upload progress status (shown in chat area during file/voice sends)
     [Reactive] public partial string? UploadStatus { get; set; }
 
+    // Out-of-sync state: set when this device has fallen behind in MLS epoch
+    [Reactive] public partial bool IsOutOfSync { get; set; }
+    [Reactive] public partial bool IsResyncPending { get; set; }
+    public ReactiveCommand<Unit, Unit> ResyncCommand { get; }
+
     // Static service references (set by platform startup)
     public static IAudioRecordingService? AudioRecordingService { get; set; }
     public static IAudioPlaybackService? AudioPlaybackService { get; set; }
@@ -374,6 +379,23 @@ public partial class ChatViewModel : ViewModelBase
                 $"[System] Group renamed to \"{_currentChat.Name}\"");
         });
 
+        ResyncCommand = ReactiveCommand.CreateFromTask(async () =>
+        {
+            if (_currentChat == null || IsResyncPending) return;
+            IsResyncPending = true;
+            try
+            {
+                await _messageService.RequestResyncAsync(_currentChat.Id);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "ResyncCommand failed for chat {ChatId}", _currentChat?.Id);
+                IsResyncPending = false;
+            }
+        });
+        ResyncCommand.ThrownExceptions.Subscribe(ex =>
+            _logger.LogError(ex, "ResyncCommand failed"));
+
         // Log errors from media commands (ReactiveCommand swallows exceptions by default)
         ToggleRecordingCommand.ThrownExceptions.Subscribe(ex =>
             _logger.LogError(ex, "ToggleRecordingCommand failed"));
@@ -391,6 +413,18 @@ public partial class ChatViewModel : ViewModelBase
         _reactionSubscription = _messageService.ReactionUpdates
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(OnReactionUpdate);
+
+        // Keep out-of-sync / resync-pending flags live as the service updates the chat
+        _messageService.ChatUpdates
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(updatedChat =>
+            {
+                if (_currentChat != null && updatedChat.Id == _currentChat.Id)
+                {
+                    IsOutOfSync = updatedChat.IsOutOfSync;
+                    IsResyncPending = updatedChat.IsResyncPending;
+                }
+            });
     }
 
     public void LoadChat(Chat chat)
@@ -411,6 +445,8 @@ public partial class ChatViewModel : ViewModelBase
         // the background; its finally-block sets IsSending=false again (no-op at that point).
         IsSending = false;
         UploadStatus = null;
+        IsOutOfSync = chat.IsOutOfSync;
+        IsResyncPending = chat.IsResyncPending;
         ParticipantCount = chat.ParticipantPublicKeys.Count;
         // Admin check: if admin list exists, check membership; if empty (legacy group), allow all
         IsCurrentUserAdmin = IsGroup && _currentUserPublicKeyHex != null &&

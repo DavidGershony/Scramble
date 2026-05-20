@@ -11,7 +11,7 @@
 
     <Grid ColumnDefinitions="*,Auto" Background="{DynamicResource BackgroundDarkBrush}">
         <!-- Main Chat Area -->
-        <Grid Grid.Column="0" RowDefinitions="Auto,*,Auto,Auto">
+        <Grid Grid.Column="0" RowDefinitions="Auto,Auto,*,Auto,Auto">
 
             <!-- Chat Header -->
             <Border Grid.Row="0" Padding="16" Background="{DynamicResource BackgroundLightBrush}"
@@ -81,8 +81,24 @@
                 </Grid>
             </Border>
 
+        <!-- Out-of-sync banner (Row 1) -->
+        <Border Grid.Row="1" Padding="12,8" IsVisible="{Binding IsOutOfSync}"
+                Background="{DynamicResource StatusWarningBrush}">
+            <Grid ColumnDefinitions="*,Auto,Auto">
+                <TextBlock Grid.Column="0" Text="This device is out of sync — messages may be missing."
+                           VerticalAlignment="Center" FontSize="13" Foreground="White" FontWeight="SemiBold" />
+                <Button Grid.Column="1" Classes="secondary" Padding="10,4" FontSize="12" Margin="8,0,0,0"
+                        Command="{Binding ResyncCommand}"
+                        IsVisible="{Binding !IsResyncPending}"
+                        Content="Resync" />
+                <TextBlock Grid.Column="2" Text="Resync requested…" FontSize="12" Foreground="White"
+                           VerticalAlignment="Center" Margin="8,0,0,0"
+                           IsVisible="{Binding IsResyncPending}" />
+            </Grid>
+        </Border>
+
         <!-- Messages Area -->
-        <ScrollViewer Grid.Row="1" x:Name="MessageScrollViewer"
+        <ScrollViewer Grid.Row="2" x:Name="MessageScrollViewer"
                       VerticalScrollBarVisibility="Auto"
                       HorizontalScrollBarVisibility="Disabled">
             <StackPanel Margin="16">
@@ -128,7 +144,7 @@
         </ScrollViewer>
 
         <!-- Loading Indicator (only shown on initial load before any messages appear) -->
-        <Border Grid.Row="1" Background="{DynamicResource BackgroundDarkBrush}"
+        <Border Grid.Row="2" Background="{DynamicResource BackgroundDarkBrush}"
                 IsVisible="{Binding IsLoading}" Opacity="0.9">
             <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="12">
                 <ProgressBar IsIndeterminate="True" Width="160" Height="4"
@@ -139,7 +155,7 @@
         </Border>
 
         <!-- Upload Status Banner -->
-        <Border Grid.Row="2" Padding="10,8"
+        <Border Grid.Row="3" Padding="10,8"
                 Background="{DynamicResource UploadBannerBrush}" BorderBrush="{DynamicResource UploadBannerBorderBrush}" BorderThickness="0,1"
                 IsVisible="{Binding UploadStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
             <TextBlock Text="{Binding UploadStatus}" FontSize="14" Foreground="White"
@@ -147,7 +163,7 @@
         </Border>
 
         <!-- Reply Preview Bar -->
-        <Border Grid.Row="3"
+        <Border Grid.Row="4"
                 IsVisible="{Binding ReplyingToMessage, Converter={x:Static ObjectConverters.IsNotNull}}"
                 Background="{DynamicResource SurfaceSecondaryBrush}"
                 BorderBrush="{DynamicResource BorderDefaultBrush}" BorderThickness="0,1,0,0"
@@ -171,7 +187,7 @@
         </Border>
 
         <!-- Message Input -->
-        <Border Grid.Row="3" Padding="16" Background="{DynamicResource BackgroundLightBrush}"
+        <Border Grid.Row="4" Padding="16" Background="{DynamicResource BackgroundLightBrush}"
                 BorderBrush="{DynamicResource BorderDefaultBrush}" BorderThickness="0,1,0,0">
             <Grid ColumnDefinitions="Auto,*,Auto,Auto" Height="48">
                 <!-- Attachment Button (only visible when MIP-04 enabled AND platform has file picker) -->

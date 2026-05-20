@@ -102,7 +102,7 @@ public partial class ShellViewModel : ViewModelBase
 
         // LoginViewModel uses NostrService for crypto and ExternalSignerService for Amber.
         // It does NOT get StorageService — saving happens here after profile is set.
-        LoginViewModel = new LoginViewModel(nostrService, qrCodeGenerator, launcher);
+        LoginViewModel = new LoginViewModel(nostrService, qrCodeGenerator, launcher, clipboard: clipboard);
 
         // When LoginViewModel produces a user, complete the login flow
         LoginViewModel.WhenAnyValue(x => x.LoggedInUser)
@@ -146,8 +146,15 @@ public partial class ShellViewModel : ViewModelBase
             {
                 _logger.LogInformation("Checking for saved user in profile {Profile}", ProfileConfiguration.ProfileName);
                 var storageService = CreateStorageService();
-                await storageService.InitializeAsync();
-                var savedUser = await storageService.GetCurrentUserAsync();
+
+                // Run heavy SQLite initialization and DB query off the UI thread
+                // to avoid ANR on Android. The continuation resumes on the UI thread
+                // via the captured SynchronizationContext, keeping property sets safe.
+                await Task.Run(async () =>
+                {
+                    await storageService.InitializeAsync();
+                });
+                var savedUser = await Task.Run(() => storageService.GetCurrentUserAsync());
 
                 if (savedUser != null)
                 {

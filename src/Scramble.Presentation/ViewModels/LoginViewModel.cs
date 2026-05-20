@@ -18,6 +18,7 @@ public partial class LoginViewModel : ViewModelBase
     private readonly INostrService _nostrService;
     private readonly IQrCodeGenerator _qrCodeGenerator;
     private readonly IPlatformLauncher? _launcher;
+    private readonly IPlatformClipboard? _clipboard;
 
     /// <summary>
     /// The external signer instance, available for wiring into NostrService after login.
@@ -74,7 +75,8 @@ public partial class LoginViewModel : ViewModelBase
     public ReactiveCommand<Unit, Unit> OpenSignerAppCommand { get; }
 
     public LoginViewModel(INostrService nostrService, IQrCodeGenerator qrCodeGenerator,
-        IPlatformLauncher? launcher = null, IExternalSigner? externalSigner = null)
+        IPlatformLauncher? launcher = null, IExternalSigner? externalSigner = null,
+        IPlatformClipboard? clipboard = null)
     {
         _logger = LoggingConfiguration.CreateLogger<LoginViewModel>();
         _logger.LogDebug("LoginViewModel initializing");
@@ -82,6 +84,7 @@ public partial class LoginViewModel : ViewModelBase
         _nostrService = nostrService;
         _qrCodeGenerator = qrCodeGenerator;
         _launcher = launcher;
+        _clipboard = clipboard;
         ExternalSigner = externalSigner ?? new ExternalSignerService();
 
         GenerateNewKeyCommand = ReactiveCommand.Create(GenerateNewKey);
@@ -112,14 +115,34 @@ public partial class LoginViewModel : ViewModelBase
 
         ConnectExternalSignerCommand = ReactiveCommand.CreateFromTask(ConnectExternalSignerAsync, canConnectSigner);
 
-        CopyNsecCommand = ReactiveCommand.Create(() =>
+        CopyNsecCommand = ReactiveCommand.CreateFromTask(async () =>
         {
-            // TODO: Copy to clipboard using platform-specific implementation
+            if (_clipboard != null && !string.IsNullOrEmpty(GeneratedNsec))
+            {
+                try
+                {
+                    await _clipboard.SetTextAsync(GeneratedNsec);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to copy nsec to clipboard");
+                }
+            }
         });
 
-        CopyNpubCommand = ReactiveCommand.Create(() =>
+        CopyNpubCommand = ReactiveCommand.CreateFromTask(async () =>
         {
-            // TODO: Copy to clipboard using platform-specific implementation
+            if (_clipboard != null && !string.IsNullOrEmpty(GeneratedNpub))
+            {
+                try
+                {
+                    await _clipboard.SetTextAsync(GeneratedNpub);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to copy npub to clipboard");
+                }
+            }
         });
 
         SelectLoginMethodCommand = ReactiveCommand.CreateFromTask<LoginMethod>(SelectLoginMethodAsync);

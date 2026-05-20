@@ -24,16 +24,35 @@ public class MobileAndroidSecureStorage : ISecureStorage
 
     private static readonly byte[] MagicPrefix = { 0xEE, 0xCC, 0x01, 0x00 };
     private readonly ILogger<MobileAndroidSecureStorage> _logger;
+    private readonly object _initLock = new();
+    private bool _keyEnsured;
 
     public MobileAndroidSecureStorage()
     {
         _logger = LoggingConfiguration.CreateLogger<MobileAndroidSecureStorage>();
-        EnsureKeyExists();
-        _logger.LogInformation("MobileAndroidSecureStorage initialized (Android Keystore, AES-GCM)");
+        // Keystore/TEE access is deferred to first use to avoid blocking the UI thread.
+        _logger.LogInformation("MobileAndroidSecureStorage created (lazy keystore init)");
+    }
+
+    /// <summary>
+    /// Ensures the AES key exists in the Android Keystore. Thread-safe, idempotent.
+    /// Called lazily on first Protect/Unprotect to avoid blocking the UI thread during
+    /// app startup (Android Keystore operations involve TEE/HSM communication).
+    /// </summary>
+    private void EnsureLazyInit()
+    {
+        if (_keyEnsured) return;
+        lock (_initLock)
+        {
+            if (_keyEnsured) return;
+            EnsureKeyExists();
+            _keyEnsured = true;
+        }
     }
 
     public byte[] Protect(byte[] data)
     {
+        EnsureLazyInit();
         _logger.LogInformation("Protecting {Length} bytes with Android Keystore", data.Length);
 
         var key = GetKey();
@@ -54,6 +73,7 @@ public class MobileAndroidSecureStorage : ISecureStorage
 
     public byte[] Unprotect(byte[] data)
     {
+        EnsureLazyInit();
         if (data.Length < MagicPrefix.Length || !HasMagicPrefix(data))
         {
             _logger.LogInformation("Data lacks encryption prefix ({Length} bytes), returning as-is (unencrypted)", data.Length);
