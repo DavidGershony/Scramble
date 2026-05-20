@@ -89,6 +89,13 @@ public class KeyPackage
     public bool IsUsed { get; set; }
 
     /// <summary>
+    /// When this KeyPackage was consumed by a Welcome message. Null if not yet consumed.
+    /// For last-resort KPs, init_key material is retained for 24 h after this timestamp
+    /// before being zeroized (MIP-00 §"Deletion Timing").
+    /// </summary>
+    public DateTime? ConsumedAt { get; set; }
+
+    /// <summary>
     /// MLS ciphersuite identifier.
     /// </summary>
     public ushort CiphersuiteId { get; set; }

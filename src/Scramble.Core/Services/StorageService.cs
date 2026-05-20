@@ -355,6 +355,15 @@ public class StorageService : IStorageService
             }
             catch (SqliteException) { /* Column already exists */ }
 
+            // Migration: add ConsumedAt column to KeyPackages for MIP-00 lifecycle tracking
+            try
+            {
+                var migrate = connection.CreateCommand();
+                migrate.CommandText = "ALTER TABLE KeyPackages ADD COLUMN ConsumedAt TEXT";
+                await migrate.ExecuteNonQueryAsync();
+            }
+            catch (SqliteException) { /* Column already exists */ }
+
             _initialized = true;
             _logger.LogInformation("Database schema initialized successfully");
         }
@@ -1025,8 +1034,9 @@ public class StorageService : IStorageService
         await connection.OpenAsync();
 
         var command = connection.CreateCommand();
-        command.CommandText = "UPDATE KeyPackages SET IsUsed = 1 WHERE Id = @Id";
+        command.CommandText = "UPDATE KeyPackages SET IsUsed = 1, ConsumedAt = @ConsumedAt WHERE Id = @Id";
         command.Parameters.AddWithValue("@Id", id);
+        command.Parameters.AddWithValue("@ConsumedAt", DateTime.UtcNow.ToString("O"));
 
         await command.ExecuteNonQueryAsync();
     }
@@ -1750,6 +1760,10 @@ public class StorageService : IStorageService
         {
             // Column doesn't exist yet — default is Active
         }
+
+        var consumedAtStr = TryGetString(reader, "ConsumedAt");
+        if (consumedAtStr != null)
+            kp.ConsumedAt = ParseDateTime(consumedAtStr);
 
         return kp;
     }

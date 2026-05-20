@@ -35,6 +35,10 @@ public class MessageService : IMessageService, IDisposable
     private readonly ConcurrentDictionary<string, DateTime> _pendingSelfUpdates = new();
     private Timer? _selfUpdateTimer;
 
+    // MIP-00 §"Rotating KeyPackages": proactively rotate KPs that have expired (>30 days old)
+    // even when no Welcome has arrived to trigger AutoPublishKeyPackageIfNeededAsync.
+    private Timer? _kpRotationTimer;
+
     // Deduplicates concurrent background relay fetches for the same pubkey.
     private readonly ConcurrentDictionary<string, byte> _inflightMetadataFetches = new();
     private readonly Subject<UserMetadata> _metadataUpdated = new();
@@ -84,6 +88,13 @@ public class MessageService : IMessageService, IDisposable
             _selfUpdateTimer?.Dispose();
             _selfUpdateTimer = new Timer(OnSelfUpdateTimerTick, null,
                 TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(30));
+
+            // MIP-00: proactive KP rotation — fires 10 min after login then hourly.
+            // AutoPublishKeyPackageIfNeededAsync already handles rotation after each Welcome;
+            // this catches devices that haven't received a Welcome in >30 days (KP expired).
+            _kpRotationTimer?.Dispose();
+            _kpRotationTimer = new Timer(OnKpRotationTimerTick, null,
+                TimeSpan.FromMinutes(10), TimeSpan.FromHours(1));
 
             _logger.LogInformation("MessageService initialized for {PubKey}",
                 _currentUser.PublicKeyHex[..Math.Min(16, _currentUser.PublicKeyHex.Length)]);
@@ -2382,6 +2393,19 @@ public class MessageService : IMessageService, IDisposable
         }
     }
 
+    private async void OnKpRotationTimerTick(object? state)
+    {
+        if (_currentUser == null) return;
+        try
+        {
+            await AutoPublishKeyPackageIfNeededAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "KpRotation: proactive KeyPackage rotation check failed");
+        }
+    }
+
     // TODO: Migrate to staged commit path (StageSelfUpdateAsync + MergeStagedAsync)
     // for full MIP-03 compliance. Currently uses auto-merge UpdateKeysAsync which
     // advances local state before relay confirmation.
@@ -3202,6 +3226,7 @@ public class MessageService : IMessageService, IDisposable
         if (_disposed) return;
 
         _selfUpdateTimer?.Dispose();
+        _kpRotationTimer?.Dispose();
         _eventSubscription?.Dispose();
         _newMessages.Dispose();
         _messageStatusUpdates.Dispose();
