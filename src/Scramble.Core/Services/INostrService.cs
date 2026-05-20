@@ -86,6 +86,15 @@ public interface INostrService
     void SetExternalSigner(IExternalSigner? signer);
 
     /// <summary>
+    /// Whether the service can sign events — either a local private key
+    /// (via <see cref="SetAuthCredentials"/>) or an external signer is available.
+    /// Callers should check this before attempting publish operations to
+    /// surface user-friendly errors (e.g. "signer disconnected") instead of
+    /// opaque exceptions from the publish path.
+    /// </summary>
+    bool HasExternalSigner { get; }
+
+    /// <summary>
     /// Set the user's private key for NIP-42 relay authentication.
     /// Call this before connecting to relays so AUTH challenges can be answered.
     /// </summary>

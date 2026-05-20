@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using Scramble.Diagnostics.TestHelpers;
 using Xunit;
 namespace Scramble.Diagnostics;
 
@@ -14,7 +15,7 @@ public class RelayEventDumpTests
     [Fact]
     public async Task DumpGroupEventsFromRelay()
     {
-        var relayUrl = "ws://localhost:7777";
+        var relayUrl = TestRelayConfig.RelayUrl;
         var nostrGroupId = "5a616302fd11f9c2bc51a62a81d934adb16d3d75c4a0af91872b463439afccda";
         var ourEventId = "4acec5809422780d2aac58dae5488eebea4a46df4d8cbfbc3e0010a72487b7d4";
         var failedEventId = "a06e6ac92dcc618091594e8cdc2681d69de667fe53c1c1aaaad29b453a6e2370";

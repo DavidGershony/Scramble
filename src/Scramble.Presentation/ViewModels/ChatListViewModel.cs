@@ -1063,8 +1063,14 @@ public partial class ChatListViewModel : ViewModelBase
 
         if (_nostrService == null) return;
 
-        var relayUrls = _nostrService.ConnectedRelayUrls;
-        if (relayUrls == null) return;
+        // Fallback chain: connected relays > configured relays > default relays
+        // This ensures users can still select relays even if connections haven't
+        // been established yet (matches the bot dialog pattern).
+        var relayUrls = _nostrService.ConnectedRelayUrls.Count > 0
+            ? (IReadOnlyList<string>)_nostrService.ConnectedRelayUrls
+            : _nostrService.ConfiguredRelayUrls.Count > 0
+                ? (IReadOnlyList<string>)_nostrService.ConfiguredRelayUrls
+                : (IReadOnlyList<string>)Core.NostrConstants.DefaultRelays;
 
         foreach (var url in relayUrls)
         {
@@ -1150,6 +1156,11 @@ public partial class ChatListViewModel : ViewModelBase
             var nostrGroupId = _mlsService.GetNostrGroupId(groupInfo.GroupId);
             var groupIdHex = Convert.ToHexString(groupInfo.GroupId).ToLowerInvariant();
 
+            // Extract admin pubkeys from 0xF2EE extension; fall back to creator
+            var adminPubkeys = _mlsService.GetAdminPubkeys(groupInfo.GroupId);
+            if (adminPubkeys.Count == 0)
+                adminPubkeys = new List<string> { currentUser.PublicKeyHex.ToLowerInvariant() };
+
             var chat = new Chat
             {
                 Id = groupIdHex,
@@ -1160,6 +1171,9 @@ public partial class ChatListViewModel : ViewModelBase
                 MlsGroupId = groupInfo.GroupId,
                 NostrGroupId = nostrGroupId,
                 MlsEpoch = groupInfo.Epoch,
+                AdminPublicKeys = adminPubkeys,
+                CreatorPublicKey = currentUser.PublicKeyHex,
+                RelayUrls = selectedRelays.ToList(),
                 CreatedAt = DateTime.UtcNow,
                 LastActivityAt = DateTime.UtcNow
             };

@@ -143,6 +143,8 @@ public class NostrService : INostrService, IDisposable
         _logger.LogInformation("External signer {Status}", signer?.IsConnected == true ? "set and connected" : "cleared");
     }
 
+    public bool HasExternalSigner => _externalSigner != null;
+
     public void SetAuthCredentials(string? privateKeyHex)
     {
         _subscribedUserPrivKey = privateKeyHex;
@@ -3015,6 +3017,28 @@ public class NostrService : INostrService, IDisposable
         else if (_externalSigner != null)
         {
             // Sign via external signer (NIP-46)
+            // If signer is disconnected, attempt a reconnect before signing
+            if (!_externalSigner.IsConnected)
+            {
+                _logger.LogWarning("External signer is set but disconnected — attempting reconnect before signing kind {Kind}", kind);
+                try
+                {
+                    await _externalSigner.ReconnectAsync();
+                    if (_externalSigner.IsConnected)
+                    {
+                        _logger.LogInformation("External signer reconnected successfully");
+                    }
+                    else
+                    {
+                        _logger.LogWarning("External signer reconnect completed but still not connected");
+                    }
+                }
+                catch (Exception reconnectEx)
+                {
+                    _logger.LogWarning(reconnectEx, "External signer reconnect failed — will attempt sign anyway");
+                }
+            }
+
             _logger.LogInformation("Using external signer to sign kind {Kind} event", kind);
 
             var unsignedEvent = new UnsignedNostrEvent
@@ -3027,11 +3051,43 @@ public class NostrService : INostrService, IDisposable
 
             var signedEventJson = await _externalSigner.SignEventAsync(unsignedEvent);
 
-            // The signer returns the full signed event JSON with id, pubkey, sig
-            using var doc = JsonDocument.Parse(signedEventJson);
-            var root = doc.RootElement;
+            // Validate the signed event JSON before sending to relays.
+            // The signer must return a full event object with id, pubkey, sig as strings.
+            // After a WebSocket reconnect, ExternalSignerService may replay a stale NIP-46
+            // response (e.g. nip44_decrypt result) that isn't valid event JSON — sending
+            // that verbatim to relays causes "event sig was not a string" rejections.
+            JsonElement root;
+            try
+            {
+                using var doc = JsonDocument.Parse(signedEventJson);
+                root = doc.RootElement.Clone(); // Clone so it survives doc disposal
+            }
+            catch (JsonException jsonEx)
+            {
+                _logger.LogError(jsonEx, "External signer returned invalid JSON for kind {Kind}. Response length: {Len}, preview: {Preview}",
+                    kind, signedEventJson?.Length ?? 0,
+                    signedEventJson != null && signedEventJson.Length > 100 ? signedEventJson[..100] + "..." : signedEventJson ?? "(null)");
+                throw new InvalidOperationException(
+                    $"Signer returned invalid JSON for kind {kind} event. The signer may have returned " +
+                    "a stale response after reconnecting. Please try again.", jsonEx);
+            }
+
             eventId = root.GetProperty("id").GetString()
                 ?? throw new InvalidOperationException("Signer returned event without id");
+
+            // Validate sig field exists and is a non-empty string
+            if (!root.TryGetProperty("sig", out var sigProp) ||
+                sigProp.ValueKind != JsonValueKind.String ||
+                string.IsNullOrEmpty(sigProp.GetString()))
+            {
+                _logger.LogError("Signer returned event with invalid sig for kind {Kind}. sig type: {SigType}, event preview: {Preview}",
+                    kind,
+                    root.TryGetProperty("sig", out var s) ? s.ValueKind.ToString() : "missing",
+                    signedEventJson.Length > 200 ? signedEventJson[..200] + "..." : signedEventJson);
+                throw new InvalidOperationException(
+                    $"Signer returned event with invalid signature for kind {kind}. " +
+                    "The signature may have been corrupted or the signer returned a stale response. Please try again.");
+            }
 
             // Wrap in ["EVENT", {...}] relay message format
             eventMessage = $"[\"EVENT\",{signedEventJson}]";

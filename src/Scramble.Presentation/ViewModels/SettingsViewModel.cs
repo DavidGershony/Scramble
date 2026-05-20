@@ -913,6 +913,16 @@ public partial class SettingsViewModel : ViewModelBase
             return;
         }
 
+        // Pre-check: signer users (null PrivateKeyHex) need an external signer to publish.
+        // Without this check the publish would fail deep in NostrService with an opaque error.
+        if (string.IsNullOrEmpty(PrivateKeyHex) && !_nostrService.HasExternalSigner)
+        {
+            KeyPackageStatus = "Error: Signer not connected. Please restart your signer app (e.g. Amber) and try again.";
+            KeyPackageSuccess = false;
+            _logger.LogWarning("KeyPackage publish aborted: no private key and no external signer available");
+            return;
+        }
+
         IsPublishingKeyPackage = true;
         KeyPackageStatus = "Generating key package...";
         KeyPackageSuccess = false;

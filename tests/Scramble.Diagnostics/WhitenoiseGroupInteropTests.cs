@@ -47,7 +47,15 @@ public class WhitenoiseGroupInteropTests : IAsyncLifetime
     {
         ProfileConfiguration.SetAllowLocalRelays(true);
         _wnClient = new WhitenoiseDockerClient(_output);
-        await _wnClient.EnsureRunningAsync();
+        try
+        {
+            await _wnClient.EnsureRunningAsync();
+        }
+        catch
+        {
+            _output.WriteLine("WARNING: Whitenoise Docker container not running. WN tests will be skipped.");
+            _wnClient = null;
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -133,6 +141,7 @@ public class WhitenoiseGroupInteropTests : IAsyncLifetime
     [Fact]
     public async Task GroupChat_3Users_2Scramble_1Whitenoise()
     {
+        Assert.SkipWhen(_wnClient == null, "Whitenoise Docker not running");
         _output.WriteLine("═══════════════════════════════════════════════════════════");
         _output.WriteLine("  3-user group: Alice(OC) + Bob(OC) + Charlie(WN)");
         _output.WriteLine("═══════════════════════════════════════════════════════════");
@@ -376,6 +385,7 @@ public class WhitenoiseGroupInteropTests : IAsyncLifetime
     [Fact]
     public async Task GroupChat_4Users_2Scramble_2Whitenoise()
     {
+        Assert.SkipWhen(_wnClient == null, "Whitenoise Docker not running");
         _output.WriteLine("═══════════════════════════════════════════════════════════");
         _output.WriteLine("  4-user group: Alice(OC) + Bob(OC) + Charlie(WN) + Dana(WN)");
         _output.WriteLine("═══════════════��═════════════════════════════���═════════════");
@@ -527,6 +537,7 @@ public class WhitenoiseGroupInteropTests : IAsyncLifetime
     [Fact]
     public async Task GroupChat_WhitenoiseCreatesGroup_ScrambleJoins()
     {
+        Assert.SkipWhen(_wnClient == null, "Whitenoise Docker not running");
         _output.WriteLine("═══════════════════════════════════════════════════════════");
         _output.WriteLine("  WN creates group, OC users join");
         _output.WriteLine("═══════��═════════════════════════════════════════════════��═");

@@ -21,10 +21,7 @@ public class KeyPackagePublishDiagnosticTests
     // npub: npub1testkey... — has no followers, no profile, no funds.
     private const string TestPrivateKeyHex = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
 
-    private static readonly string[] TestRelays = new[]
-    {
-        "ws://localhost:7777"
-    };
+    private static readonly string[] TestRelays = TestRelayConfig.RelayUrls;
 
     public KeyPackagePublishDiagnosticTests(ITestOutputHelper output)
     {
@@ -214,7 +211,7 @@ public class KeyPackagePublishDiagnosticTests
         // The pubkey used in FetchKeyPackagesAsync (from CurrentUser)
         var fetchPubkey = "8f7d5460983b7210e9c910a761f786ec208e8bc0f8f3213d61bf7244fcec19e0";
 
-        var relays = new[] { "ws://localhost:7777" };
+        var relays = new[] { TestRelayConfig.RelayUrl };
 
         foreach (var relay in relays)
         {
@@ -474,7 +471,7 @@ public class KeyPackagePublishDiagnosticTests
     {
         var relays = new[]
         {
-            "ws://localhost:7777"
+            TestRelayConfig.RelayUrl
         };
 
         var nostrService = new NostrService();
@@ -557,7 +554,7 @@ public class KeyPackagePublishDiagnosticTests
     [Fact]
     public async Task RotateKeyPackage_Twice_RelayHoldsExactlyOneSlot()
     {
-        var relays = new[] { "ws://localhost:7777" };
+        var relays = new[] { TestRelayConfig.RelayUrl };
 
         var nostrService = new NostrService();
         var (privKey, pubKey, _, _) = nostrService.GenerateKeyPair();

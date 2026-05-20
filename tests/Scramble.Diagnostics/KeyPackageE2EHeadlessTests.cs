@@ -72,7 +72,7 @@ public class KeyPackageE2EHeadlessTests : IDisposable
         await messageService.InitializeAsync();
 
         // === Step 1: Connect to real relays ===
-        var relays = new[] { "ws://localhost:7777" };
+        var relays = TestRelayConfig.RelayUrls;
         _output.WriteLine("\n--- Connecting to relays ---");
         foreach (var relay in relays)
         {

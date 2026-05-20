@@ -23,7 +23,7 @@ namespace Scramble.Diagnostics;
 [Trait("Category", "FullE2E")]
 public class FullE2EGroupInteropTests : IAsyncLifetime
 {
-    private const string RelayUrl = "ws://localhost:7777";
+    private static string RelayUrl => TestRelayConfig.RelayUrl;
     // Same relay, but addressable from inside the WN docker container via compose DNS.
     // WN must register this URL (not localhost:7777, which is unreachable from the container).
     private const string WnLocalRelayUrl = "ws://nostr-relay:8080";

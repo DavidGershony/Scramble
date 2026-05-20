@@ -23,7 +23,7 @@ namespace Scramble.Diagnostics;
 [Trait("Category", "WebInterop")]
 public class WebAppInteropInvestigationTests : IAsyncLifetime
 {
-    private const string RelayUrl = "ws://localhost:7777";
+    private static string RelayUrl => TestRelayConfig.RelayUrl;
 
     private readonly ITestOutputHelper _output;
     private readonly List<string> _dbPaths = new();

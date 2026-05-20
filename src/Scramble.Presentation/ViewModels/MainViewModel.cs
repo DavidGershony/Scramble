@@ -433,20 +433,11 @@ public partial class MainViewModel : ViewModelBase
                 _logger.LogDebug("Initializing MLS service");
                 await _mlsService.InitializeAsync(mlsPrivateKey, CurrentUser.PublicKeyHex);
 
-                // Restore MLS service state (signing keys, stored KeyPackage) from persistence
-                try
-                {
-                    var serviceState = await _storageService.GetMlsStateAsync("__service__");
-                    if (serviceState != null)
-                    {
-                        await _mlsService.ImportServiceStateAsync(serviceState);
-                        _logger.LogInformation("Restored MLS service state from persistence");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to restore MLS service state");
-                }
+                // NOTE: InitializeAsync already restores service state (KeyPackage private keys,
+                // signing keys) from persistence internally via SaveServiceStateAsync/LoadState.
+                // A redundant ImportServiceStateAsync call was removed here because it starts with
+                // _storedKeyPackages.Clear() — if a KP were generated between the two calls, it
+                // would be silently lost. See KeyPackageAuditPersistenceTests.DoubleImport test.
 
                 // Wire up the Nostr event signer for kind 445 MLS group messages.
                 // Local key users sign immediately; signer users wire after background restore.
@@ -930,6 +921,7 @@ public partial class MainViewModel : ViewModelBase
                         // Multi-device: detect peer device KeyPackages (same pubkey, different slot ID).
                         // Only process genuinely new peer devices — skip slot IDs we've already seen.
                         var localSlotId = _mlsService.GetLocalKeyPackageSlotId();
+                        var peerKps = new List<KeyPackage>();
                         if (!string.IsNullOrEmpty(localSlotId))
                         {
                             // Load the set of peer slot IDs we've already processed
@@ -945,7 +937,7 @@ public partial class MainViewModel : ViewModelBase
                             // Compute dummy slot IDs so we never treat our own decoys as peer devices
                             var dummySlotIds = MessageService.ComputeDummySlotIds(CurrentUser.PrivateKeyHex);
 
-                            var peerKps = myKeyPackages
+                            peerKps = myKeyPackages
                                 .Where(kp => kp.IsCipherSuiteSupported
                                     && !string.IsNullOrEmpty(kp.SlotId)
                                     && kp.SlotId != localSlotId
@@ -1002,38 +994,38 @@ public partial class MainViewModel : ViewModelBase
                                     ShowForwardSecrecyBanner = true;
                                 }
                             }
+                        }
 
-                            // ── Device-sync group: create/load and invite new peer devices ──
-                            // This runs regardless of whether new peers were detected, so that
-                            // the sync group is always created on login if it doesn't exist.
-                            try
+                        // ── Device-sync group: create/load and invite new peer devices ──
+                        // This runs regardless of whether a local slot ID exists, so that
+                        // the sync group (Private Notes) is always created on login.
+                        try
+                        {
+                            var syncChat = await _messageService.GetOrCreateDeviceSyncGroupAsync();
+                            _logger.LogInformation("Device-sync group ready: {ChatId}", syncChat.Id);
+
+                            // Invite newly-detected peers to the sync group
+                            if (peerKps.Count > 0)
                             {
-                                var syncChat = await _messageService.GetOrCreateDeviceSyncGroupAsync();
-                                _logger.LogInformation("Device-sync group ready: {ChatId}", syncChat.Id);
-
-                                // Invite newly-detected peers to the sync group
-                                if (peerKps.Count > 0)
+                                foreach (var peerKp in peerKps)
                                 {
-                                    foreach (var peerKp in peerKps)
+                                    try
                                     {
-                                        try
-                                        {
-                                            await _messageService.InvitePeerToSyncGroupAsync(peerKp, syncChat.Id);
-                                            _logger.LogInformation("Invited peer device (slot={SlotId}) to sync group",
-                                                peerKp.SlotId?[..Math.Min(16, peerKp.SlotId?.Length ?? 0)]);
-                                        }
-                                        catch (Exception syncEx)
-                                        {
-                                            _logger.LogWarning(syncEx, "Failed to invite peer device (slot={SlotId}) to sync group",
-                                                peerKp.SlotId?[..Math.Min(16, peerKp.SlotId?.Length ?? 0)]);
-                                        }
+                                        await _messageService.InvitePeerToSyncGroupAsync(peerKp, syncChat.Id);
+                                        _logger.LogInformation("Invited peer device (slot={SlotId}) to sync group",
+                                            peerKp.SlotId?[..Math.Min(16, peerKp.SlotId?.Length ?? 0)]);
+                                    }
+                                    catch (Exception syncEx)
+                                    {
+                                        _logger.LogWarning(syncEx, "Failed to invite peer device (slot={SlotId}) to sync group",
+                                            peerKp.SlotId?[..Math.Min(16, peerKp.SlotId?.Length ?? 0)]);
                                     }
                                 }
                             }
-                            catch (Exception syncEx)
-                            {
-                                _logger.LogWarning(syncEx, "Failed to create/load device-sync group");
-                            }
+                        }
+                        catch (Exception syncEx)
+                        {
+                            _logger.LogWarning(syncEx, "Failed to create/load device-sync group");
                         }
                     }
                     catch (Exception ex)
