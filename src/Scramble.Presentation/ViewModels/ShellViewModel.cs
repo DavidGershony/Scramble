@@ -494,6 +494,8 @@ public partial class ShellViewModel : ViewModelBase
             RefreshKnownAccounts();
             ProfileConfiguration.SetProfile(null);
             ShowLoginView();
+            // ShowLoginView resets LoginViewModel — set ErrorMessage AFTER so the user sees what happened.
+            LoginViewModel.ErrorMessage = $"Failed to switch account: {ex.Message}";
         }
     }
 

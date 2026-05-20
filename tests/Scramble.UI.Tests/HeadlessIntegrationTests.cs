@@ -359,7 +359,7 @@ public class HeadlessIntegrationTests
 
         // MLS group creation
         var groupId = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
-        mockMls.Setup(m => m.CreateGroupAsync("End-to-End Group", new[] { "wss://relay.test" }))
+        mockMls.Setup(m => m.CreateGroupAsync("End-to-End Group", It.Is<string[]>(a => a.SequenceEqual(new[] { "wss://relay.test" }))))
             .ReturnsAsync(new MlsGroupInfo
             {
                 GroupId = groupId,

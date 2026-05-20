@@ -415,16 +415,20 @@ public partial class ChatViewModel : ViewModelBase
             .Subscribe(OnReactionUpdate);
 
         // Keep out-of-sync / resync-pending flags live as the service updates the chat
-        _messageService.ChatUpdates
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(updatedChat =>
-            {
-                if (_currentChat != null && updatedChat.Id == _currentChat.Id)
+        var chatUpdates = _messageService.ChatUpdates;
+        if (chatUpdates != null)
+        {
+            chatUpdates
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(updatedChat =>
                 {
-                    IsOutOfSync = updatedChat.IsOutOfSync;
-                    IsResyncPending = updatedChat.IsResyncPending;
-                }
-            });
+                    if (_currentChat != null && updatedChat.Id == _currentChat.Id)
+                    {
+                        IsOutOfSync = updatedChat.IsOutOfSync;
+                        IsResyncPending = updatedChat.IsResyncPending;
+                    }
+                });
+        }
     }
 
     public void LoadChat(Chat chat)
