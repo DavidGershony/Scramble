@@ -82,7 +82,7 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
         Assert.Equal("Alice's Group", newChat.Name);
     }
 
-    [AvaloniaTheory(Skip = "Obsolete: since commit 706fd66, MessageService filters welcomes via CanProcessWelcomeAsync before saving a PendingInvite. This test pushes random bytes which are now correctly rejected. Needs a real MLS key-package + welcome flow to reinstate.")]
+    [AvaloniaTheory]
     [InlineData("rust")]
     [InlineData("managed")]
     public async Task DeclineInvite_RemovesFromPendingList(string backend)
@@ -91,28 +91,37 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
+        // Build a real MLS welcome so CanProcessWelcomeAsync accepts it
+        var alice = await CreateRealContext("managed");
+        await alice.MlsService.InitializeAsync(alice.User.PrivateKeyHex, alice.User.PublicKeyHex);
+
+        var bobKp = await ctx.MlsService.GenerateKeyPackageAsync();
+        PrepareKeyPackageForAddMember(bobKp, ctx.User.PublicKeyHex);
+        var groupInfo = await alice.MlsService.CreateGroupAsync("Decline Test", new[] { "wss://relay.test" });
+        var realWelcome = await alice.MlsService.AddMemberAsync(groupInfo.GroupId, bobKp);
+
         var chatListVm = new ChatListViewModel(ctx.MessageService, ctx.Storage, ctx.MlsService, ctx.MockNostr.Object);
         Dispatcher.UIThread.RunJobs();
 
-        // Simulate a welcome event arriving
         var fakeWelcomeEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
         var welcomeEvent = new NostrEventReceived
         {
             Kind = 444,
             EventId = fakeWelcomeEventId,
-            PublicKey = "aa".PadLeft(64, 'a'),
-            Content = Convert.ToBase64String(new byte[64]),
+            PublicKey = alice.User.PublicKeyHex,
+            Content = Convert.ToBase64String(realWelcome.WelcomeData),
             CreatedAt = DateTime.UtcNow,
             Tags = new List<List<string>>
             {
                 new() { "p", ctx.User.PublicKeyHex },
-                new() { "h", "deadbeef" }
+                new() { "e", bobKp.NostrEventId! },
+                new() { "encoding", "base64" }
             },
             RelayUrl = "wss://test.relay"
         };
 
         ctx.EventsSubject.OnNext(welcomeEvent);
-        await Task.Delay(200);
+        await Task.Delay(300);
         Dispatcher.UIThread.RunJobs();
 
         Assert.Single(chatListVm.PendingInvites);
@@ -176,7 +185,7 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
             It.IsAny<string?>()), Moq.Times.Once);
     }
 
-    [AvaloniaTheory(Skip = "Obsolete: since commit 706fd66, MessageService filters welcomes via CanProcessWelcomeAsync before saving a PendingInvite. This test pushes random bytes which are now correctly rejected. Needs a real MLS key-package + welcome flow to reinstate.")]
+    [AvaloniaTheory]
     [InlineData("rust")]
     [InlineData("managed")]
     public async Task RescanInvites_FindsMissedWelcomes(string backend)
@@ -185,19 +194,28 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
-        // Mock FetchWelcomeEventsAsync to return a "missed" welcome
+        // Build a real MLS welcome so CanProcessWelcomeAsync accepts the re-fetched event
+        var alice = await CreateRealContext("managed");
+        await alice.MlsService.InitializeAsync(alice.User.PrivateKeyHex, alice.User.PublicKeyHex);
+
+        var bobKp = await ctx.MlsService.GenerateKeyPackageAsync();
+        PrepareKeyPackageForAddMember(bobKp, ctx.User.PublicKeyHex);
+        var groupInfo = await alice.MlsService.CreateGroupAsync("Rescan Test", new[] { "wss://relay.test" });
+        var realWelcome = await alice.MlsService.AddMemberAsync(groupInfo.GroupId, bobKp);
+
         var missedWelcomeEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
         var missedWelcome = new NostrEventReceived
         {
             Kind = 444,
             EventId = missedWelcomeEventId,
-            PublicKey = "bb".PadLeft(64, 'b'),
-            Content = Convert.ToBase64String(new byte[64]),
+            PublicKey = alice.User.PublicKeyHex,
+            Content = Convert.ToBase64String(realWelcome.WelcomeData),
             CreatedAt = DateTime.UtcNow.AddMinutes(-5),
             Tags = new List<List<string>>
             {
                 new() { "p", ctx.User.PublicKeyHex },
-                new() { "h", "rescangroup" }
+                new() { "e", bobKp.NostrEventId! },
+                new() { "encoding", "base64" }
             },
             RelayUrl = "wss://test.relay"
         };
@@ -216,6 +234,5 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
         Dispatcher.UIThread.RunJobs();
 
         Assert.Single(chatListVm.PendingInvites);
-        Assert.Contains("rescangroup", chatListVm.PendingInvites[0].GroupId);
     }
 }

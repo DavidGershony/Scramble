@@ -1,9 +1,7 @@
 using System.Reactive.Linq;
-using System.Reactive.Subjects;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
-using Microsoft.Data.Sqlite;
 using Moq;
 using Scramble.Core.Models;
 using Scramble.Core.Services;
@@ -22,21 +20,8 @@ namespace Scramble.UI.Tests;
 ///
 /// Each test runs with both "rust" and "managed" backends via [AvaloniaTheory].
 /// </summary>
-public class HeadlessRealMlsIntegrationTests : IDisposable
+public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
 {
-    private readonly List<string> _dbPaths = new();
-    private readonly List<IDisposable> _disposables = new();
-
-    public void Dispose()
-    {
-        foreach (var d in _disposables) d.Dispose();
-
-        SqliteConnection.ClearAllPools();
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-
-        foreach (var path in _dbPaths) TryDeleteFile(path);
-    }
 
     // ═══════════════════════════════════════════════════════════════════
     // Test 1: Login flow triggers main UI visibility
@@ -493,108 +478,4 @@ public class HeadlessRealMlsIntegrationTests : IDisposable
         window.Close();
     }
 
-    // ═══════════════════════════════════════════════════════════════════
-    // Context and Helpers
-    // ═══════════════════════════════════════════════════════════════════
-
-    private static bool NativeDllAvailable()
-    {
-        var dllPath = Path.Combine(AppContext.BaseDirectory, "scramble_native.dll");
-        return File.Exists(dllPath);
-    }
-
-    private record RealTestContext(
-        User User,
-        StorageService Storage,
-        IMlsService MlsService,
-        MessageService MessageService,
-        Subject<NostrEventReceived> EventsSubject,
-        Mock<INostrService> MockNostr,
-        Mock<IPlatformClipboard> MockClipboard,
-        Mock<IQrCodeGenerator> MockQrGenerator,
-        Mock<IPlatformLauncher> MockLauncher);
-
-    private async Task<RealTestContext> CreateRealContext(string backend, bool saveUser = true)
-    {
-        // Generate real keys
-        var nostrService = new NostrService();
-        var (privKey, pubKey, nsec, npub) = nostrService.GenerateKeyPair();
-
-        // Real storage
-        var dbPath = Path.Combine(Path.GetTempPath(), $"scramble_headless_{backend}_{Guid.NewGuid()}.db");
-        _dbPaths.Add(dbPath);
-        var storage = new StorageService(dbPath, new MockSecureStorage());
-        await storage.InitializeAsync();
-
-        var user = new User
-        {
-            Id = Guid.NewGuid().ToString(),
-            PublicKeyHex = pubKey,
-            PrivateKeyHex = privKey,
-            Npub = npub,
-            Nsec = nsec,
-            DisplayName = $"Test User ({backend})",
-            IsCurrentUser = true,
-            CreatedAt = DateTime.UtcNow
-        };
-        if (saveUser) await storage.SaveCurrentUserAsync(user);
-
-        // Real MLS service
-        IMlsService mlsService = backend switch
-        {
-            "managed" => new ManagedMlsService(storage),
-            "rust" => new MlsService(storage),
-            _ => throw new ArgumentException($"Unknown backend '{backend}'.")
-        };
-
-        // Mocked NostrService (events subject for relay simulation)
-        var eventsSubject = new Subject<NostrEventReceived>();
-        var mockNostr = new Mock<INostrService>();
-        mockNostr.Setup(n => n.Events).Returns(eventsSubject.AsObservable());
-        mockNostr.Setup(n => n.WelcomeMessages).Returns(Observable.Empty<MarmotWelcomeEvent>());
-        mockNostr.Setup(n => n.GroupMessages).Returns(Observable.Empty<MarmotGroupMessageEvent>());
-        mockNostr.Setup(n => n.ConnectionStatus).Returns(Observable.Empty<NostrConnectionStatus>());
-        mockNostr.Setup(n => n.ConnectAsync(It.IsAny<string>())).Returns(Task.CompletedTask);
-        mockNostr.Setup(n => n.ConnectAsync(It.IsAny<IEnumerable<string>>())).Returns(Task.CompletedTask);
-        mockNostr.Setup(n => n.DisconnectAsync()).Returns(Task.CompletedTask);
-        mockNostr.Setup(n => n.SubscribeToWelcomesAsync(It.IsAny<string>(), It.IsAny<string?>())).Returns(Task.CompletedTask);
-        mockNostr.Setup(n => n.SubscribeToGroupMessagesAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<DateTimeOffset?>())).Returns(Task.CompletedTask);
-        mockNostr.Setup(n => n.SubscribeAsync(It.IsAny<string>(), It.IsAny<NostrFilter>())).Returns(Task.CompletedTask);
-        mockNostr.Setup(n => n.UnsubscribeAsync(It.IsAny<string>())).Returns(Task.CompletedTask);
-        mockNostr.Setup(n => n.FetchUserMetadataAsync(It.IsAny<string>())).ReturnsAsync((UserMetadata?)null);
-        mockNostr.Setup(n => n.FetchKeyPackagesAsync(It.IsAny<string>())).ReturnsAsync(Enumerable.Empty<KeyPackage>());
-        mockNostr.Setup(n => n.FetchWelcomeEventsAsync(It.IsAny<string>(), It.IsAny<string?>())).ReturnsAsync(Enumerable.Empty<NostrEventReceived>());
-        mockNostr.Setup(n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>()))
-            .ReturnsAsync(() => "fakekp_" + Guid.NewGuid().ToString("N"));
-        mockNostr.Setup(n => n.PublishWelcomeAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
-            .ReturnsAsync(() => "fakewelcome_" + Guid.NewGuid().ToString("N"));
-        mockNostr.Setup(n => n.PublishGroupMessageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>()))
-            .ReturnsAsync(() => "fakemsg_" + Guid.NewGuid().ToString("N"));
-        mockNostr.Setup(n => n.PublishRawEventJsonAsync(It.IsAny<byte[]>()))
-            .ReturnsAsync(() => "fakemsg_" + Guid.NewGuid().ToString("N"));
-        mockNostr.Setup(n => n.PublishCommitAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>()))
-            .ReturnsAsync(() => "fakecommit_" + Guid.NewGuid().ToString("N"));
-        mockNostr.Setup(n => n.GenerateKeyPair())
-            .Returns((privKey, pubKey, nsec, npub));
-        mockNostr.Setup(n => n.ImportPrivateKey(It.IsAny<string>()))
-            .Returns((privKey, pubKey, nsec, npub));
-
-        // Real MessageService
-        var messageService = new MessageService(storage, mockNostr.Object, mlsService);
-        _disposables.Add(messageService);
-
-        var mockClipboard = new Mock<IPlatformClipboard>();
-        var mockQrGenerator = new Mock<IQrCodeGenerator>();
-        var mockLauncher = new Mock<IPlatformLauncher>();
-
-        return new RealTestContext(
-            user, storage, mlsService, messageService, eventsSubject,
-            mockNostr, mockClipboard, mockQrGenerator, mockLauncher);
-    }
-
-    private static void TryDeleteFile(string path)
-    {
-        try { if (File.Exists(path)) File.Delete(path); }
-        catch (IOException) { }
-    }
 }

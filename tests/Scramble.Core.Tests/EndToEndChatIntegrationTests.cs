@@ -245,12 +245,19 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
     // Test 2: Welcome deduplication
     // ═══════════════════════════════════════════════════════════════════
 
-    [Theory(Skip = "Obsolete: since commit 706fd66, MessageService filters welcomes via CanProcessWelcomeAsync (managed backend returns false without matching key packages) before saving a PendingInvite. This test pushes random bytes which are now correctly rejected. Needs a real MLS key-package + welcome flow to reinstate.")]
+    [Theory]
     [InlineData("rust")]
     [InlineData("managed")]
     public async Task WelcomeEvent_ReceivedTwice_OnlyCreatesOneInvite(string backend)
     {
         await SetupUsers(backend);
+
+        // Build a real MLS welcome so CanProcessWelcomeAsync accepts the first delivery
+        var kpB = await _mlsServiceB.GenerateKeyPackageAsync();
+        kpB.EventJson = CreateFakeKeyPackageEventJson(_pubKeyB, kpB.Data, kpB.NostrTags);
+        kpB.NostrEventId = "fakekp_dedup_" + Guid.NewGuid().ToString("N");
+        var groupInfo = await _mlsServiceA.CreateGroupAsync("Dedup Test", new[] { "wss://relay.test" });
+        var realWelcome = await _mlsServiceA.AddMemberAsync(groupInfo.GroupId, kpB);
 
         var welcomeEventId = "dedup_" + Guid.NewGuid().ToString("N");
         var welcomeEvent = new NostrEventReceived
@@ -258,12 +265,14 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
             Kind = 444,
             EventId = welcomeEventId,
             PublicKey = _pubKeyA,
-            Content = Convert.ToBase64String(new byte[64]),
+            Content = Convert.ToBase64String(realWelcome.WelcomeData),
             CreatedAt = DateTime.UtcNow,
             Tags = new List<List<string>>
             {
                 new() { "p", _pubKeyB },
-                new() { "h", "deadbeef" }
+                new() { "e", kpB.NostrEventId! },
+                new() { "encoding", "base64" },
+                new() { "h", Convert.ToHexString(groupInfo.GroupId).ToLowerInvariant() }
             },
             RelayUrl = "wss://test.relay"
         };
