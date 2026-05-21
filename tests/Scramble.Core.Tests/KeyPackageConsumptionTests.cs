@@ -278,4 +278,49 @@ public class KeyPackageConsumptionTests
         mlsMock.Verify(m => m.GenerateKeyPackageAsync(), Times.Never);
         nostrMock.Verify(n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>>()), Times.Never);
     }
+
+    /// <summary>
+    /// Resync: when AcceptInviteAsync receives a Welcome for a group the device is already
+    /// in (the re-invite after resync), it must clear IsOutOfSync and IsResyncPending so
+    /// the UI banner disappears.
+    /// </summary>
+    [Fact]
+    public async Task AcceptInvite_ForExistingOutOfSyncChat_ClearsOutOfSyncFlags()
+    {
+        // The groupId must match what CreateMocks sets up in ProcessWelcomeAsync
+        var groupId = new byte[] { 0xAA, 0xBB, 0xCC, 0xDD, 0x11, 0x22, 0x33, 0x44 };
+        var invite = CreateInvite();
+
+        var existingChat = new Chat
+        {
+            Id = "existing-chat-out-of-sync",
+            Name = "Out Of Sync Group",
+            Type = ChatType.Group,
+            MlsGroupId = groupId,
+            IsOutOfSync = true,
+            IsResyncPending = true,
+            ParticipantPublicKeys = new List<string>(),
+            CreatedAt = DateTime.UtcNow,
+            LastActivityAt = DateTime.UtcNow
+        };
+
+        var (storageMock, nostrMock, mlsMock) = CreateMocks(invite);
+
+        // Override the default empty list so AcceptInviteAsync finds the out-of-sync chat
+        storageMock.Setup(s => s.GetAllChatsAsync()).ReturnsAsync(new List<Chat> { existingChat });
+
+        var messageService = new MessageService(storageMock.Object, nostrMock.Object, mlsMock.Object);
+        await messageService.InitializeAsync();
+
+        // Act: Welcome for a group already in local DB → resync path
+        await messageService.AcceptInviteAsync(invite.Id);
+
+        // Assert: SaveChatAsync called with both flags cleared
+        storageMock.Verify(s => s.SaveChatAsync(It.Is<Chat>(c =>
+            c.Id == "existing-chat-out-of-sync" &&
+            !c.IsOutOfSync &&
+            !c.IsResyncPending)),
+            Times.Once,
+            "Resync: AcceptInviteAsync must clear IsOutOfSync and IsResyncPending for an existing out-of-sync chat");
+    }
 }

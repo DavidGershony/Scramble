@@ -2233,6 +2233,17 @@ public class MessageService : IMessageService, IDisposable
                 groupIdHex[..Math.Min(16, groupIdHex.Length)], existingChat.Id);
             await _storageService.DismissWelcomeEventAsync(invite.NostrEventId);
             await _storageService.DeletePendingInviteAsync(inviteId);
+
+            // Welcome for a group we're already in = resync completed; clear the out-of-sync banner
+            if (existingChat.IsOutOfSync || existingChat.IsResyncPending)
+            {
+                existingChat.IsOutOfSync = false;
+                existingChat.IsResyncPending = false;
+                await _storageService.SaveChatAsync(existingChat);
+                _chatUpdates.OnNext(existingChat);
+                _logger.LogInformation("AcceptInvite: resync complete for chat {ChatId}, out-of-sync flags cleared", existingChat.Id);
+            }
+
             return existingChat;
         }
 
