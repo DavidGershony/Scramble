@@ -28,6 +28,7 @@ public partial class MainViewModel : ViewModelBase
     private readonly IQrCodeGenerator _qrCodeGenerator;
     private NotificationOrchestrator? _notificationOrchestrator;
     private bool _connectionGracePeriodActive;
+    private CancellationTokenSource? _noInternetDebounceCts;
 
     [Reactive] public partial User? CurrentUser { get; set; }
     [Reactive] public partial bool IsLoggedIn { get; set; }
@@ -622,16 +623,60 @@ public partial class MainViewModel : ViewModelBase
         TotalRelayCount = RelayStatuses.Count;
         RelayCountText = $"Relays: {ConnectedRelayCount}/{TotalRelayCount}";
 
-        // Once any relay connects, the grace period is no longer needed.
         if (ConnectedRelayCount > 0)
+        {
+            // At least one relay is connected — no banner needed.
             _connectionGracePeriodActive = false;
-
-        // Suppress the "no internet" banner during the initial connection grace period
-        // so it doesn't flash on every app launch while relays are still connecting.
-        if (_connectionGracePeriodActive)
+            CancelNoInternetDebounce();
             ShowNoInternet = false;
-        else
-            ShowNoInternet = TotalRelayCount > 0 && ConnectedRelayCount == 0;
+            return;
+        }
+
+        // All relays disconnected (or none configured).
+        if (_connectionGracePeriodActive || TotalRelayCount == 0)
+        {
+            ShowNoInternet = false;
+            return;
+        }
+
+        // All configured relays are disconnected, grace period is over.
+        // Debounce: wait before showing the banner so the auto-reconnect
+        // (1 s → 2 s → 4 s → 8 s exponential backoff) can recover from
+        // transient drops without aggressively flashing "No internet".
+        if (!ShowNoInternet && _noInternetDebounceCts == null)
+            ScheduleNoInternetBanner();
+    }
+
+    private void CancelNoInternetDebounce()
+    {
+        _noInternetDebounceCts?.Cancel();
+        _noInternetDebounceCts = null;
+    }
+
+    /// <summary>
+    /// Waits 15 seconds before showing the "No internet" banner. If any relay
+    /// reconnects in the meantime, the timer is cancelled via
+    /// <see cref="CancelNoInternetDebounce"/>. The 15 s window covers the first
+    /// four auto-reconnect attempts (1 + 2 + 4 + 8 = 15 s).
+    /// </summary>
+    private void ScheduleNoInternetBanner()
+    {
+        var cts = new CancellationTokenSource();
+        _noInternetDebounceCts = cts;
+        _ = Task.Run(async () =>
+        {
+            try { await Task.Delay(TimeSpan.FromSeconds(15), cts.Token); }
+            catch (OperationCanceledException) { return; }
+
+            Observable.Return(Unit.Default)
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(_ =>
+                {
+                    _noInternetDebounceCts = null;
+                    if (ConnectedRelayCount == 0 && TotalRelayCount > 0 && !_connectionGracePeriodActive)
+                        ShowNoInternet = true;
+                });
+        });
     }
 
     /// <summary>
