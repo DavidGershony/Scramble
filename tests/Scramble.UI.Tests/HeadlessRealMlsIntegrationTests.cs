@@ -77,7 +77,7 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
     // Test 3: Pending invites appear in ChatListViewModel via observable
     // ═══════════════════════════════════════════════════════════════════
 
-    [AvaloniaTheory(Skip = "Obsolete: since commit 706fd66, MessageService filters welcomes via CanProcessWelcomeAsync before saving a PendingInvite. This test pushes random bytes which are now correctly rejected. Needs a real MLS key-package + welcome flow to reinstate.")]
+    [AvaloniaTheory]
     [InlineData("rust")]
     [InlineData("managed")]
     public async Task PendingInvite_ArrivesViaObservable_AppearsInChatList(string backend)
@@ -86,21 +86,19 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
+        // Build a real MLS welcome so CanProcessWelcomeAsync accepts it
+        var alice = await CreateRealContext("managed");
+        await alice.MlsService.InitializeAsync(alice.User.PrivateKeyHex, alice.User.PublicKeyHex);
+
+        var bobKp = await ctx.MlsService.GenerateKeyPackageAsync();
+        PrepareKeyPackageForAddMember(bobKp, ctx.User.PublicKeyHex);
+        var groupInfo = await alice.MlsService.CreateGroupAsync("Observable Test", new[] { "wss://relay.test" });
+        var realWelcome = await alice.MlsService.AddMemberAsync(groupInfo.GroupId, bobKp);
+
         var chatListVm = new ChatListViewModel(ctx.MessageService, ctx.Storage, ctx.MlsService, ctx.MockNostr.Object);
         Dispatcher.UIThread.RunJobs();
 
         Assert.Empty(chatListVm.PendingInvites);
-
-        // Simulate a welcome event arriving via the mocked NostrService
-        var invite = new PendingInvite
-        {
-            Id = "invite-1",
-            SenderPublicKey = "cc".PadLeft(64, 'c'),
-            GroupId = "deadbeef",
-            WelcomeData = new byte[64],
-            NostrEventId = "event123",
-            ReceivedAt = DateTime.UtcNow
-        };
 
         // Deliver via the real MessageService's NewInvites observable
         // by pushing a kind-444 event through the mocked NostrService events
@@ -109,19 +107,20 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
         {
             Kind = 444,
             EventId = fakeWelcomeEventId,
-            PublicKey = "cc".PadLeft(64, 'c'),
-            Content = Convert.ToBase64String(new byte[64]),
+            PublicKey = alice.User.PublicKeyHex,
+            Content = Convert.ToBase64String(realWelcome.WelcomeData),
             CreatedAt = DateTime.UtcNow,
             Tags = new List<List<string>>
             {
                 new() { "p", ctx.User.PublicKeyHex },
-                new() { "h", "deadbeef" }
+                new() { "e", bobKp.NostrEventId! },
+                new() { "encoding", "base64" }
             },
             RelayUrl = "wss://test.relay"
         };
 
         ctx.EventsSubject.OnNext(welcomeEvent);
-        await Task.Delay(200);
+        await Task.Delay(300);
         Dispatcher.UIThread.RunJobs();
 
         Assert.Single(chatListVm.PendingInvites);
@@ -436,7 +435,7 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
     // Test 11: ChatListView renders with pending invites (view-level)
     // ═══════════════════════════════════════════════════════════════════
 
-    [AvaloniaTheory(Skip = "Obsolete: since commit 706fd66, MessageService filters welcomes via CanProcessWelcomeAsync before saving a PendingInvite. This test pushes random bytes which are now correctly rejected. Needs a real MLS key-package + welcome flow to reinstate.")]
+    [AvaloniaTheory]
     [InlineData("rust")]
     [InlineData("managed")]
     public async Task ChatListView_RendersPendingInvites(string backend)
@@ -444,6 +443,15 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
         if (backend == "rust" && !NativeDllAvailable()) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
+
+        // Build a real MLS welcome so CanProcessWelcomeAsync accepts it
+        var alice = await CreateRealContext("managed");
+        await alice.MlsService.InitializeAsync(alice.User.PrivateKeyHex, alice.User.PublicKeyHex);
+
+        var bobKp = await ctx.MlsService.GenerateKeyPackageAsync();
+        PrepareKeyPackageForAddMember(bobKp, ctx.User.PublicKeyHex);
+        var groupInfo = await alice.MlsService.CreateGroupAsync("Render Test", new[] { "wss://relay.test" });
+        var realWelcome = await alice.MlsService.AddMemberAsync(groupInfo.GroupId, bobKp);
 
         var chatListVm = new ChatListViewModel(ctx.MessageService, ctx.Storage, ctx.MlsService, ctx.MockNostr.Object);
         var chatListView = new ChatListView { DataContext = chatListVm };
@@ -458,19 +466,20 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
         {
             Kind = 444,
             EventId = fakeWelcomeEventId,
-            PublicKey = "dd".PadLeft(64, 'd'),
-            Content = Convert.ToBase64String(new byte[64]),
+            PublicKey = alice.User.PublicKeyHex,
+            Content = Convert.ToBase64String(realWelcome.WelcomeData),
             CreatedAt = DateTime.UtcNow,
             Tags = new List<List<string>>
             {
                 new() { "p", ctx.User.PublicKeyHex },
-                new() { "h", "abcd1234" }
+                new() { "e", bobKp.NostrEventId! },
+                new() { "encoding", "base64" }
             },
             RelayUrl = "wss://test.relay"
         };
 
         ctx.EventsSubject.OnNext(welcomeEvent);
-        await Task.Delay(200);
+        await Task.Delay(300);
         Dispatcher.UIThread.RunJobs();
 
         Assert.Single(chatListVm.PendingInvites);

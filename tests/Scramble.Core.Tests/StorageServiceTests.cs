@@ -348,4 +348,73 @@ public class StorageServiceTests : IAsyncLifetime
         Assert.Contains("aaa111", loaded.AdminPublicKeys);
         Assert.Contains("bbb222", loaded.AdminPublicKeys);
     }
+
+    [Fact]
+    public async Task SaveChat_IsOutOfSync_SurvivesRoundtrip()
+    {
+        var chat = new Chat
+        {
+            Id = "outofsync-roundtrip",
+            Name = "Sync Test",
+            Type = ChatType.Group,
+            IsOutOfSync = true,
+            IsResyncPending = false,
+            CreatedAt = DateTime.UtcNow,
+            LastActivityAt = DateTime.UtcNow
+        };
+        await _storageService.SaveChatAsync(chat);
+
+        var loaded = await _storageService.GetChatAsync("outofsync-roundtrip");
+        Assert.NotNull(loaded);
+        Assert.True(loaded!.IsOutOfSync, "IsOutOfSync should survive DB roundtrip");
+        Assert.False(loaded.IsResyncPending, "IsResyncPending should survive DB roundtrip as false");
+    }
+
+    [Fact]
+    public async Task SaveChat_IsResyncPending_SurvivesRoundtrip()
+    {
+        var chat = new Chat
+        {
+            Id = "resyncpending-roundtrip",
+            Name = "Resync Test",
+            Type = ChatType.Group,
+            IsOutOfSync = true,
+            IsResyncPending = true,
+            CreatedAt = DateTime.UtcNow,
+            LastActivityAt = DateTime.UtcNow
+        };
+        await _storageService.SaveChatAsync(chat);
+
+        var loaded = await _storageService.GetChatAsync("resyncpending-roundtrip");
+        Assert.NotNull(loaded);
+        Assert.True(loaded!.IsOutOfSync, "IsOutOfSync should be true");
+        Assert.True(loaded.IsResyncPending, "IsResyncPending should survive DB roundtrip as true");
+    }
+
+    [Fact]
+    public async Task SaveChat_ClearingFlags_SurvivesRoundtrip()
+    {
+        // Save with flags true
+        var chat = new Chat
+        {
+            Id = "clear-flags-roundtrip",
+            Name = "Clear Test",
+            Type = ChatType.Group,
+            IsOutOfSync = true,
+            IsResyncPending = true,
+            CreatedAt = DateTime.UtcNow,
+            LastActivityAt = DateTime.UtcNow
+        };
+        await _storageService.SaveChatAsync(chat);
+
+        // Clear flags and re-save
+        chat.IsOutOfSync = false;
+        chat.IsResyncPending = false;
+        await _storageService.SaveChatAsync(chat);
+
+        var loaded = await _storageService.GetChatAsync("clear-flags-roundtrip");
+        Assert.NotNull(loaded);
+        Assert.False(loaded!.IsOutOfSync, "IsOutOfSync should be cleared after re-save");
+        Assert.False(loaded.IsResyncPending, "IsResyncPending should be cleared after re-save");
+    }
 }

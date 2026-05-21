@@ -19,11 +19,11 @@ namespace Scramble.UI.Tests;
 ///   - ChatViewModel.IsOutOfSync / IsResyncPending — bound from Chat model
 ///   - ChatViewModel.ResyncCommand — calls RequestResyncAsync
 ///   - ChatViewModel ChatUpdates subscription — updates VM flags on chat updates
+///   - StorageService — persists IsOutOfSync/IsResyncPending in Chats table
 ///
-/// Note: IsOutOfSync and IsResyncPending are runtime-only properties — NOT persisted
-/// to the SQLite Chats table. They are propagated via the ChatUpdates Subject.
-/// MarkAsReadAsync (fire-and-forget from LoadChat) reloads the chat from DB and emits
-/// a ChatUpdate with these flags reset to false. Tests must account for this timing.
+/// IsOutOfSync and IsResyncPending are persisted in the SQLite Chats table.
+/// MarkAsReadAsync reloads the chat from DB but preserves these flags because
+/// they are now persisted alongside other chat properties.
 /// </summary>
 public class HeadlessResyncTests : HeadlessTestBase
 {
@@ -164,12 +164,7 @@ public class HeadlessResyncTests : HeadlessTestBase
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
-        // NOTE: We intentionally do NOT save the chat to the DB.
-        // MarkAsReadAsync (fire-and-forget from LoadChat) reloads the chat from the DB
-        // where IsOutOfSync/IsResyncPending are NOT persisted (runtime-only flags).
-        // With ImmediateScheduler in tests, the ChatUpdates subscription fires inline
-        // during MarkAsReadAsync, clobbering the flags before LoadChat returns.
-        // By not persisting the chat, MarkAsReadAsync → GetChatAsync returns null → no-op.
+        // Save the chat to DB with flags set — they are now persisted.
         var chat = new Chat
         {
             Id = Guid.NewGuid().ToString(),
@@ -181,6 +176,7 @@ public class HeadlessResyncTests : HeadlessTestBase
             IsOutOfSync = true,
             IsResyncPending = true
         };
+        await ctx.Storage.SaveChatAsync(chat);
 
         var chatVm = new ChatViewModel(
             ctx.MessageService, ctx.Storage, ctx.MockNostr.Object,
@@ -191,6 +187,17 @@ public class HeadlessResyncTests : HeadlessTestBase
 
         Assert.True(chatVm.IsOutOfSync, "LoadChat should set IsOutOfSync from chat model");
         Assert.True(chatVm.IsResyncPending, "LoadChat should set IsResyncPending from chat model");
+
+        // Wait for MarkAsReadAsync fire-and-forget to complete (it reloads from DB).
+        // With flags persisted, the reloaded chat retains IsOutOfSync/IsResyncPending=true,
+        // so the ChatUpdates emission should NOT clobber the VM flags.
+        await Task.Delay(200);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(chatVm.IsOutOfSync,
+            "IsOutOfSync must survive MarkAsReadAsync (flags are now persisted in DB)");
+        Assert.True(chatVm.IsResyncPending,
+            "IsResyncPending must survive MarkAsReadAsync (flags are now persisted in DB)");
     }
 
     [AvaloniaTheory]

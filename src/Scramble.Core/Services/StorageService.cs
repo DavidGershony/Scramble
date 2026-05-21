@@ -364,6 +364,24 @@ public class StorageService : IStorageService
             }
             catch (SqliteException) { /* Column already exists */ }
 
+            // Migration: add IsOutOfSync column to Chats for persisting out-of-sync state
+            try
+            {
+                var migrate = connection.CreateCommand();
+                migrate.CommandText = "ALTER TABLE Chats ADD COLUMN IsOutOfSync INTEGER NOT NULL DEFAULT 0";
+                await migrate.ExecuteNonQueryAsync();
+            }
+            catch (SqliteException) { /* Column already exists */ }
+
+            // Migration: add IsResyncPending column to Chats for persisting resync-pending state
+            try
+            {
+                var migrate = connection.CreateCommand();
+                migrate.CommandText = "ALTER TABLE Chats ADD COLUMN IsResyncPending INTEGER NOT NULL DEFAULT 0";
+                await migrate.ExecuteNonQueryAsync();
+            }
+            catch (SqliteException) { /* Column already exists */ }
+
             _initialized = true;
             _logger.LogInformation("Database schema initialized successfully");
         }
@@ -655,9 +673,9 @@ public class StorageService : IStorageService
         var command = connection.CreateCommand();
         command.CommandText = @"
             INSERT OR REPLACE INTO Chats
-            (Id, Name, Type, MlsGroupId, NostrGroupId, MlsEpoch, AvatarUrl, Description, UnreadCount, CreatedAt, LastActivityAt, IsMuted, IsPinned, IsArchived, WelcomeNostrEventId, CreatorPublicKey)
+            (Id, Name, Type, MlsGroupId, NostrGroupId, MlsEpoch, AvatarUrl, Description, UnreadCount, CreatedAt, LastActivityAt, IsMuted, IsPinned, IsArchived, WelcomeNostrEventId, CreatorPublicKey, IsOutOfSync, IsResyncPending)
             VALUES
-            (@Id, @Name, @Type, @MlsGroupId, @NostrGroupId, @MlsEpoch, @AvatarUrl, @Description, @UnreadCount, @CreatedAt, @LastActivityAt, @IsMuted, @IsPinned, @IsArchived, @WelcomeNostrEventId, @CreatorPublicKey)";
+            (@Id, @Name, @Type, @MlsGroupId, @NostrGroupId, @MlsEpoch, @AvatarUrl, @Description, @UnreadCount, @CreatedAt, @LastActivityAt, @IsMuted, @IsPinned, @IsArchived, @WelcomeNostrEventId, @CreatorPublicKey, @IsOutOfSync, @IsResyncPending)";
 
         command.Parameters.AddWithValue("@Id", chat.Id);
         command.Parameters.AddWithValue("@Name", chat.Name);
@@ -675,6 +693,8 @@ public class StorageService : IStorageService
         command.Parameters.AddWithValue("@IsArchived", chat.IsArchived ? 1 : 0);
         command.Parameters.AddWithValue("@WelcomeNostrEventId", chat.WelcomeNostrEventId ?? (object)DBNull.Value);
         command.Parameters.AddWithValue("@CreatorPublicKey", chat.CreatorPublicKey ?? (object)DBNull.Value);
+        command.Parameters.AddWithValue("@IsOutOfSync", chat.IsOutOfSync ? 1 : 0);
+        command.Parameters.AddWithValue("@IsResyncPending", chat.IsResyncPending ? 1 : 0);
 
         await command.ExecuteNonQueryAsync();
 
@@ -1647,6 +1667,16 @@ public class StorageService : IStorageService
         }
         catch (ArgumentOutOfRangeException) { /* Column doesn't exist yet */ }
 
+        // IsOutOfSync/IsResyncPending columns may not exist in older databases before migration
+        bool isOutOfSync = false;
+        bool isResyncPending = false;
+        try
+        {
+            isOutOfSync = reader.GetInt32(reader.GetOrdinal("IsOutOfSync")) != 0;
+            isResyncPending = reader.GetInt32(reader.GetOrdinal("IsResyncPending")) != 0;
+        }
+        catch (ArgumentOutOfRangeException) { /* Columns don't exist yet */ }
+
         return new Chat
         {
             Id = reader.GetString(reader.GetOrdinal("Id")),
@@ -1664,7 +1694,9 @@ public class StorageService : IStorageService
             IsPinned = reader.GetInt32(reader.GetOrdinal("IsPinned")) == 1,
             IsArchived = reader.GetInt32(reader.GetOrdinal("IsArchived")) == 1,
             WelcomeNostrEventId = reader.IsDBNull(welcomeOrdinal) ? null : reader.GetString(welcomeOrdinal),
-            CreatorPublicKey = creatorPublicKey
+            CreatorPublicKey = creatorPublicKey,
+            IsOutOfSync = isOutOfSync,
+            IsResyncPending = isResyncPending
         };
     }
 
