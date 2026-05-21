@@ -476,14 +476,7 @@ public partial class MainViewModel : ViewModelBase
         // === BACKGROUND: All relay/network operations run without blocking the UI ===
         // Suppress the "no internet" banner for 15 s while initial connections + retries complete.
         _connectionGracePeriodActive = true;
-        _ = Task.Run(async () =>
-        {
-            await Task.Delay(TimeSpan.FromSeconds(15));
-            _connectionGracePeriodActive = false;
-            Observable.Return(System.Reactive.Unit.Default)
-                .ObserveOn(RxSchedulers.MainThreadScheduler)
-                .Subscribe(_ => UpdateRelayCounts());
-        });
+        _ = ClearGracePeriodAfterDelayAsync();
         _ = InitializeNetworkAsync();
 
         // === BACKGROUND: Signer restore runs without blocking chats or relays ===
@@ -663,10 +656,14 @@ public partial class MainViewModel : ViewModelBase
     {
         var cts = new CancellationTokenSource();
         _noInternetDebounceCts = cts;
-        _ = Task.Run(async () =>
+        _ = ShowNoInternetAfterDelayAsync(cts);
+    }
+
+    private async Task ShowNoInternetAfterDelayAsync(CancellationTokenSource cts)
+    {
+        try
         {
-            try { await Task.Delay(TimeSpan.FromSeconds(15), cts.Token); }
-            catch (OperationCanceledException) { return; }
+            await Task.Delay(TimeSpan.FromSeconds(15), cts.Token);
 
             Observable.Return(Unit.Default)
                 .ObserveOn(RxSchedulers.MainThreadScheduler)
@@ -676,7 +673,34 @@ public partial class MainViewModel : ViewModelBase
                     if (ConnectedRelayCount == 0 && TotalRelayCount > 0 && !_connectionGracePeriodActive)
                         ShowNoInternet = true;
                 });
-        });
+        }
+        catch (OperationCanceledException) { /* debounce cancelled — relay reconnected */ }
+        catch (Exception ex) { _logger.LogWarning(ex, "ShowNoInternetAfterDelayAsync failed"); }
+    }
+
+    private async Task ClearGracePeriodAfterDelayAsync()
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(15));
+            _connectionGracePeriodActive = false;
+            Observable.Return(System.Reactive.Unit.Default)
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(_ => UpdateRelayCounts());
+        }
+        catch (Exception ex) { _logger.LogWarning(ex, "ClearGracePeriodAfterDelayAsync failed"); }
+    }
+
+    private async Task AutoDismissForwardSecrecyBannerAsync()
+    {
+        try
+        {
+            await Task.Delay(5000);
+            ShowForwardSecrecyBanner = false;
+            SkippedNonAdminGroupsText = null;
+            await _storageService.SaveSettingAsync("forward_secrecy_banner_dismissed", "true");
+        }
+        catch (Exception ex) { _logger.LogWarning(ex, "AutoDismissForwardSecrecyBannerAsync failed"); }
     }
 
     /// <summary>
@@ -935,7 +959,8 @@ public partial class MainViewModel : ViewModelBase
 
             if (!string.IsNullOrEmpty(CurrentUser.PublicKeyHex))
             {
-                backgroundTasks.Add(Task.Run(async () =>
+                backgroundTasks.Add(CheckKeyPackagesAndMultiDeviceAsync());
+                async Task CheckKeyPackagesAndMultiDeviceAsync()
                 {
                     try
                     {
@@ -1093,13 +1118,14 @@ public partial class MainViewModel : ViewModelBase
                     {
                         _logger.LogWarning(ex, "Failed to check or auto-publish KeyPackage");
                     }
-                }));
+                }
 
                 // Restore NIP-17 bot/agent chats from relay history. The live kind 1059
                 // subscription should also pick these up, but explicit fetch ensures we
                 // don't miss anything on a fresh device or after a profile reset, and
                 // chats land in the Agents (DVM) tab without the user re-adding devices.
-                backgroundTasks.Add(Task.Run(async () =>
+                backgroundTasks.Add(RescanNip17ChatsInBackgroundAsync());
+                async Task RescanNip17ChatsInBackgroundAsync()
                 {
                     try
                     {
@@ -1111,9 +1137,10 @@ public partial class MainViewModel : ViewModelBase
                     {
                         _logger.LogWarning(ex, "Failed to rescan NIP-17 chats");
                     }
-                }));
+                }
 
-                backgroundTasks.Add(Task.Run(async () =>
+                backgroundTasks.Add(FetchOwnProfileMetadataAsync());
+                async Task FetchOwnProfileMetadataAsync()
                 {
                     try
                     {
@@ -1159,7 +1186,7 @@ public partial class MainViewModel : ViewModelBase
                     {
                         IsHeaderLoading = false;
                     }
-                }));
+                }
             }
             else
             {
@@ -1271,17 +1298,7 @@ public partial class MainViewModel : ViewModelBase
             _skippedGroupDetails.Clear();
 
             // Auto-dismiss after a short delay so user sees the confirmation
-            _ = Task.Run(async () =>
-            {
-                await Task.Delay(5000);
-                ShowForwardSecrecyBanner = false;
-                SkippedNonAdminGroupsText = null;
-                try
-                {
-                    await _storageService.SaveSettingAsync("forward_secrecy_banner_dismissed", "true");
-                }
-                catch { /* best-effort */ }
-            });
+            _ = AutoDismissForwardSecrecyBannerAsync();
         }
         catch (Exception ex)
         {

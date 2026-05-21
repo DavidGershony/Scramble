@@ -438,11 +438,21 @@ public class NostrService : INostrService, IDisposable
             ?? Math.Min((int)Math.Pow(2, currentAttempt + 1), MaxInitialConnectBackoffSeconds);
         _logger.LogInformation("Scheduling retry for {RelayUrl} in {Seconds}s (attempt {Attempt})",
             relayUrl, backoff, currentAttempt + 1);
-        _ = Task.Run(async () =>
+        _ = RetryConnectionAfterDelayAsync(relayUrl, backoff, currentAttempt);
+    }
+
+    private async Task RetryConnectionAfterDelayAsync(string relayUrl, int backoffSeconds, int currentAttempt)
+    {
+        try
         {
-            await Task.Delay(TimeSpan.FromSeconds(backoff));
+            await Task.Delay(TimeSpan.FromSeconds(backoffSeconds));
             await ConnectToRelayAsync(relayUrl, currentAttempt + 1);
-        });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Relay connection retry failed for {RelayUrl} (attempt {Attempt})",
+                relayUrl, currentAttempt + 1);
+        }
     }
 
     /// <summary>

@@ -519,7 +519,7 @@ public partial class ChatListViewModel : ViewModelBase
             SkippedInviteCount = await _storageService.GetSkippedInviteCountAsync();
 
             // Kick off background avatar refresh for DM chats missing profile images
-            _ = Task.Run(() => RefreshAvatarsAsync());
+            _ = RefreshAvatarsAsync();
 
             // Seed contacts table from every participant we know about (DM partners + group members)
             if (_currentUserPubKeyHex != null)
@@ -554,7 +554,7 @@ public partial class ChatListViewModel : ViewModelBase
 
             // Load cached follows + refresh from relays in background
             await LoadFollowingFromCacheAsync();
-            _ = Task.Run(() => RefreshFollowingAsync());
+            _ = RefreshFollowingAsync();
         }
         finally
         {
@@ -658,6 +658,8 @@ public partial class ChatListViewModel : ViewModelBase
 
     private async Task RefreshAvatarsAsync()
     {
+        try
+        {
         if (_nostrService == null || _currentUserPubKeyHex == null) return;
 
         Directory.CreateDirectory(AvatarCacheDir);
@@ -712,6 +714,11 @@ public partial class ChatListViewModel : ViewModelBase
             {
                 _logger.LogWarning(ex, "Failed to refresh avatar for chat {ChatId}", chatItem.Id[..Math.Min(8, chatItem.Id.Length)]);
             }
+        }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "RefreshAvatarsAsync failed");
         }
     }
 
@@ -786,7 +793,7 @@ public partial class ChatListViewModel : ViewModelBase
                 }
             });
 
-            _ = Task.Run(() => RefreshFollowingMetadataAsync(merged.Select(c => c.PublicKeyHex).ToList()));
+            _ = RefreshFollowingMetadataAsync(merged.Select(c => c.PublicKeyHex).ToList());
         }
         catch (Exception ex)
         {
@@ -800,6 +807,8 @@ public partial class ChatListViewModel : ViewModelBase
 
     private async Task RefreshFollowingMetadataAsync(List<string> pubKeys)
     {
+        try
+        {
         if (_nostrService == null) return;
 
         Directory.CreateDirectory(AvatarCacheDir);
@@ -866,6 +875,11 @@ public partial class ChatListViewModel : ViewModelBase
 
         await Task.WhenAll(tasks);
         _logger.LogInformation("Background metadata refresh complete for {Count} follows", pubKeys.Count);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "RefreshFollowingMetadataAsync failed");
+        }
     }
 
     private async Task RefreshGroupAvatarsAsync()

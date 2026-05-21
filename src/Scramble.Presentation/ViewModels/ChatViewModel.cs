@@ -688,29 +688,7 @@ public partial class ChatViewModel : ViewModelBase
                 GroupMembers.Add(member);
 
                 // Fetch metadata in background — update the member VM when it arrives
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        var metadata = await _messageService.FetchAndCacheProfileAsync(pubKeyHex);
-                        if (metadata != null)
-                        {
-                            RxSchedulers.MainThreadScheduler.Schedule(Unit.Default, (_, _) =>
-                            {
-                                member.DisplayName = metadata.GetDisplayName();
-                                member.Picture = metadata.Picture;
-                                if (!string.IsNullOrEmpty(metadata.Npub))
-                                    member.Npub = metadata.Npub;
-                                return Disposable.Empty;
-                            });
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Failed to fetch metadata for member {PubKey}",
-                            pubKeyHex[..Math.Min(16, pubKeyHex.Length)]);
-                    }
-                });
+                _ = FetchMemberMetadataAsync(member, pubKeyHex);
             }
 
             _logger.LogInformation("Loaded {Count} group members", GroupMembers.Count);
@@ -722,6 +700,30 @@ public partial class ChatViewModel : ViewModelBase
         finally
         {
             IsLoadingMembers = false;
+        }
+    }
+
+    private async Task FetchMemberMetadataAsync(GroupMemberViewModel member, string pubKeyHex)
+    {
+        try
+        {
+            var metadata = await _messageService.FetchAndCacheProfileAsync(pubKeyHex);
+            if (metadata != null)
+            {
+                RxSchedulers.MainThreadScheduler.Schedule(Unit.Default, (_, _) =>
+                {
+                    member.DisplayName = metadata.GetDisplayName();
+                    member.Picture = metadata.Picture;
+                    if (!string.IsNullOrEmpty(metadata.Npub))
+                        member.Npub = metadata.Npub;
+                    return Disposable.Empty;
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fetch metadata for member {PubKey}",
+                pubKeyHex[..Math.Min(16, pubKeyHex.Length)]);
         }
     }
 
@@ -1146,11 +1148,7 @@ public partial class ChatViewModel : ViewModelBase
             _logger.LogError(ex, "Failed to send media file");
             UploadStatus = $"Upload failed: {ex.Message}";
             // Clear error after 5 seconds
-            _ = Task.Run(async () =>
-            {
-                await Task.Delay(5000);
-                RxSchedulers.MainThreadScheduler.Schedule(Unit.Default, (_, __) => { UploadStatus = null; return System.Reactive.Disposables.Disposable.Empty; });
-            });
+            _ = ClearUploadStatusAfterDelayAsync(5000);
         }
         finally
         {
@@ -1223,11 +1221,7 @@ public partial class ChatViewModel : ViewModelBase
         {
             _logger.LogWarning("SendVoiceMessage: MLS group not available (chat type: {Type})", _currentChat.Type);
             UploadStatus = "Voice messages require an MLS group chat";
-            _ = Task.Run(async () =>
-            {
-                await Task.Delay(3000);
-                RxSchedulers.MainThreadScheduler.Schedule(Unit.Default, (_, __) => { UploadStatus = null; return System.Reactive.Disposables.Disposable.Empty; });
-            });
+            _ = ClearUploadStatusAfterDelayAsync(3000);
             return;
         }
 
@@ -1302,16 +1296,23 @@ public partial class ChatViewModel : ViewModelBase
         {
             _logger.LogError(ex, "Failed to send voice message");
             UploadStatus = $"Voice send failed: {ex.Message}";
-            _ = Task.Run(async () =>
-            {
-                await Task.Delay(5000);
-                RxSchedulers.MainThreadScheduler.Schedule(Unit.Default, (_, __) => { UploadStatus = null; return System.Reactive.Disposables.Disposable.Empty; });
-            });
+            _ = ClearUploadStatusAfterDelayAsync(5000);
         }
         finally
         {
             IsSendingVoice = false;
         }
+    }
+
+    private async Task ClearUploadStatusAfterDelayAsync(int delayMs)
+    {
+        try
+        {
+            await Task.Delay(delayMs);
+            RxSchedulers.MainThreadScheduler.Schedule(Unit.Default,
+                (_, __) => { UploadStatus = null; return System.Reactive.Disposables.Disposable.Empty; });
+        }
+        catch (Exception ex) { _logger.LogWarning(ex, "ClearUploadStatusAfterDelayAsync failed"); }
     }
 
     private async Task CancelRecordingAsync()

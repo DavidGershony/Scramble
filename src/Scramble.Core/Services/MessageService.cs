@@ -167,23 +167,32 @@ public class MessageService : IMessageService, IDisposable
         // Background-fetch profiles for any unknown senders (e.g. from before caching was added)
         if (unknownKeys.Count > 0)
         {
-            _ = Task.Run(async () =>
-            {
-                foreach (var pubKey in unknownKeys.Distinct())
-                {
-                    try
-                    {
-                        await FetchAndCacheProfileAsync(pubKey);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Background profile fetch failed for {PubKey}", pubKey[..Math.Min(16, pubKey.Length)]);
-                    }
-                }
-            });
+            _ = BackgroundFetchProfilesAsync(unknownKeys);
         }
 
         return messageList;
+    }
+
+    private async Task BackgroundFetchProfilesAsync(List<string> unknownKeys)
+    {
+        try
+        {
+            foreach (var pubKey in unknownKeys.Distinct())
+            {
+                try
+                {
+                    await FetchAndCacheProfileAsync(pubKey);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Background profile fetch failed for {PubKey}", pubKey[..Math.Min(16, pubKey.Length)]);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "BackgroundFetchProfilesAsync failed");
+        }
     }
 
     public async Task<Message> SendMessageAsync(string chatId, string content)

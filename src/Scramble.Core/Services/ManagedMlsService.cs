@@ -1404,11 +1404,7 @@ public class ManagedMlsService : IMlsService
                     _keyPackageSlotId[..Math.Min(16, _keyPackageSlotId.Length)]);
 
                 // Persist the updated state so the slot ID survives restart
-                _ = Task.Run(async () =>
-                {
-                    try { await SaveServiceStateAsync(); }
-                    catch (Exception ex) { _logger.LogWarning(ex, "Failed to persist reconciled slot ID"); }
-                });
+                _ = PersistReconciledSlotIdAsync();
 
                 return true;
             }
@@ -1419,6 +1415,12 @@ public class ManagedMlsService : IMlsService
     }
 
     // ---- Persistence helpers ----
+
+    private async Task PersistReconciledSlotIdAsync()
+    {
+        try { await SaveServiceStateAsync(); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Failed to persist reconciled slot ID"); }
+    }
 
     private async Task SaveServiceStateAsync()
     {
