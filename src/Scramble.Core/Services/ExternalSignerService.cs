@@ -246,10 +246,13 @@ public class ExternalSignerService : IExternalSigner, IDisposable
 
             // Fetch the actual signing pubkey — remotePubKey is the NIP-46 communication key,
             // which may differ from the key Amber uses to sign events.
+            // Use a shorter timeout than sign_event: get_public_key is automatic (no user
+            // interaction), so if the signer is online it responds near-instantly. A shorter
+            // timeout allows the caller to retry sooner when the signer is momentarily offline.
             string? signingPubKey = null;
             try
             {
-                signingPubKey = await GetPublicKeyAsync();
+                signingPubKey = await SendRequestAsync("get_public_key", Array.Empty<string>(), TimeSpan.FromSeconds(20));
             }
             catch (Exception ex)
             {

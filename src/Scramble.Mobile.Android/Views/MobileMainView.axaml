@@ -111,21 +111,6 @@
 
             <!-- Main content -->
             <Grid Grid.Row="1">
-                <!-- No internet banner (shown when all relays are disconnected) -->
-                <Border IsVisible="{Binding ShowNoInternet}"
-                        Background="{DynamicResource StatusErrorBrush}"
-                        Padding="10,6" VerticalAlignment="Top"
-                        ZIndex="10">
-                    <StackPanel Orientation="Horizontal" Spacing="6"
-                                HorizontalAlignment="Center">
-                        <PathIcon Data="M24 24l-4.2-4.2M21.49 21.49L2.51 2.51M1 1l4.05 4.05M11 3c5.52 0 10 4.48 10 10c0 2.16-.69 4.16-1.86 5.79L11 10.71M3.14 7.14C2.4 8.57 2 10.24 2 12c0 2.76 1.12 5.26 2.93 7.07L12 12"
-                                  Width="14" Height="14" Foreground="White" />
-                        <TextBlock Text="No internet connection"
-                                   Foreground="White" FontSize="13" FontWeight="SemiBold"
-                                   VerticalAlignment="Center" />
-                    </StackPanel>
-                </Border>
-
                 <!-- Forward-secrecy disclosure banner (multi-device) -->
                 <Border IsVisible="{Binding ShowForwardSecrecyBanner}"
                         Background="{DynamicResource StatusWarningBrush}"

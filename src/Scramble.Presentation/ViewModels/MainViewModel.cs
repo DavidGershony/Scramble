@@ -47,9 +47,11 @@ public partial class MainViewModel : ViewModelBase
 
     /// <summary>
     /// True when relay statuses have been populated (TotalRelayCount > 0) but none are
-    /// connected. Drives the "No internet connection" banner in the UI.
+    /// connected. Used internally for debounce logic; the "No internet connection"
+    /// message now appears via ChatListViewModel.StatusMessage instead of a separate banner.
     /// </summary>
-    [Reactive] public partial bool ShowNoInternet { get; set; }
+    private bool _showNoInternet;
+    private const string NoInternetStatusMessage = "No internet connection";
 
     /// <summary>
     /// True when this device was just linked to an existing identity (detected peer
@@ -502,8 +504,11 @@ public partial class MainViewModel : ViewModelBase
 
     /// <summary>
     /// Restores the external signer session in the background so it doesn't block
-    /// chat loading or relay connections. When the signer connects, it's wired into
-    /// NostrService, MediaUploadService, and MLS on the main thread.
+    /// chat loading or relay connections. Retries multiple times with delays because
+    /// mobile signers (e.g. Amber) are often offline when Scramble starts — the phone
+    /// may be locked, the app backgrounded, or the WebSocket not yet re-established.
+    /// When the signer connects, it's wired into NostrService, MediaUploadService,
+    /// and MLS on the main thread.
     /// </summary>
     private async Task RestoreSignerInBackgroundAsync()
     {
@@ -518,49 +523,70 @@ public partial class MainViewModel : ViewModelBase
             return;
         }
 
-        _logger.LogInformation("Restoring signer session in background (relay and keys redacted)");
+        const int maxAttempts = 5;
+        const int delayBetweenAttemptsSeconds = 15;
 
-        try
+        for (int attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            var connected = await ExternalSigner.RestoreSessionAsync(
-                CurrentUser.GetSignerRelayUrls(),
-                CurrentUser.SignerRemotePubKey,
-                CurrentUser.SignerLocalPrivateKeyHex,
-                CurrentUser.SignerLocalPublicKeyHex,
-                CurrentUser.SignerSecret);
+            _logger.LogInformation("Restoring signer session in background (attempt {Attempt}/{Max})", attempt, maxAttempts);
 
-            if (connected)
+            if (attempt > 1)
             {
-                _logger.LogInformation("Signer session restored successfully (background)");
+                Observable.Return(System.Reactive.Unit.Default)
+                    .ObserveOn(RxSchedulers.MainThreadScheduler)
+                    .Subscribe(_ => ChatListViewModel.StatusMessage = $"Reconnecting to signer (attempt {attempt}/{maxAttempts})...");
+            }
 
-                if (ExternalSigner.PublicKeyHex != null &&
-                    !string.Equals(ExternalSigner.PublicKeyHex, CurrentUser.PublicKeyHex, StringComparison.OrdinalIgnoreCase))
+            try
+            {
+                var connected = await ExternalSigner.RestoreSessionAsync(
+                    CurrentUser.GetSignerRelayUrls(),
+                    CurrentUser.SignerRemotePubKey,
+                    CurrentUser.SignerLocalPrivateKeyHex,
+                    CurrentUser.SignerLocalPublicKeyHex,
+                    CurrentUser.SignerSecret);
+
+                if (connected)
                 {
-                    _logger.LogWarning("Signer reported pubkey ({SignerKey}) does not match stored user pubkey ({UserKey}) — keeping stored identity.",
-                        ExternalSigner.PublicKeyHex[..Math.Min(16, ExternalSigner.PublicKeyHex.Length)] + "...",
-                        CurrentUser.PublicKeyHex[..Math.Min(16, CurrentUser.PublicKeyHex.Length)] + "...");
+                    _logger.LogInformation("Signer session restored successfully on attempt {Attempt}/{Max}", attempt, maxAttempts);
+
+                    if (ExternalSigner.PublicKeyHex != null &&
+                        !string.Equals(ExternalSigner.PublicKeyHex, CurrentUser.PublicKeyHex, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogWarning("Signer reported pubkey ({SignerKey}) does not match stored user pubkey ({UserKey}) — keeping stored identity.",
+                            ExternalSigner.PublicKeyHex[..Math.Min(16, ExternalSigner.PublicKeyHex.Length)] + "...",
+                            CurrentUser.PublicKeyHex[..Math.Min(16, CurrentUser.PublicKeyHex.Length)] + "...");
+                    }
+
+                    // Wire signer and clear status on main thread
+                    Observable.Return(System.Reactive.Unit.Default)
+                        .ObserveOn(RxSchedulers.MainThreadScheduler)
+                        .Subscribe(_ =>
+                        {
+                            ChatListViewModel.StatusMessage = null;
+                            WireExternalSigner();
+                        });
+                    return;
                 }
 
-                // Wire signer on main thread (UI-bound properties and services)
-                Observable.Return(System.Reactive.Unit.Default)
-                    .ObserveOn(RxSchedulers.MainThreadScheduler)
-                    .Subscribe(_ => WireExternalSigner());
+                _logger.LogWarning("Signer restore attempt {Attempt}/{Max} failed — signer may be offline", attempt, maxAttempts);
             }
-            else
+            catch (Exception ex)
             {
-                _logger.LogWarning("Signer session restore failed — signer may be offline. Continuing without signer.");
-                Observable.Return(System.Reactive.Unit.Default)
-                    .ObserveOn(RxSchedulers.MainThreadScheduler)
-                    .Subscribe(_ => ChatListViewModel.StatusMessage = "Signer disconnected. Restart your signer app.");
+                _logger.LogError(ex, "Signer restore attempt {Attempt}/{Max} threw an exception", attempt, maxAttempts);
+            }
+
+            if (attempt < maxAttempts)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(delayBetweenAttemptsSeconds));
             }
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Signer session restore failed (background)");
-            Observable.Return(System.Reactive.Unit.Default)
-                .ObserveOn(RxSchedulers.MainThreadScheduler)
-                .Subscribe(_ => ChatListViewModel.StatusMessage = "Signer restore failed. Restart your signer app.");
-        }
+
+        // All attempts exhausted
+        _logger.LogWarning("Signer session restore failed after {Max} attempts — giving up", maxAttempts);
+        Observable.Return(System.Reactive.Unit.Default)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ => ChatListViewModel.StatusMessage = "Signer disconnected. Restart your signer app.");
     }
 
     /// <summary>
@@ -618,25 +644,25 @@ public partial class MainViewModel : ViewModelBase
 
         if (ConnectedRelayCount > 0)
         {
-            // At least one relay is connected — no banner needed.
+            // At least one relay is connected — clear the no-internet status.
             _connectionGracePeriodActive = false;
             CancelNoInternetDebounce();
-            ShowNoInternet = false;
+            ClearNoInternetStatus();
             return;
         }
 
         // All relays disconnected (or none configured).
         if (_connectionGracePeriodActive || TotalRelayCount == 0)
         {
-            ShowNoInternet = false;
+            ClearNoInternetStatus();
             return;
         }
 
         // All configured relays are disconnected, grace period is over.
-        // Debounce: wait before showing the banner so the auto-reconnect
+        // Debounce: wait before showing the status so the auto-reconnect
         // (1 s → 2 s → 4 s → 8 s exponential backoff) can recover from
         // transient drops without aggressively flashing "No internet".
-        if (!ShowNoInternet && _noInternetDebounceCts == null)
+        if (!_showNoInternet && _noInternetDebounceCts == null)
             ScheduleNoInternetBanner();
     }
 
@@ -647,7 +673,18 @@ public partial class MainViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Waits 15 seconds before showing the "No internet" banner. If any relay
+    /// Clears the "No internet connection" status message, but only if it was
+    /// set by the no-internet logic — avoids stomping signer or operational messages.
+    /// </summary>
+    private void ClearNoInternetStatus()
+    {
+        _showNoInternet = false;
+        if (ChatListViewModel.StatusMessage == NoInternetStatusMessage)
+            ChatListViewModel.StatusMessage = null;
+    }
+
+    /// <summary>
+    /// Waits 15 seconds before showing the "No internet" status. If any relay
     /// reconnects in the meantime, the timer is cancelled via
     /// <see cref="CancelNoInternetDebounce"/>. The 15 s window covers the first
     /// four auto-reconnect attempts (1 + 2 + 4 + 8 = 15 s).
@@ -671,7 +708,10 @@ public partial class MainViewModel : ViewModelBase
                 {
                     _noInternetDebounceCts = null;
                     if (ConnectedRelayCount == 0 && TotalRelayCount > 0 && !_connectionGracePeriodActive)
-                        ShowNoInternet = true;
+                    {
+                        _showNoInternet = true;
+                        ChatListViewModel.StatusMessage = NoInternetStatusMessage;
+                    }
                 });
         }
         catch (OperationCanceledException) { /* debounce cancelled — relay reconnected */ }
