@@ -1058,6 +1058,7 @@ public class MessageService : IMessageService, IDisposable
             supportedKps.Count, latestPerDevice.Count, memberPublicKey[..Math.Min(16, memberPublicKey.Length)]);
 
         var addedCount = 0;
+        PublishUnconfirmedException? lastPublishFailure = null;
         foreach (var keyPackage in latestPerDevice)
         {
             _logger.LogInformation("AddMember: adding KP {KpId} (slot={SlotId}), {Len} bytes",
@@ -1127,6 +1128,7 @@ public class MessageService : IMessageService, IDisposable
                 _logger.LogWarning(ex, "AddMember: commit publish failed for KP {KpId}, rolling back staged commit — continuing",
                     keyPackage.NostrEventId?[..Math.Min(16, keyPackage.NostrEventId?.Length ?? 0)] ?? "none");
                 await _mlsService.ClearStagedAsync(chat.MlsGroupId);
+                lastPublishFailure = ex;
             }
             catch (Exception ex)
             {
@@ -1138,7 +1140,13 @@ public class MessageService : IMessageService, IDisposable
         }
 
         if (addedCount == 0)
+        {
+            // If every device failed due to relay not confirming, propagate that so callers
+            // see PublishUnconfirmedException rather than a generic InvalidOperationException.
+            if (lastPublishFailure != null)
+                throw lastPublishFailure;
             throw new InvalidOperationException($"Failed to add any device for member {memberPublicKey[..Math.Min(16, memberPublicKey.Length)]}");
+        }
 
         // Update chat participants (once for the member, regardless of how many devices were added)
         if (!chat.ParticipantPublicKeys.Any(p => string.Equals(p, memberPublicKey, StringComparison.OrdinalIgnoreCase)))
