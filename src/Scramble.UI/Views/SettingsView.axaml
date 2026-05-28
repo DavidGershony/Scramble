@@ -789,6 +789,44 @@
                 </StackPanel>
             </Border>
 
+            <!-- Proof of Work Section -->
+            <Border Classes="card">
+                <StackPanel Spacing="16">
+                    <TextBlock Text="Proof of Work (NIP-13)" FontWeight="SemiBold" FontSize="16" />
+                    <TextBlock Text="Mine a proof-of-work nonce on outgoing signer events. Some relays reject events without sufficient PoW. Higher difficulty takes longer to mine but is accepted by more relays."
+                               Classes="secondary" TextWrapping="Wrap" FontSize="13" />
+
+                    <!-- Enable toggle -->
+                    <Grid ColumnDefinitions="*,Auto">
+                        <StackPanel Grid.Column="0" Spacing="4">
+                            <TextBlock Text="Enable proof of work" FontSize="14" />
+                            <TextBlock Text="Adds a nonce tag to NIP-46 events"
+                                       Classes="muted" FontSize="12" />
+                        </StackPanel>
+                        <ToggleSwitch Grid.Column="1" IsChecked="{Binding ProofOfWorkEnabled}"
+                                      VerticalAlignment="Center" />
+                    </Grid>
+
+                    <!-- Difficulty slider (visible only when enabled) -->
+                    <StackPanel Spacing="8" IsVisible="{Binding ProofOfWorkEnabled}">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Grid.Column="0" Text="Difficulty (bits)" FontSize="14" />
+                            <TextBlock Grid.Column="1" Text="{Binding ProofOfWorkDifficulty}"
+                                       FontSize="14" FontWeight="SemiBold" />
+                        </Grid>
+                        <Slider Minimum="21" Maximum="28"
+                                Value="{Binding ProofOfWorkDifficulty}"
+                                TickFrequency="1" IsSnapToTickEnabled="True" />
+                        <Grid ColumnDefinitions="*,*">
+                            <TextBlock Grid.Column="0" Text="21 — fast (&lt;1s)"
+                                       Classes="muted" FontSize="11" />
+                            <TextBlock Grid.Column="1" Text="28 — strong (10-30s)"
+                                       Classes="muted" FontSize="11" HorizontalAlignment="Right" />
+                        </Grid>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
             <!-- Notifications Section -->
             <Border Classes="card">
                 <StackPanel Spacing="16">

@@ -43,6 +43,7 @@ public class ExternalSignerIntegrationTests
         public string? Secret => null;
         public string? LocalPrivateKeyHex => null;
         public string? LocalPublicKeyHex => null;
+        public int ProofOfWorkDifficulty { get; set; }
         public IObservable<ExternalSignerStatus> Status => _status;
 
         public Task<string> SignEventAsync(UnsignedNostrEvent unsignedEvent)

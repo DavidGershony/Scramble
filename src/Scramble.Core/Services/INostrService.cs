@@ -86,6 +86,12 @@ public interface INostrService
     void SetExternalSigner(IExternalSigner? signer);
 
     /// <summary>
+    /// Set the NIP-13 proof-of-work difficulty for outgoing NIP-46 events.
+    /// Forwarded to the external signer if one is set. 0 = disabled.
+    /// </summary>
+    void SetNip46ProofOfWorkDifficulty(int bits);
+
+    /// <summary>
     /// Whether the service can sign events — either a local private key
     /// (via <see cref="SetAuthCredentials"/>) or an external signer is available.
     /// Callers should check this before attempting publish operations to

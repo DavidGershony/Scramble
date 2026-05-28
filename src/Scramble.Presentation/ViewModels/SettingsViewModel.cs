@@ -55,6 +55,10 @@ public partial class SettingsViewModel : ViewModelBase
     [Reactive] public partial bool MlsResetSuccess { get; set; }
     [Reactive] public partial bool ShowMlsResetConfirmation { get; set; }
 
+    // NIP-13 Proof of Work
+    [Reactive] public partial bool ProofOfWorkEnabled { get; set; }
+    [Reactive] public partial int ProofOfWorkDifficulty { get; set; } = 21;
+
     // Relay list publish
     [Reactive] public partial string? PublishRelayListStatus { get; set; }
 
@@ -493,6 +497,18 @@ public partial class SettingsViewModel : ViewModelBase
                 catch (Exception ex) { _logger.LogError(ex, "Failed to save theme index"); }
             });
 
+        // PoW settings — persist and push to the signer service
+        this.WhenAnyValue(x => x.ProofOfWorkEnabled, x => x.ProofOfWorkDifficulty)
+            .Skip(1)
+            .Subscribe(async tuple =>
+            {
+                var (enabled, difficulty) = tuple;
+                var effectiveBits = enabled ? difficulty : 0;
+                _nostrService.SetNip46ProofOfWorkDifficulty(effectiveBits);
+                try { await _storageService.SaveSettingAsync("pow_difficulty", effectiveBits.ToString()); }
+                catch (Exception ex) { _logger.LogError(ex, "Failed to save PoW setting"); }
+            });
+
         LoadSettingsAsync().ConfigureAwait(false);
     }
 
@@ -637,6 +653,20 @@ public partial class SettingsViewModel : ViewModelBase
         // Load dummy KeyPackage obfuscation setting (default: off)
         var dummyKpEnabled = await _storageService.GetSettingAsync("dummy_keypackages_enabled");
         DummyKeyPackagesEnabled = dummyKpEnabled == "true";
+
+        // Load PoW difficulty setting (default: 0 = disabled)
+        var powSetting = await _storageService.GetSettingAsync("pow_difficulty");
+        if (powSetting != null && int.TryParse(powSetting, out var powBits) && powBits > 0)
+        {
+            ProofOfWorkEnabled = true;
+            ProofOfWorkDifficulty = Math.Clamp(powBits, 21, 28);
+        }
+        else
+        {
+            ProofOfWorkEnabled = false;
+            ProofOfWorkDifficulty = 21;
+        }
+        _nostrService.SetNip46ProofOfWorkDifficulty(ProofOfWorkEnabled ? ProofOfWorkDifficulty : 0);
 
         // Auto-fetch devices from relays
         _ = FetchDevicesAsync();

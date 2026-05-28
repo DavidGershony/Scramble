@@ -155,6 +155,12 @@ public class NostrService : INostrService, IDisposable
         }
     }
 
+    public void SetNip46ProofOfWorkDifficulty(int bits)
+    {
+        if (_externalSigner != null)
+            _externalSigner.ProofOfWorkDifficulty = bits;
+    }
+
     /// <summary>
     /// Drains the pending gift wrap buffer and processes each event now that the
     /// external signer is available for NIP-44 decryption.

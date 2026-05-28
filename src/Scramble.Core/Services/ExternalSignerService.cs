@@ -39,16 +39,13 @@ public class ExternalSignerService : IExternalSigner, IDisposable
     private long _subscriptionSince;
     private bool _disposed;
 
-    /// <summary>
-    /// Target NIP-13 proof-of-work difficulty for NIP-46 events.
-    /// Relays like nos.lol require 28 bits, but mining that takes 10-30s per event.
-    /// We mine a modest amount (21 bits, &lt;1s) and rely on relay fallback for stricter relays.
-    /// Set to 0 to disable PoW entirely.
-    /// </summary>
-    private const int Nip46ProofOfWorkBits = 21;
+    /// <inheritdoc />
+    public int ProofOfWorkDifficulty { get; set; }
 
-    /// <summary>Maximum time to spend mining PoW for a single event.</summary>
-    private static readonly TimeSpan ProofOfWorkTimeout = TimeSpan.FromSeconds(3);
+    /// <summary>Maximum time to spend mining PoW for a single event, scaled by difficulty.</summary>
+    private TimeSpan ProofOfWorkTimeout => ProofOfWorkDifficulty >= 28
+        ? TimeSpan.FromSeconds(45)
+        : TimeSpan.FromSeconds(3);
 
     // Bounded set of event ids whose receipt has already been logged once (across relays).
     // Used to suppress N×relay-fanout duplicate "received event" INFO log lines that bloated
@@ -807,10 +804,10 @@ public class ExternalSignerService : IExternalSigner, IDisposable
 
         string eventId;
         string[][] tags;
-        if (Nip46ProofOfWorkBits > 0)
+        if (ProofOfWorkDifficulty > 0)
         {
             (eventId, tags) = MineProofOfWork(24133, _localPublicKeyHex!, createdAt,
-                baseTags, encryptedContent, Nip46ProofOfWorkBits, ProofOfWorkTimeout);
+                baseTags, encryptedContent, ProofOfWorkDifficulty, ProofOfWorkTimeout);
         }
         else
         {
@@ -996,10 +993,10 @@ public class ExternalSignerService : IExternalSigner, IDisposable
 
             string eventId;
             string[][] tags;
-            if (Nip46ProofOfWorkBits > 0)
+            if (ProofOfWorkDifficulty > 0)
             {
                 (eventId, tags) = MineProofOfWork(24133, _localPublicKeyHex, createdAt,
-                    baseTags, encryptedContent, Nip46ProofOfWorkBits, ProofOfWorkTimeout);
+                    baseTags, encryptedContent, ProofOfWorkDifficulty, ProofOfWorkTimeout);
             }
             else
             {

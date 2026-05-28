@@ -130,6 +130,13 @@ public interface IExternalSigner
     /// Needed for session persistence.
     /// </summary>
     string? LocalPublicKeyHex { get; }
+
+    /// <summary>
+    /// NIP-13 proof-of-work difficulty for NIP-46 events.
+    /// 0 = disabled, 21 = fast (~1s), 28 = strong (~10-30s, needed for nos.lol).
+    /// The relay fallback ensures delivery even if PoW is insufficient.
+    /// </summary>
+    int ProofOfWorkDifficulty { get; set; }
 }
 
 public class ExternalSignerStatus
