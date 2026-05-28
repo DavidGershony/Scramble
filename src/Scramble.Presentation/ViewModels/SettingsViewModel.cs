@@ -57,7 +57,7 @@ public partial class SettingsViewModel : ViewModelBase
 
     // NIP-13 Proof of Work
     [Reactive] public partial bool ProofOfWorkEnabled { get; set; }
-    [Reactive] public partial int ProofOfWorkDifficulty { get; set; } = 21;
+    [Reactive] public partial double ProofOfWorkDifficulty { get; set; } = 21;
 
     // Relay list publish
     [Reactive] public partial string? PublishRelayListStatus { get; set; }
@@ -502,10 +502,13 @@ public partial class SettingsViewModel : ViewModelBase
             .Skip(1)
             .Subscribe(async tuple =>
             {
-                var (enabled, difficulty) = tuple;
-                var effectiveBits = enabled ? difficulty : 0;
-                _nostrService.SetNip46ProofOfWorkDifficulty(effectiveBits);
-                try { await _storageService.SaveSettingAsync("pow_difficulty", effectiveBits.ToString()); }
+                try
+                {
+                    var (enabled, difficulty) = tuple;
+                    var effectiveBits = enabled ? (int)difficulty : 0;
+                    _nostrService.SetNip46ProofOfWorkDifficulty(effectiveBits);
+                    await _storageService.SaveSettingAsync("pow_difficulty", effectiveBits.ToString());
+                }
                 catch (Exception ex) { _logger.LogError(ex, "Failed to save PoW setting"); }
             });
 
@@ -666,7 +669,7 @@ public partial class SettingsViewModel : ViewModelBase
             ProofOfWorkEnabled = false;
             ProofOfWorkDifficulty = 21;
         }
-        _nostrService.SetNip46ProofOfWorkDifficulty(ProofOfWorkEnabled ? ProofOfWorkDifficulty : 0);
+        _nostrService.SetNip46ProofOfWorkDifficulty(ProofOfWorkEnabled ? (int)ProofOfWorkDifficulty : 0);
 
         // Auto-fetch devices from relays
         _ = FetchDevicesAsync();
