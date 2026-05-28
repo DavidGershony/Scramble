@@ -49,6 +49,12 @@ public partial class SettingsViewModel : ViewModelBase
     [Reactive] public partial string? AuditStatus { get; set; }
     [Reactive] public partial KeyPackageAuditResult? LastAuditResult { get; set; }
 
+    // MLS Reset
+    [Reactive] public partial bool IsResettingMls { get; set; }
+    [Reactive] public partial string? MlsResetStatus { get; set; }
+    [Reactive] public partial bool MlsResetSuccess { get; set; }
+    [Reactive] public partial bool ShowMlsResetConfirmation { get; set; }
+
     // Relay list publish
     [Reactive] public partial string? PublishRelayListStatus { get; set; }
 
@@ -176,6 +182,9 @@ public partial class SettingsViewModel : ViewModelBase
     public ReactiveCommand<Unit, Unit> ExportLogsCommand { get; }
     public ReactiveCommand<Unit, Unit> PublishKeyPackageCommand { get; }
     public ReactiveCommand<Unit, Unit> AuditKeyPackagesCommand { get; }
+    public ReactiveCommand<Unit, Unit> ResetMlsDataCommand { get; }
+    public ReactiveCommand<Unit, Unit> ConfirmResetMlsCommand { get; }
+    public ReactiveCommand<Unit, Unit> CancelResetMlsCommand { get; }
     public ReactiveCommand<Unit, Unit> PublishRelayListCommand { get; }
     public ReactiveCommand<RelayViewModel, Unit> CycleRelayUsageCommand { get; }
     public ReactiveCommand<Unit, Unit> RegisterNotificationsCommand { get; }
@@ -309,6 +318,11 @@ public partial class SettingsViewModel : ViewModelBase
         // Key package commands
         PublishKeyPackageCommand = ReactiveCommand.CreateFromTask(PublishKeyPackageAsync);
         AuditKeyPackagesCommand = ReactiveCommand.CreateFromTask(AuditKeyPackagesAsync);
+
+        // MLS reset commands (two-step: show confirmation, then execute)
+        ResetMlsDataCommand = ReactiveCommand.Create(() => { ShowMlsResetConfirmation = true; MlsResetStatus = null; });
+        ConfirmResetMlsCommand = ReactiveCommand.CreateFromTask(ResetMlsDataAsync);
+        CancelResetMlsCommand = ReactiveCommand.Create(() => { ShowMlsResetConfirmation = false; });
 
         // Relay list commands
         PublishRelayListCommand = ReactiveCommand.CreateFromTask(PublishRelayListAsync);
@@ -999,6 +1013,42 @@ public partial class SettingsViewModel : ViewModelBase
         finally
         {
             IsAuditingKeyPackages = false;
+        }
+    }
+
+    private async Task ResetMlsDataAsync()
+    {
+        IsResettingMls = true;
+        MlsResetStatus = null;
+        MlsResetSuccess = false;
+        ShowMlsResetConfirmation = false;
+
+        try
+        {
+            _logger.LogWarning("User initiated MLS data reset");
+
+            // 1. Clear in-memory MLS state (signing keys, stored key packages, groups)
+            await _mlsService.ResetAsync();
+
+            // 2. Wipe MLS-related database tables (MlsStates, KeyPackages, PendingInvites, etc.)
+            await _storageService.ResetMlsDataAsync();
+
+            // 3. Reset skipped invite counter
+            await _storageService.ResetSkippedInviteCountAsync();
+
+            _logger.LogInformation("MLS data reset completed successfully");
+            MlsResetStatus = "MLS state cleared. Restart the app and publish a new KeyPackage to receive invites.";
+            MlsResetSuccess = true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "MLS data reset failed");
+            MlsResetStatus = $"Reset failed: {ex.Message}";
+            MlsResetSuccess = false;
+        }
+        finally
+        {
+            IsResettingMls = false;
         }
     }
 

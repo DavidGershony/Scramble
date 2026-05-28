@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -33,9 +34,21 @@ public class ExternalSignerService : IExternalSigner, IDisposable
     private string? _localPrivateKeyHex;
     private string? _localPublicKeyHex;
     private readonly Dictionary<string, TaskCompletionSource<string>> _pendingRequests = new();
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<(bool accepted, string? reason)>> _pendingOkResponses = new();
     private string? _replayedSignEventResult;
     private long _subscriptionSince;
     private bool _disposed;
+
+    /// <summary>
+    /// Target NIP-13 proof-of-work difficulty for NIP-46 events.
+    /// Relays like nos.lol require 28 bits, but mining that takes 10-30s per event.
+    /// We mine a modest amount (21 bits, &lt;1s) and rely on relay fallback for stricter relays.
+    /// Set to 0 to disable PoW entirely.
+    /// </summary>
+    private const int Nip46ProofOfWorkBits = 21;
+
+    /// <summary>Maximum time to spend mining PoW for a single event.</summary>
+    private static readonly TimeSpan ProofOfWorkTimeout = TimeSpan.FromSeconds(3);
 
     // Bounded set of event ids whose receipt has already been logged once (across relays).
     // Used to suppress N×relay-fanout duplicate "received event" INFO log lines that bloated
@@ -620,31 +633,50 @@ public class ExternalSignerService : IExternalSigner, IDisposable
     }
 
     /// <summary>
-    /// Sends a message to a single open signer relay (the first with an open WebSocket).
-    /// NIP-46 requests only need to reach one relay — broadcasting to all relays causes
-    /// duplicate signing prompts on the signer app (the "sign-event flood" bug).
-    /// Responses are still received from all relays via the per-relay listeners.
+    /// Sends a NIP-46 event to a single signer relay, falling back to the next relay
+    /// if the first one rejects the event (e.g. insufficient PoW). Waits briefly for
+    /// each relay's OK response; if no OK arrives within 3 seconds the event is assumed
+    /// accepted (some relays don't send OK messages). This prevents the "nos.lol PoW
+    /// rejection" bug where the only relay tried rejects the event and the request times out.
     /// </summary>
-    private async Task SendToOneRelayAsync(byte[] bytes)
+    private async Task SendToOneRelayAsync(byte[] bytes, string eventId)
     {
         var ct = _cts?.Token ?? CancellationToken.None;
         foreach (var conn in _relayConnections)
         {
-            if (conn.WebSocket?.State == WebSocketState.Open)
+            if (conn.WebSocket?.State != WebSocketState.Open)
+                continue;
+
+            try
             {
-                try
-                {
-                    await conn.WebSocket.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
-                    _logger.LogDebug("NIP-46 sent to signer relay {Relay}", conn.Url);
+                // Register OK tracker before sending so we don't miss a fast reply
+                var okTcs = new TaskCompletionSource<(bool accepted, string? reason)>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                _pendingOkResponses[eventId] = okTcs;
+
+                await conn.WebSocket.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
+                _logger.LogDebug("NIP-46 sent to signer relay {Relay}", conn.Url);
+
+                // Wait for relay OK/rejection — relays typically respond within milliseconds
+                using var okTimeout = new CancellationTokenSource(3000);
+                okTimeout.Token.Register(() => okTcs.TrySetResult((true, null)));
+                var (accepted, reason) = await okTcs.Task;
+
+                _pendingOkResponses.TryRemove(eventId, out _);
+
+                if (accepted)
                     return;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to send to signer relay {Relay}, trying next", conn.Url);
-                }
+
+                _logger.LogWarning("NIP-46 event {EventId} rejected by {Relay}: {Reason} — trying next relay",
+                    eventId[..Math.Min(16, eventId.Length)], conn.Url, reason);
+            }
+            catch (Exception ex)
+            {
+                _pendingOkResponses.TryRemove(eventId, out _);
+                _logger.LogWarning(ex, "Failed to send to signer relay {Relay}, trying next", conn.Url);
             }
         }
-        _logger.LogError("NIP-46 failed to send: no open signer relay");
+        _logger.LogError("NIP-46 failed to send: all relays rejected or unavailable");
     }
 
     /// <summary>
@@ -769,11 +801,23 @@ public class ExternalSignerService : IExternalSigner, IDisposable
         // Encrypt the request using NIP-44 (AEAD — replaces deprecated NIP-04 AES-CBC)
         var encryptedContent = EncryptNip44(requestJson, _localPrivateKeyHex, _remotePubKey);
 
-        // Create and sign the event
+        // Create and sign the event (with optional NIP-13 proof-of-work)
         var createdAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var tags = new[] { new[] { "p", _remotePubKey } };
+        var baseTags = new[] { new[] { "p", _remotePubKey } };
 
-        var eventId = ComputeEventId(24133, _localPublicKeyHex!, createdAt, tags, encryptedContent);
+        string eventId;
+        string[][] tags;
+        if (Nip46ProofOfWorkBits > 0)
+        {
+            (eventId, tags) = MineProofOfWork(24133, _localPublicKeyHex!, createdAt,
+                baseTags, encryptedContent, Nip46ProofOfWorkBits, ProofOfWorkTimeout);
+        }
+        else
+        {
+            tags = baseTags;
+            eventId = ComputeEventId(24133, _localPublicKeyHex!, createdAt, baseTags, encryptedContent);
+        }
+
         var signature = SignEventId(eventId, _localPrivateKeyHex);
 
         // Serialize EVENT message with Utf8JsonWriter to ensure correct format
@@ -811,8 +855,8 @@ public class ExternalSignerService : IExternalSigner, IDisposable
         var tcs = new TaskCompletionSource<string>();
         _pendingRequests[requestId] = tcs;
 
-        // Send to one relay only — broadcasting causes duplicate signing prompts on the signer
-        await SendToOneRelayAsync(bytes);
+        // Send to one relay with fallback — if first relay rejects, try the next
+        await SendToOneRelayAsync(bytes, eventId);
 
         // Wait for response with timeout (sign_event needs longer for user approval)
         using var timeoutCts = new CancellationTokenSource(timeout);
@@ -948,8 +992,21 @@ public class ExternalSignerService : IExternalSigner, IDisposable
             var encryptedContent = EncryptNip44(responseJson, _localPrivateKeyHex, recipientPubKey);
 
             var createdAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            var tags = new[] { new[] { "p", recipientPubKey } };
-            var eventId = ComputeEventId(24133, _localPublicKeyHex, createdAt, tags, encryptedContent);
+            var baseTags = new[] { new[] { "p", recipientPubKey } };
+
+            string eventId;
+            string[][] tags;
+            if (Nip46ProofOfWorkBits > 0)
+            {
+                (eventId, tags) = MineProofOfWork(24133, _localPublicKeyHex, createdAt,
+                    baseTags, encryptedContent, Nip46ProofOfWorkBits, ProofOfWorkTimeout);
+            }
+            else
+            {
+                tags = baseTags;
+                eventId = ComputeEventId(24133, _localPublicKeyHex, createdAt, baseTags, encryptedContent);
+            }
+
             var signature = SignEventId(eventId, _localPrivateKeyHex);
 
             using var ms = new MemoryStream();
@@ -1074,6 +1131,11 @@ public class ExternalSignerService : IExternalSigner, IDisposable
                 var eventId = root[1].GetString();
                 var accepted = root[2].GetBoolean();
                 var reason = root.GetArrayLength() > 3 ? root[3].GetString() : "";
+
+                // Resolve pending OK tracker (used by SendToOneRelayAsync for relay fallback)
+                if (eventId != null && _pendingOkResponses.TryRemove(eventId, out var okTcs))
+                    okTcs.TrySetResult((accepted, reason));
+
                 if (accepted)
                     _logger.LogInformation("NIP-46 event {EventId} accepted by {Relay}", eventId?[..16], conn.Url);
                 else
@@ -1228,6 +1290,105 @@ public class ExternalSignerService : IExternalSigner, IDisposable
 
         var hash = SHA256.HashData(ms.ToArray());
         return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// NIP-13 proof-of-work miner. Appends a ["nonce","N","target"] tag and iterates
+    /// until the event ID (SHA-256 hash) has at least <paramref name="targetBits"/>
+    /// leading zero bits, or <paramref name="timeout"/> is exceeded.
+    /// Uses parallel mining across available CPU cores for faster results.
+    /// </summary>
+    private static (string eventId, string[][] tags) MineProofOfWork(
+        int kind, string pubkey, long createdAt,
+        string[][] baseTags, string content,
+        int targetBits, TimeSpan timeout)
+    {
+        var targetStr = targetBits.ToString();
+
+        // Build the tags array template with a nonce slot at the end
+        var allTags = new string[baseTags.Length + 1][];
+        Array.Copy(baseTags, allTags, baseTags.Length);
+
+        // Single-threaded fast path for very low difficulty (≤16 bits)
+        if (targetBits <= 16)
+        {
+            for (long i = 0; i < 200_000; i++)
+            {
+                allTags[baseTags.Length] = new[] { "nonce", i.ToString(), targetStr };
+                var id = ComputeEventId(kind, pubkey, createdAt, allTags, content);
+                if (CountLeadingZeroBits(id) >= targetBits)
+                    return (id, allTags);
+            }
+            // Shouldn't reach here for ≤16 bits, but fall through to return best effort
+            allTags[baseTags.Length] = new[] { "nonce", "0", targetStr };
+            return (ComputeEventId(kind, pubkey, createdAt, allTags, content), allTags);
+        }
+
+        // Parallel mining for higher difficulty
+        var threadCount = Math.Max(1, Environment.ProcessorCount);
+        var cts = new CancellationTokenSource(timeout);
+        string? bestId = null;
+        string[][]? bestTags = null;
+        var found = new ManualResetEventSlim(false);
+
+        Parallel.For(0, threadCount, new ParallelOptions { MaxDegreeOfParallelism = threadCount }, threadIdx =>
+        {
+            // Each thread gets its own tags array copy to avoid contention
+            var threadTags = new string[baseTags.Length + 1][];
+            Array.Copy(baseTags, threadTags, baseTags.Length);
+
+            for (long i = threadIdx; !cts.IsCancellationRequested && !found.IsSet; i += threadCount)
+            {
+                threadTags[baseTags.Length] = new[] { "nonce", i.ToString(), targetStr };
+                var id = ComputeEventId(kind, pubkey, createdAt, threadTags, content);
+                if (CountLeadingZeroBits(id) >= targetBits)
+                {
+                    // Clone the winning tags before signaling (other threads may modify theirs)
+                    var winningTags = new string[threadTags.Length][];
+                    Array.Copy(threadTags, winningTags, threadTags.Length);
+                    winningTags[baseTags.Length] = new[] { "nonce", i.ToString(), targetStr };
+                    Interlocked.CompareExchange(ref bestId, id, null);
+                    Interlocked.CompareExchange(ref bestTags, winningTags, null);
+                    found.Set();
+                    return;
+                }
+            }
+        });
+
+        if (bestId != null && bestTags != null)
+            return (bestId, bestTags);
+
+        // Timeout — return with whatever nonce we ended on (won't meet target but
+        // the relay fallback will route around relays that reject it)
+        allTags[baseTags.Length] = new[] { "nonce", "0", targetStr };
+        return (ComputeEventId(kind, pubkey, createdAt, allTags, content), allTags);
+    }
+
+    /// <summary>
+    /// Count leading zero bits in a lowercase hex event ID string.
+    /// Each hex char contributes 0-4 leading zero bits.
+    /// </summary>
+    internal static int CountLeadingZeroBits(string hexId)
+    {
+        int bits = 0;
+        foreach (var c in hexId)
+        {
+            var nibble = c switch
+            {
+                >= '0' and <= '9' => c - '0',
+                >= 'a' and <= 'f' => c - 'a' + 10,
+                >= 'A' and <= 'F' => c - 'A' + 10,
+                _ => -1
+            };
+            if (nibble < 0) break;
+            if (nibble == 0) { bits += 4; continue; }
+            // Count leading zeros in a 4-bit nibble
+            if (nibble < 2) bits += 3;
+            else if (nibble < 4) bits += 2;
+            else if (nibble < 8) bits += 1;
+            break;
+        }
+        return bits;
     }
 
     private static string SignEventId(string eventId, string privateKeyHex)

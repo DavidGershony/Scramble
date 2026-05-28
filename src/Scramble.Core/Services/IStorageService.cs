@@ -77,6 +77,13 @@ public interface IStorageService
     Task<byte[]?> GetMlsStateAsync(string groupId);
     Task DeleteMlsStateAsync(string groupId);
 
+    /// <summary>
+    /// Wipe all MLS-related data: group state, key packages, pending invites, and
+    /// dismissed welcome events. Preserves user identity, contacts, messages, and settings.
+    /// Caller must also reset the in-memory MLS service state (IMlsService.ResetAsync).
+    /// </summary>
+    Task ResetMlsDataAsync();
+
     /// <summary>Path to the SQLite database file. Used by MLS storage provider to share the DB.</summary>
     string DatabasePath { get; }
 

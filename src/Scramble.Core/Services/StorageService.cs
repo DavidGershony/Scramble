@@ -1460,6 +1460,32 @@ public class StorageService : IStorageService
         await command.ExecuteNonQueryAsync();
     }
 
+    public async Task ResetMlsDataAsync()
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        // Use a transaction so all tables are wiped atomically
+        await using var transaction = await connection.BeginTransactionAsync();
+        try
+        {
+            foreach (var table in new[] { "MlsStates", "KeyPackageRelays", "KeyPackages", "PendingInvites", "DismissedWelcomeEvents" })
+            {
+                var cmd = connection.CreateCommand();
+                cmd.Transaction = (Microsoft.Data.Sqlite.SqliteTransaction)transaction;
+                cmd.CommandText = $"DELETE FROM {table}";
+                await cmd.ExecuteNonQueryAsync();
+            }
+
+            await transaction.CommitAsync();
+        }
+        catch
+        {
+            await transaction.RollbackAsync();
+            throw;
+        }
+    }
+
     public async Task UndismissWelcomeEventAsync(string nostrEventId)
     {
         await using var connection = new SqliteConnection(_connectionString);

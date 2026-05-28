@@ -480,6 +480,57 @@
                             <TextBlock Text="Auditing..." Classes="muted" FontSize="13" />
                         </StackPanel>
                     </StackPanel>
+
+                    <!-- Reset MLS Data (danger zone) -->
+                    <StackPanel Spacing="8">
+                        <Border Background="{DynamicResource SurfaceSecondaryBrush}" CornerRadius="8" Padding="12">
+                            <TextBlock Text="If invites aren't arriving or MLS state is corrupt, resetting clears all group encryption state. You'll need to publish a new KeyPackage and be re-invited to groups."
+                                       FontSize="12" TextWrapping="Wrap" Classes="muted" />
+                        </Border>
+
+                        <!-- Normal state: show Reset button -->
+                        <Button Content="Reset MLS Data"
+                                Command="{Binding ResetMlsDataCommand}"
+                                IsVisible="{Binding !ShowMlsResetConfirmation}"
+                                IsEnabled="{Binding !IsResettingMls}"
+                                Foreground="{DynamicResource StatusWarningBrush}"
+                                HorizontalAlignment="Left" />
+
+                        <!-- Confirmation state -->
+                        <StackPanel IsVisible="{Binding ShowMlsResetConfirmation}" Spacing="8">
+                            <TextBlock Text="This will erase all MLS keys and group state. You cannot undo this."
+                                       FontSize="13" Foreground="{DynamicResource StatusWarningBrush}" TextWrapping="Wrap" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button Content="Yes, Reset"
+                                        Command="{Binding ConfirmResetMlsCommand}"
+                                        Foreground="{DynamicResource StatusWarningBrush}" />
+                                <Button Classes="secondary" Content="Cancel"
+                                        Command="{Binding CancelResetMlsCommand}" />
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- Status Message -->
+                        <Border IsVisible="{Binding MlsResetStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                Background="{DynamicResource SurfaceSecondaryBrush}"
+                                CornerRadius="8" Padding="12">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <PathIcon IsVisible="{Binding MlsResetSuccess}"
+                                          Data="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"
+                                          Width="18" Height="18" Foreground="{DynamicResource StatusOnlineBrush}" />
+                                <PathIcon IsVisible="{Binding !MlsResetSuccess}"
+                                          Data="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"
+                                          Width="18" Height="18" Foreground="{DynamicResource StatusWarningBrush}" />
+                                <TextBlock Text="{Binding MlsResetStatus}"
+                                           FontSize="13" TextWrapping="Wrap" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Loading Indicator -->
+                        <StackPanel Orientation="Horizontal" Spacing="8"
+                                    IsVisible="{Binding IsResettingMls}">
+                            <TextBlock Text="Resetting..." Classes="muted" FontSize="13" />
+                        </StackPanel>
+                    </StackPanel>
                 </StackPanel>
             </Border>
 
