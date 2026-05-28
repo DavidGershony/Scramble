@@ -129,8 +129,10 @@ public class NostrService : INostrService, IDisposable
     // Buffer for kind 1059 gift wraps that arrived before the external signer was ready.
     // Once SetExternalSigner provides a connected signer, these are replayed so Welcomes
     // (and NIP-17 DMs) that landed during the signer-restore window are not lost.
+    // Cap is generous — relays can replay hundreds of historical gift wraps in under a
+    // second during startup, and the buffer is drained as soon as the signer connects.
     private readonly ConcurrentQueue<NostrEventReceived> _pendingGiftWraps = new();
-    private const int MaxPendingGiftWraps = 100;
+    private const int MaxPendingGiftWraps = 5000;
 
     public NostrService()
     {
@@ -695,6 +697,10 @@ public class NostrService : INostrService, IDisposable
                                 "Gift wrap buffer full ({Max}), dropping event {EventId}",
                                 MaxPendingGiftWraps,
                                 nostrEvent.EventId[..Math.Min(16, nostrEvent.EventId.Length)]);
+                            // Remove from dedup cache so the event can be retried if it
+                            // arrives again from another relay or on a future reconnect.
+                            if (!string.IsNullOrEmpty(nostrEvent.EventId))
+                                _recentlyProcessedEventIds.TryRemove(nostrEvent.EventId, out _);
                         }
                     }
                     else if (nostrEvent.Kind == 444)
