@@ -22,24 +22,14 @@
             </Grid>
         </Border>
 
-    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-        <StackPanel Spacing="24" Margin="24">
+    <TabControl Grid.Row="1">
 
-            <!-- Theme Section -->
-            <Border Classes="card">
-                <StackPanel Spacing="12">
-                    <TextBlock Text="Theme" FontWeight="SemiBold" FontSize="16" />
-                    <TextBlock Text="Customize the app appearance" Classes="secondary" />
-                    <ComboBox SelectedIndex="{Binding SelectedThemeIndex}"
-                              HorizontalAlignment="Stretch">
-                        <ComboBoxItem Content="Nostr" />
-                        <ComboBoxItem Content="Golden Axe" />
-                        <ComboBoxItem Content="Cyber Teal" />
-                        <ComboBoxItem Content="AMOLED Black" />
-                        <ComboBoxItem Content="AMOLED Purple" />
-                    </ComboBox>
-                </StackPanel>
-            </Border>
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <!--  ACCOUNT TAB — settings tied to the user's Nostr identity  -->
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <TabItem Header="Account">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="24" Margin="24">
 
             <!-- Profile Section (hidden when using external signer) -->
             <Border Classes="card" IsVisible="{Binding CanEditProfile}">
@@ -616,6 +606,33 @@
                 </StackPanel>
             </Border>
 
+        </StackPanel>
+        </ScrollViewer>
+        </TabItem>
+
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <!--  APP TAB — settings that affect the app globally           -->
+        <!-- ════════════════════════════════════════════════════════════ -->
+        <TabItem Header="App">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="24" Margin="24">
+
+            <!-- Theme Section -->
+            <Border Classes="card">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="Theme" FontWeight="SemiBold" FontSize="16" />
+                    <TextBlock Text="Customize the app appearance" Classes="secondary" />
+                    <ComboBox SelectedIndex="{Binding SelectedThemeIndex}"
+                              HorizontalAlignment="Stretch">
+                        <ComboBoxItem Content="Nostr" />
+                        <ComboBoxItem Content="Golden Axe" />
+                        <ComboBoxItem Content="Cyber Teal" />
+                        <ComboBoxItem Content="AMOLED Black" />
+                        <ComboBoxItem Content="AMOLED Purple" />
+                    </ComboBox>
+                </StackPanel>
+            </Border>
+
             <!-- Privacy Section -->
             <Border Classes="card">
                 <StackPanel Spacing="16">
@@ -843,7 +860,10 @@
                     HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                     Command="{Binding LogoutCommand}" />
         </StackPanel>
-    </ScrollViewer>
+        </ScrollViewer>
+        </TabItem>
+
+    </TabControl>
 
         <!-- Log Viewer Dialog Overlay -->
     <Border Grid.RowSpan="2" IsVisible="{Binding ShowLogViewer}"
