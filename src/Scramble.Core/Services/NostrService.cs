@@ -126,6 +126,12 @@ public class NostrService : INostrService, IDisposable
     private IExternalSigner? _externalSigner;
     private bool _disposed;
 
+    // Buffer for kind 1059 gift wraps that arrived before the external signer was ready.
+    // Once SetExternalSigner provides a connected signer, these are replayed so Welcomes
+    // (and NIP-17 DMs) that landed during the signer-restore window are not lost.
+    private readonly ConcurrentQueue<NostrEventReceived> _pendingGiftWraps = new();
+    private const int MaxPendingGiftWraps = 100;
+
     public NostrService()
     {
         _logger = LoggingConfiguration.CreateLogger<NostrService>();
@@ -141,6 +147,51 @@ public class NostrService : INostrService, IDisposable
     {
         _externalSigner = signer;
         _logger.LogInformation("External signer {Status}", signer?.IsConnected == true ? "set and connected" : "cleared");
+
+        // Process any gift wraps that arrived before the signer was ready
+        if (signer?.IsConnected == true && !_pendingGiftWraps.IsEmpty)
+        {
+            _ = ProcessPendingGiftWrapsAsync();
+        }
+    }
+
+    /// <summary>
+    /// Drains the pending gift wrap buffer and processes each event now that the
+    /// external signer is available for NIP-44 decryption.
+    /// </summary>
+    private async Task ProcessPendingGiftWrapsAsync()
+    {
+        var count = _pendingGiftWraps.Count;
+        _logger.LogInformation("Processing {Count} buffered gift wrap(s) after signer became available", count);
+
+        while (_pendingGiftWraps.TryDequeue(out var giftWrapEvent))
+        {
+            try
+            {
+                var rumor = await UnwrapGiftWrapAsync(giftWrapEvent);
+                if (rumor != null)
+                {
+                    if (rumor.Kind == 444)
+                    {
+                        _logger.LogInformation("Buffered gift wrap → kind 444 Welcome from {Sender}",
+                            rumor.PublicKey[..Math.Min(16, rumor.PublicKey.Length)]);
+                        _events.OnNext(rumor);
+                        ProcessWelcomeEvent(rumor);
+                    }
+                    else if (rumor.Kind == 14)
+                    {
+                        _logger.LogInformation("Buffered gift wrap → kind 14 DM from {Sender}",
+                            rumor.PublicKey[..Math.Min(16, rumor.PublicKey.Length)]);
+                        _events.OnNext(rumor);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to process buffered gift wrap {EventId}",
+                    giftWrapEvent.EventId[..Math.Min(16, giftWrapEvent.EventId.Length)]);
+            }
+        }
     }
 
     public bool HasExternalSigner => _externalSigner != null;
@@ -616,6 +667,28 @@ public class NostrService : INostrService, IDisposable
                                     rumor.PublicKey[..Math.Min(16, rumor.PublicKey.Length)]);
                                 _events.OnNext(rumor); // Route to MessageService via Events observable
                             }
+                        }
+                    }
+                    else if (nostrEvent.Kind == 1059)
+                    {
+                        // Gift wrap arrived but no private key or external signer yet —
+                        // buffer it so it can be processed once the signer connects.
+                        // Without this, Welcomes arriving during the Amber restore window
+                        // would be silently lost (already deduped, never unwrapped).
+                        if (_pendingGiftWraps.Count < MaxPendingGiftWraps)
+                        {
+                            _pendingGiftWraps.Enqueue(nostrEvent);
+                            _logger.LogInformation(
+                                "Buffered gift wrap {EventId} — signer not yet available ({Buffered} buffered)",
+                                nostrEvent.EventId[..Math.Min(16, nostrEvent.EventId.Length)],
+                                _pendingGiftWraps.Count);
+                        }
+                        else
+                        {
+                            _logger.LogWarning(
+                                "Gift wrap buffer full ({Max}), dropping event {EventId}",
+                                MaxPendingGiftWraps,
+                                nostrEvent.EventId[..Math.Min(16, nostrEvent.EventId.Length)]);
                         }
                     }
                     else if (nostrEvent.Kind == 444)

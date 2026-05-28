@@ -105,8 +105,16 @@ public class ManagedMlsService : IMlsService
             _privateKeyHex = privateKeyHex;
             _identity = Convert.FromHexString(publicKeyHex);
 
-            // Try to restore signing keys and KeyPackages from persisted service state first
+            // Try to restore signing keys and KeyPackages from persisted service state first.
+            // Track restore outcome with three states:
+            //   restoredKeys = true  → DB had valid state, keys + KPs restored
+            //   importFailed = true  → DB had state but import threw (transient or data issue)
+            //   neither              → no prior state in DB (first launch or post-logout)
+            // The distinction matters: on import failure we must NOT overwrite the DB
+            // (the state may be recoverable on next restart), whereas on "no prior state"
+            // we safely persist the freshly generated keys.
             bool restoredKeys = false;
+            bool importFailed = false;
             if (_storageService != null)
             {
                 try
@@ -129,6 +137,15 @@ public class ManagedMlsService : IMlsService
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "Failed to restore MLS service state, will generate new keys");
+                    importFailed = true;
+
+                    // ImportServiceStateAsync is now transactional (parses into temps,
+                    // commits only on full success), so instance fields should be clean.
+                    // Belt-and-suspenders: explicitly clear any signing keys to ensure
+                    // restoredKeys stays false and new keys are generated below.
+                    _signingPrivateKey = null;
+                    _signingPublicKey = null;
+                    _keyPackageSlotId = null;
                 }
             }
 
@@ -193,10 +210,18 @@ public class ManagedMlsService : IMlsService
                 }
             }
 
-            // Save service state (only writes new keys if we generated them)
-            if (!restoredKeys)
+            // Save service state only when we genuinely have no prior state (first
+            // launch or post-logout). If the import failed (importFailed == true), we
+            // must NOT overwrite the DB — the persisted state may be recoverable on
+            // the next restart (e.g., transient DB lock, Keystore not yet ready).
+            // Overwriting here would permanently destroy the KeyPackage private keys.
+            if (!restoredKeys && !importFailed)
             {
                 await SaveServiceStateAsync();
+            }
+            else if (importFailed)
+            {
+                _logger.LogWarning("Skipping SaveServiceStateAsync to preserve existing DB state after import failure");
             }
         }
         finally
@@ -1130,9 +1155,17 @@ public class ManagedMlsService : IMlsService
         var reader = new TlsReader(state);
         byte version = reader.ReadUint8();
 
-        // Build KPs into a temp list, then swap atomically under _kpLock.
-        // This eliminates the window where _storedKeyPackages is empty during parsing,
-        // which previously allowed concurrent ExportServiceStateAsync to persist zero KPs.
+        // ── Fully transactional parsing ──
+        // ALL fields are parsed into local temporaries first. Instance fields are
+        // only committed once parsing succeeds completely. This prevents the
+        // dangerous partial-import scenario where _signingPrivateKey is set but
+        // _storedKeyPackages remains empty (e.g., TLS data truncated or corrupted
+        // after the signing-key bytes). Without this, the caller's catch block in
+        // InitializeAsync would generate new signing keys and call
+        // SaveServiceStateAsync(), permanently overwriting the DB with zero KPs.
+        byte[]? tempSigningPrivateKey = null;
+        byte[]? tempSigningPublicKey = null;
+        string? tempKeyPackageSlotId = null;
         var parsed = new List<StoredKeyPackageMaterial>();
 
         if (version == ServiceStateVersion5)
@@ -1148,11 +1181,11 @@ public class ManagedMlsService : IMlsService
                 return Task.CompletedTask;
             }
 
-            _signingPrivateKey = reader.ReadOpaqueV();
-            _signingPublicKey = reader.ReadOpaqueV();
+            tempSigningPrivateKey = reader.ReadOpaqueV();
+            tempSigningPublicKey = reader.ReadOpaqueV();
 
             var slotBytes = reader.ReadOpaqueV();
-            _keyPackageSlotId = slotBytes.Length == 0 ? null : Encoding.UTF8.GetString(slotBytes);
+            tempKeyPackageSlotId = slotBytes.Length == 0 ? null : Encoding.UTF8.GetString(slotBytes);
 
             ushort count = reader.ReadUint16();
             for (int i = 0; i < count; i++)
@@ -1189,13 +1222,13 @@ public class ManagedMlsService : IMlsService
                 return Task.CompletedTask; // Don't restore — will generate fresh keys
             }
 
-            _signingPrivateKey = reader.ReadOpaqueV();
-            _signingPublicKey = reader.ReadOpaqueV();
+            tempSigningPrivateKey = reader.ReadOpaqueV();
+            tempSigningPublicKey = reader.ReadOpaqueV();
 
             // Slot ID: empty bytes means "not yet generated"; the next GenerateKeyPackageAsync
             // call will lazily produce one.
             var slotBytes = reader.ReadOpaqueV();
-            _keyPackageSlotId = slotBytes.Length == 0 ? null : Encoding.UTF8.GetString(slotBytes);
+            tempKeyPackageSlotId = slotBytes.Length == 0 ? null : Encoding.UTF8.GetString(slotBytes);
 
             ushort count = reader.ReadUint16();
             for (int i = 0; i < count; i++)
@@ -1230,9 +1263,9 @@ public class ManagedMlsService : IMlsService
                 return Task.CompletedTask;
             }
 
-            _signingPrivateKey = reader.ReadOpaqueV();
-            _signingPublicKey = reader.ReadOpaqueV();
-            _keyPackageSlotId = null; // will be lazily generated on next publish
+            tempSigningPrivateKey = reader.ReadOpaqueV();
+            tempSigningPublicKey = reader.ReadOpaqueV();
+            tempKeyPackageSlotId = null; // will be lazily generated on next publish
 
             ushort count = reader.ReadUint16();
             for (int i = 0; i < count; i++)
@@ -1265,6 +1298,11 @@ public class ManagedMlsService : IMlsService
             throw new InvalidOperationException($"Unsupported service state version: {version}");
         }
 
+        // ── Commit phase: parsing succeeded — apply all fields atomically ──
+        _signingPrivateKey = tempSigningPrivateKey;
+        _signingPublicKey = tempSigningPublicKey;
+        _keyPackageSlotId = tempKeyPackageSlotId;
+
         // Atomically swap under lock — no window where _storedKeyPackages is empty
         lock (_kpLock)
         {
@@ -1276,7 +1314,7 @@ public class ManagedMlsService : IMlsService
         PruneExpiredConsumedKeyPackages();
 
         _logger.LogInformation("Restored MLS service state (signingKey={Len} bytes, storedKeyPackages={Count}, slotId={HasSlot})",
-            _signingPrivateKey.Length, _storedKeyPackages.Count, _keyPackageSlotId != null);
+            _signingPrivateKey!.Length, _storedKeyPackages.Count, _keyPackageSlotId != null);
         return Task.CompletedTask;
     }
 
