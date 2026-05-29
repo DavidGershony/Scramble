@@ -98,50 +98,67 @@
         </Border>
 
         <!-- Messages Area -->
-        <ScrollViewer Grid.Row="2" x:Name="MessageScrollViewer"
-                      VerticalScrollBarVisibility="Auto"
-                      HorizontalScrollBarVisibility="Disabled">
-            <StackPanel Margin="16">
-                <!-- Load Older Messages Button -->
-                <Button Command="{Binding LoadOlderMessagesCommand}"
-                        HorizontalAlignment="Center"
-                        Margin="0,0,0,8"
-                        IsVisible="{Binding CanLoadOlder}"
-                        Classes="secondary">
-                    <Panel>
-                        <StackPanel Orientation="Horizontal" Spacing="6"
-                                    IsVisible="{Binding !IsLoadingOlder}">
-                            <PathIcon Data="M7 14l5-5 5 5z"
-                                      Width="16" Height="16" />
-                            <TextBlock Text="Load older messages" FontSize="13" />
-                        </StackPanel>
-                        <StackPanel Orientation="Horizontal" Spacing="8"
-                                    IsVisible="{Binding IsLoadingOlder}"
-                                    HorizontalAlignment="Center">
-                            <ProgressBar IsIndeterminate="True" Width="80" Height="3"
-                                         Foreground="{DynamicResource NostrPurpleBrush}" />
-                            <TextBlock Text="Loading..."
-                                       FontSize="13" Classes="muted" />
-                        </StackPanel>
-                    </Panel>
-                </Button>
+        <Grid Grid.Row="2" RowDefinitions="Auto,*,Auto">
+            <!-- Load Older Messages Button -->
+            <Button Grid.Row="0" Command="{Binding LoadOlderMessagesCommand}"
+                    HorizontalAlignment="Center"
+                    Margin="0,8,0,8"
+                    IsVisible="{Binding CanLoadOlder}"
+                    Classes="secondary">
+                <Panel>
+                    <StackPanel Orientation="Horizontal" Spacing="6"
+                                IsVisible="{Binding !IsLoadingOlder}">
+                        <PathIcon Data="M7 14l5-5 5 5z"
+                                  Width="16" Height="16" />
+                        <TextBlock Text="Load older messages" FontSize="13" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8"
+                                IsVisible="{Binding IsLoadingOlder}"
+                                HorizontalAlignment="Center">
+                        <ProgressBar IsIndeterminate="True" Width="80" Height="3"
+                                     Foreground="{DynamicResource NostrPurpleBrush}" />
+                        <TextBlock Text="Loading..."
+                                   FontSize="13" Classes="muted" />
+                    </StackPanel>
+                </Panel>
+            </Button>
 
-                <ItemsControl ItemsSource="{Binding Messages}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="vm:MessageViewModel">
-                            <controls:MessageBubble DataContext="{Binding}" Margin="0,4" />
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
+            <!-- Virtualized message list (ListBox provides VirtualizingStackPanel by default) -->
+            <ListBox Grid.Row="1" x:Name="MessageListBox"
+                     ItemsSource="{Binding Messages}"
+                     Background="Transparent"
+                     BorderThickness="0"
+                     Padding="16,0"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto">
+                <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:MessageViewModel">
+                        <controls:MessageBubble DataContext="{Binding}" Margin="0,4" />
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+                <ListBox.ItemContainerTheme>
+                    <ControlTheme TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+                        <Setter Property="Padding" Value="0" />
+                        <Setter Property="Margin" Value="0" />
+                        <Setter Property="Background" Value="Transparent" />
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Style Selector="^:pointerover /template/ ContentPresenter">
+                            <Setter Property="Background" Value="Transparent" />
+                        </Style>
+                        <Style Selector="^:selected /template/ ContentPresenter">
+                            <Setter Property="Background" Value="Transparent" />
+                        </Style>
+                    </ControlTheme>
+                </ListBox.ItemContainerTheme>
+            </ListBox>
 
-                <!-- Fetching latest indicator (shown during network relay fetch) -->
-                <StackPanel HorizontalAlignment="Center" Margin="0,8,0,4"
-                            IsVisible="{Binding IsLoadingOlder}">
-                    <ProgressBar IsIndeterminate="True" Width="120" Height="3"
-                                 Foreground="{DynamicResource NostrPurpleBrush}" />
-                </StackPanel>
+            <!-- Fetching latest indicator (shown during network relay fetch) -->
+            <StackPanel Grid.Row="2" HorizontalAlignment="Center" Margin="0,8,0,4"
+                        IsVisible="{Binding IsLoadingOlder}">
+                <ProgressBar IsIndeterminate="True" Width="120" Height="3"
+                             Foreground="{DynamicResource NostrPurpleBrush}" />
             </StackPanel>
-        </ScrollViewer>
+        </Grid>
 
         <!-- Loading Indicator (only shown on initial load before any messages appear) -->
         <Border Grid.Row="2" Background="{DynamicResource BackgroundDarkBrush}"

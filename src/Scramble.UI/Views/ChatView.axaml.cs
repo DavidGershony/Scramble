@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Scramble.Presentation.ViewModels;
 
 namespace Scramble.UI.Views;
@@ -9,6 +10,7 @@ namespace Scramble.UI.Views;
 public partial class ChatView : UserControl
 {
     private ScrollViewer? _scrollViewer;
+    private ListBox? _listBox;
 
     public ChatView()
     {
@@ -33,7 +35,13 @@ public partial class ChatView : UserControl
     {
         Dispatcher.UIThread.Post(() =>
         {
-            _scrollViewer ??= this.FindControl<ScrollViewer>("MessageScrollViewer");
+            if (_scrollViewer == null)
+            {
+                _listBox ??= this.FindControl<ListBox>("MessageListBox");
+                _scrollViewer = _listBox?.GetVisualDescendants()
+                    .OfType<ScrollViewer>()
+                    .FirstOrDefault();
+            }
             _scrollViewer?.ScrollToEnd();
         }, DispatcherPriority.Background);
     }

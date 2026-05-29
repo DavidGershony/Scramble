@@ -822,9 +822,19 @@ public class StorageService : IStorageService
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync())
         {
-            var message = ReadMessage(reader);
-            message.Reactions = await GetMessageReactionsAsync(connection, message.Id);
-            messages.Add(message);
+            messages.Add(ReadMessage(reader));
+        }
+
+        // Batch-load reactions for all messages in a single query
+        if (messages.Count > 0)
+        {
+            var reactionsMap = await GetBatchMessageReactionsAsync(connection, messages.Select(m => m.Id).ToList());
+            foreach (var message in messages)
+            {
+                message.Reactions = reactionsMap.TryGetValue(message.Id, out var reactions)
+                    ? reactions
+                    : new Dictionary<string, List<string>>();
+            }
         }
 
         messages.Reverse();
@@ -1867,6 +1877,50 @@ public class StorageService : IStorageService
         }
 
         return relays;
+    }
+
+    /// <summary>
+    /// Batch-load reactions for multiple messages in a single query.
+    /// Returns a dictionary keyed by MessageId → (Emoji → list of reactor pubkeys).
+    /// </summary>
+    private static async Task<Dictionary<string, Dictionary<string, List<string>>>> GetBatchMessageReactionsAsync(
+        SqliteConnection connection, List<string> messageIds)
+    {
+        var result = new Dictionary<string, Dictionary<string, List<string>>>();
+        if (messageIds.Count == 0) return result;
+
+        var command = connection.CreateCommand();
+        // Build parameterized IN clause
+        var paramNames = new List<string>(messageIds.Count);
+        for (int i = 0; i < messageIds.Count; i++)
+        {
+            var paramName = $"@mid{i}";
+            paramNames.Add(paramName);
+            command.Parameters.AddWithValue(paramName, messageIds[i]);
+        }
+        command.CommandText = $"SELECT MessageId, Emoji, ReactorPublicKey FROM MessageReactions WHERE MessageId IN ({string.Join(",", paramNames)})";
+
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var messageId = reader.GetString(0);
+            var emoji = reader.GetString(1);
+            var reactor = reader.GetString(2);
+
+            if (!result.TryGetValue(messageId, out var reactions))
+            {
+                reactions = new Dictionary<string, List<string>>();
+                result[messageId] = reactions;
+            }
+            if (!reactions.TryGetValue(emoji, out var reactors))
+            {
+                reactors = new List<string>();
+                reactions[emoji] = reactors;
+            }
+            reactors.Add(reactor);
+        }
+
+        return result;
     }
 
     private static async Task<Dictionary<string, List<string>>> GetMessageReactionsAsync(SqliteConnection connection, string messageId)

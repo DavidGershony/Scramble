@@ -37,7 +37,13 @@ public partial class ChatViewModel : ViewModelBase
     // MIP-04 media cache (messageId -> decrypted bytes)
     private readonly Dictionary<string, byte[]> _mediaCache = new();
 
-    public ObservableCollection<MessageViewModel> Messages { get; } = new();
+    // LRU message cache: chatId -> list of MessageViewModels for recently-viewed chats.
+    // Avoids re-querying DB when switching back to a chat we just left.
+    private const int MaxCachedChats = 5;
+    private readonly Dictionary<string, List<MessageViewModel>> _messageCache = new();
+    private readonly LinkedList<string> _messageCacheOrder = new();
+
+    [Reactive] public partial ObservableCollection<MessageViewModel> Messages { get; private set; }
 
     /// <summary>
     /// Raised when the view should scroll to the bottom of the message list.
@@ -173,6 +179,7 @@ public partial class ChatViewModel : ViewModelBase
         _nostrService = nostrService;
         _mlsService = mlsService;
         _clipboard = clipboard;
+        Messages = new ObservableCollection<MessageViewModel>();
 
         // Recompute capability properties whenever IsMip04Enabled changes
         var hasFilePicker = platform?.HasFilePicker ?? false;
@@ -433,6 +440,16 @@ public partial class ChatViewModel : ViewModelBase
 
     public void LoadChat(Chat chat)
     {
+        // Skip full reload if already showing this chat
+        if (_currentChat != null && _currentChat.Id == chat.Id)
+            return;
+
+        // Save current chat's messages to cache before switching away
+        if (_currentChat != null && Messages.Count > 0)
+        {
+            SaveToMessageCache(_currentChat.Id, Messages.ToList());
+        }
+
         _logger.LogInformation("Loading chat: {ChatId} - {ChatName}", chat.Id, chat.Name);
 
         _currentChat = chat;
@@ -522,6 +539,8 @@ public partial class ChatViewModel : ViewModelBase
         Messages.Clear();
         GroupMembers.Clear();
         _mediaCache.Clear();
+        _messageCache.Clear();
+        _messageCacheOrder.Clear();
     }
 
     /// <summary>
@@ -944,6 +963,19 @@ public partial class ChatViewModel : ViewModelBase
 
         try
         {
+            // Check message cache first — instant restore for recently-viewed chats.
+            if (_messageCache.TryGetValue(chatId, out var cached))
+            {
+                if (requestId != Volatile.Read(ref _messageLoadRequestId) ||
+                    !string.Equals(ChatId, chatId, StringComparison.Ordinal))
+                    return;
+
+                Messages = new ObservableCollection<MessageViewModel>(cached);
+                TouchMessageCache(chatId);
+                ScrollToBottomRequested?.Invoke(this, EventArgs.Empty);
+                return;
+            }
+
             // Fetch messages from DB while keeping old messages visible (no flash of empty content).
             var messages = await _messageService.GetMessagesAsync(chatId);
 
@@ -963,11 +995,12 @@ public partial class ChatViewModel : ViewModelBase
             // Build the full list off the UI thread, then swap in one batch.
             var viewModels = messages.Select(m => new MessageViewModel(m)).ToList();
 
-            // Replace collection contents in one go — Clear + AddRange minimizes
-            // CollectionChanged event overhead compared to 50 individual Add calls.
-            Messages.Clear();
-            foreach (var vm in viewModels)
-                Messages.Add(vm);
+            // Store in cache for instant restore on re-visit
+            SaveToMessageCache(chatId, viewModels);
+
+            // Swap the entire collection instance — triggers a single PropertyChanged
+            // notification instead of 51+ CollectionChanged events (1 Clear + N Adds).
+            Messages = new ObservableCollection<MessageViewModel>(viewModels);
 
             ScrollToBottomRequested?.Invoke(this, EventArgs.Empty);
         }
@@ -1036,14 +1069,25 @@ public partial class ChatViewModel : ViewModelBase
 
     private void OnNewMessage(Message message)
     {
-        if (message.ChatId != ChatId) return;
+        if (message.ChatId != ChatId)
+        {
+            // Invalidate cache for non-active chats so they get fresh data on next visit
+            _messageCache.Remove(message.ChatId);
+            return;
+        }
 
         // Avoid duplicates (by Id or NostrEventId for relay echoes)
         if (Messages.Any(m => m.Id == message.Id
             || (!string.IsNullOrEmpty(message.NostrEventId) && m.Message.NostrEventId == message.NostrEventId)))
             return;
 
-        Messages.Add(new MessageViewModel(message));
+        var vm = new MessageViewModel(message);
+        Messages.Add(vm);
+
+        // Keep cache in sync with live collection
+        if (_messageCache.TryGetValue(message.ChatId, out var cached))
+            cached.Add(vm);
+
         ScrollToBottomRequested?.Invoke(this, EventArgs.Empty);
 
         if (!message.IsFromCurrentUser)
@@ -1066,6 +1110,41 @@ public partial class ChatViewModel : ViewModelBase
 
             messageVm.UpdateReactionsDisplay();
         }
+    }
+
+    /// <summary>
+    /// Stores a message list in the LRU cache, evicting the oldest entry if at capacity.
+    /// </summary>
+    private void SaveToMessageCache(string chatId, List<MessageViewModel> viewModels)
+    {
+        if (_messageCache.ContainsKey(chatId))
+        {
+            // Already cached — update content and move to front of LRU
+            _messageCache[chatId] = viewModels;
+            _messageCacheOrder.Remove(chatId);
+            _messageCacheOrder.AddFirst(chatId);
+        }
+        else
+        {
+            // Evict oldest if at capacity
+            if (_messageCacheOrder.Count >= MaxCachedChats)
+            {
+                var oldest = _messageCacheOrder.Last!.Value;
+                _messageCacheOrder.RemoveLast();
+                _messageCache.Remove(oldest);
+            }
+            _messageCache[chatId] = viewModels;
+            _messageCacheOrder.AddFirst(chatId);
+        }
+    }
+
+    /// <summary>
+    /// Marks a cache entry as recently used (moves to front of LRU list).
+    /// </summary>
+    private void TouchMessageCache(string chatId)
+    {
+        _messageCacheOrder.Remove(chatId);
+        _messageCacheOrder.AddFirst(chatId);
     }
 
     private async void LoadMip04SettingAsync()
