@@ -607,8 +607,8 @@
                 </StackPanel>
             </Border>
 
-            <!-- Logout -->
-            <Button Content="Log Out" HorizontalAlignment="Stretch" Height="44"
+            <!-- Sign out -->
+            <Button Content="Sign Out" HorizontalAlignment="Stretch" Height="44"
                     Background="{DynamicResource DangerButtonBrush}" Foreground="White" FontWeight="SemiBold"
                     HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                     Command="{Binding LogoutCommand}" />
