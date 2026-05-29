@@ -230,12 +230,12 @@ public class ManagedMlsService : IMlsService
         }
     }
 
-    public async Task ResetAsync()
+    public Task ResetAsync()
     {
-        await _initLock.WaitAsync();
+        _initLock.Wait();
         try
         {
-            _logger.LogInformation("Resetting MLS service state (logout)");
+            _logger.LogInformation("Resetting MLS service state (in-memory only, DB preserved)");
             _mdk = null;
             _publicKeyHex = null;
             _privateKeyHex = null;
@@ -260,23 +260,21 @@ public class ManagedMlsService : IMlsService
             _keyPackageSlotId = null;
             _nostrEventSigner = null;
 
-            // Clear persisted service state so next login starts fresh
-            if (_storageService != null)
-            {
-                try
-                {
-                    await _storageService.SaveMlsStateAsync(ServiceStateKey, Array.Empty<byte>());
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to clear persisted MLS service state");
-                }
-            }
+            // NOTE: We deliberately do NOT wipe the persisted DB state here.
+            // ResetAsync is called during account switches and logout, but the
+            // ShellViewModel design preserves per-profile data so users can switch
+            // back later. The DB retains KeyPackage private keys so Welcomes sent
+            // while the user is switched away can still be processed on return.
+            //
+            // For an explicit full wipe, use StorageService.ResetMlsDataAsync()
+            // (exposed via the "Reset MLS Data" button in Settings).
         }
         finally
         {
             _initLock.Release();
         }
+
+        return Task.CompletedTask;
     }
 
     public async Task<KeyPackage> GenerateKeyPackageAsync()
