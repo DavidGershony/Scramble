@@ -16,6 +16,29 @@ public partial class ChatView : UserControl
     {
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
+
+        // When the ChatView transitions from hidden to visible (e.g., switching back
+        // from Settings), the ListBox's VirtualizingStackPanel may have lost its viewport
+        // metrics. Force a re-measure so items are materialized correctly.
+        var isVisibleDesc = IsVisibleProperty.Changed;
+        isVisibleDesc.AddClassHandler<ChatView>((view, args) =>
+        {
+            if (args.GetNewValue<bool>())
+            {
+                // Clear cached ScrollViewer — visual tree may have been rebuilt
+                view._scrollViewer = null;
+
+                // Schedule InvalidateMeasure after the current layout pass so the
+                // ScrollViewer viewport is correctly established before the
+                // VirtualizingStackPanel tries to materialize items.
+                Dispatcher.UIThread.Post(() =>
+                {
+                    var lb = view._listBox ?? view.FindControl<ListBox>("MessageListBox");
+                    view._listBox = lb;
+                    lb?.InvalidateMeasure();
+                }, DispatcherPriority.Render);
+            }
+        });
     }
 
     private void InitializeComponent()
