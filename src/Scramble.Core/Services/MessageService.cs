@@ -1714,6 +1714,24 @@ public class MessageService : IMessageService, IDisposable
                         return;
                     }
 
+                    // Clean up orphaned DeviceSync chats from a previous local-only group.
+                    // When this device created its own sync group before receiving this
+                    // Welcome, that old group is now superseded by the shared one.
+                    var orphanSyncChats = existingChats2
+                        .Where(c => c.Type == ChatType.DeviceSync)
+                        .ToList();
+                    foreach (var orphan in orphanSyncChats)
+                    {
+                        _logger.LogInformation(
+                            "HandleWelcome: deleting orphan DeviceSync chat {ChatId} (superseded by shared group)",
+                            orphan.Id);
+                        try { await _storageService.DeleteChatAsync(orphan.Id); }
+                        catch (Exception delEx)
+                        {
+                            _logger.LogWarning(delEx, "HandleWelcome: failed to delete orphan sync chat {ChatId}", orphan.Id);
+                        }
+                    }
+
                     var nostrGroupId2 = _mlsService.GetNostrGroupId(groupInfo.GroupId);
                     var adminPubkeys2 = _mlsService.GetAdminPubkeys(groupInfo.GroupId);
                     var creatorPubkey2 = adminPubkeys2.Count > 0 ? adminPubkeys2[0] : nostrEvent.PublicKey;
@@ -2752,8 +2770,12 @@ public class MessageService : IMessageService, IDisposable
                 continue;
             }
 
-            // Skip own messages (already saved locally by SendMessageAsync)
-            if (nostrEvent.PublicKey == _currentUser?.PublicKeyHex)
+            // Skip own messages (already saved locally by SendMessageAsync).
+            // Exception: DeviceSync groups — all members share the same pubkey,
+            // so messages from other devices look like "own" messages but aren't local.
+            // The NostrEventId dedup above already prevents true self-echo duplicates.
+            if (chat.Type != ChatType.DeviceSync &&
+                nostrEvent.PublicKey == _currentUser?.PublicKeyHex)
             {
                 skipCount++;
                 continue;

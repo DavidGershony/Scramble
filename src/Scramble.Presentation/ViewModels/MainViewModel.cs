@@ -1130,10 +1130,28 @@ public partial class MainViewModel : ViewModelBase
                                 _logger.LogWarning(announceEx, "Failed to post device announcement");
                             }
 
-                            // Invite newly-detected peers to the sync group
-                            if (peerKps.Count > 0)
+                            // Invite peer devices to the sync group — retry ALL known peers,
+                            // not just newly-detected ones. The general seenSlotIds mechanism
+                            // prevents re-adding peers to regular groups, but for the sync group
+                            // a failed or missed Welcome leaves devices in separate groups
+                            // permanently. Re-inviting an already-joined peer is harmless (MLS
+                            // rejects the duplicate, caught below).
+                            if (!string.IsNullOrEmpty(localSlotId))
                             {
-                                foreach (var peerKp in peerKps)
+                                var lostRaw2 = await _storageService.GetSettingAsync("lost_slot_ids");
+                                var lostSlotIds2 = new HashSet<string>(
+                                    lostRaw2?.Split(',', StringSplitOptions.RemoveEmptyEntries) ?? Array.Empty<string>());
+                                var dummySlotIds2 = MessageService.ComputeDummySlotIds(CurrentUser.PrivateKeyHex);
+
+                                var syncPeerKps = myKeyPackages
+                                    .Where(kp => kp.IsCipherSuiteSupported
+                                        && !string.IsNullOrEmpty(kp.SlotId)
+                                        && kp.SlotId != localSlotId
+                                        && !lostSlotIds2.Contains(kp.SlotId!)
+                                        && !dummySlotIds2.Contains(kp.SlotId!))
+                                    .ToList();
+
+                                foreach (var peerKp in syncPeerKps)
                                 {
                                     try
                                     {
@@ -1143,7 +1161,8 @@ public partial class MainViewModel : ViewModelBase
                                     }
                                     catch (Exception syncEx)
                                     {
-                                        _logger.LogWarning(syncEx, "Failed to invite peer device (slot={SlotId}) to sync group",
+                                        // Expected if the peer is already a member of the sync group
+                                        _logger.LogDebug(syncEx, "Sync group invite for peer (slot={SlotId}) did not succeed (may already be a member)",
                                             peerKp.SlotId?[..Math.Min(16, peerKp.SlotId?.Length ?? 0)]);
                                     }
                                 }
