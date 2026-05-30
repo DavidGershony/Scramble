@@ -119,6 +119,12 @@ public interface IMessageService
     Task<Chat> GetOrCreateDeviceSyncGroupAsync();
 
     /// <summary>
+    /// Delete all DeviceSync state (chat + settings) so the sync group can be
+    /// recreated fresh. Used to recover from diverged MLS state after a race condition.
+    /// </summary>
+    Task ResetDeviceSyncGroupAsync();
+
+    /// <summary>
     /// Invite a peer device to the device-sync group.
     /// The peer is expected to auto-accept within 3 days to prove the device is alive.
     /// </summary>

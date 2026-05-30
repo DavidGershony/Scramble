@@ -685,6 +685,39 @@ public class MessageService : IMessageService, IDisposable
         return chat;
     }
 
+    /// <summary>
+    /// Deletes the current DeviceSync group (chat + setting) so that a fresh group
+    /// can be created. Used to recover from diverged MLS state where both devices
+    /// ended up in different groups after a race condition.
+    /// </summary>
+    public async Task ResetDeviceSyncGroupAsync()
+    {
+        var syncChatId = await _storageService.GetSettingAsync("device_sync_chat_id");
+        if (!string.IsNullOrEmpty(syncChatId))
+        {
+            try { await _storageService.DeleteChatAsync(syncChatId); }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "ResetDeviceSyncGroup: failed to delete chat {ChatId}", syncChatId);
+            }
+        }
+
+        // Also clean up any other DeviceSync chats that might exist
+        var allChats = await _storageService.GetAllChatsAsync();
+        foreach (var chat in allChats.Where(c => c.Type == ChatType.DeviceSync))
+        {
+            try { await _storageService.DeleteChatAsync(chat.Id); }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "ResetDeviceSyncGroup: failed to delete orphan {ChatId}", chat.Id);
+            }
+        }
+
+        await _storageService.SaveSettingAsync("device_sync_chat_id", "");
+        await _storageService.SaveSettingAsync("sync_group_converged", "");
+        _logger.LogInformation("ResetDeviceSyncGroup: cleared all DeviceSync state");
+    }
+
     public async Task InvitePeerToSyncGroupAsync(KeyPackage peerKeyPackage, string syncChatId)
     {
         if (_currentUser == null)

@@ -1130,12 +1130,11 @@ public partial class MainViewModel : ViewModelBase
                                 _logger.LogWarning(announceEx, "Failed to post device announcement");
                             }
 
-                            // Invite peer devices to the sync group — retry ALL known peers,
-                            // not just newly-detected ones. The general seenSlotIds mechanism
-                            // prevents re-adding peers to regular groups, but for the sync group
-                            // a failed or missed Welcome leaves devices in separate groups
-                            // permanently. Re-inviting an already-joined peer is harmless (MLS
-                            // rejects the duplicate, caught below).
+                            // Invite peer devices to the sync group using a deterministic
+                            // inviter protocol: only the device with the lexicographically
+                            // SMALLEST slot ID sends invites. This prevents the race where
+                            // both devices invite each other simultaneously and end up in
+                            // different groups. The non-inviter waits to receive a Welcome.
                             if (!string.IsNullOrEmpty(localSlotId))
                             {
                                 var lostRaw2 = await _storageService.GetSettingAsync("lost_slot_ids");
@@ -1151,19 +1150,76 @@ public partial class MainViewModel : ViewModelBase
                                         && !dummySlotIds2.Contains(kp.SlotId!))
                                     .ToList();
 
-                                foreach (var peerKp in syncPeerKps)
+                                // Deterministic inviter: only smallest slot ID invites.
+                                var isDesignatedInviter = syncPeerKps.Count > 0 &&
+                                    syncPeerKps.All(kp => string.Compare(localSlotId, kp.SlotId, StringComparison.Ordinal) < 0);
+
+                                if (isDesignatedInviter)
                                 {
-                                    try
+                                    // Check if this group has already converged (peer joined
+                                    // and we've exchanged messages). Don't reset a working group.
+                                    var converged = await _storageService.GetSettingAsync("sync_group_converged");
+
+                                    foreach (var peerKp in syncPeerKps)
                                     {
-                                        await _messageService.InvitePeerToSyncGroupAsync(peerKp, syncChat.Id);
-                                        _logger.LogInformation("Invited peer device (slot={SlotId}) to sync group",
-                                            peerKp.SlotId?[..Math.Min(16, peerKp.SlotId?.Length ?? 0)]);
+                                        try
+                                        {
+                                            await _messageService.InvitePeerToSyncGroupAsync(peerKp, syncChat.Id);
+                                            await _storageService.SaveSettingAsync("sync_group_converged", "true");
+                                            _logger.LogInformation("Invited peer device (slot={SlotId}) to sync group",
+                                                peerKp.SlotId?[..Math.Min(16, peerKp.SlotId?.Length ?? 0)]);
+                                        }
+                                        catch (Exception syncEx)
+                                        {
+                                            // Invite failed — likely "already a member" from a
+                                            // diverged state (both devices ended up in different
+                                            // groups after a race). Only reset if the group hasn't
+                                            // previously converged (prevents reset loop on working groups).
+                                            if (converged == "true")
+                                            {
+                                                _logger.LogDebug(syncEx,
+                                                    "Sync invite for slot={SlotId} failed but group previously converged — skipping reset",
+                                                    peerKp.SlotId?[..Math.Min(16, peerKp.SlotId?.Length ?? 0)]);
+                                                continue;
+                                            }
+
+                                            _logger.LogWarning(syncEx, "Sync invite failed for slot={SlotId}, attempting group reset",
+                                                peerKp.SlotId?[..Math.Min(16, peerKp.SlotId?.Length ?? 0)]);
+
+                                            try
+                                            {
+                                                await _messageService.ResetDeviceSyncGroupAsync();
+                                                syncChat = await _messageService.GetOrCreateDeviceSyncGroupAsync();
+                                                await _messageService.InvitePeerToSyncGroupAsync(peerKp, syncChat.Id);
+                                                await _storageService.SaveSettingAsync("sync_group_converged", "true");
+                                                _logger.LogInformation(
+                                                    "Sync group reset succeeded — invited peer (slot={SlotId}) to fresh group",
+                                                    peerKp.SlotId?[..Math.Min(16, peerKp.SlotId?.Length ?? 0)]);
+                                            }
+                                            catch (Exception retryEx)
+                                            {
+                                                _logger.LogWarning(retryEx,
+                                                    "Sync group reset+retry also failed for slot={SlotId}",
+                                                    peerKp.SlotId?[..Math.Min(16, peerKp.SlotId?.Length ?? 0)]);
+                                            }
+                                        }
                                     }
-                                    catch (Exception syncEx)
+                                }
+                                else if (syncPeerKps.Count > 0)
+                                {
+                                    _logger.LogInformation(
+                                        "Not the designated sync inviter (localSlot={LocalSlot}); waiting for Welcome from peer",
+                                        localSlotId[..Math.Min(8, localSlotId.Length)]);
+
+                                    // If we're not the inviter and our sync group was created
+                                    // locally (not received via Welcome) and is older than 2 min,
+                                    // it's likely a stale orphan from before the fix. Delete it
+                                    // so the Welcome handler has a clean slate when it arrives.
+                                    if (string.IsNullOrEmpty(syncChat.WelcomeNostrEventId) &&
+                                        syncChat.CreatedAt < DateTime.UtcNow.AddMinutes(-2))
                                     {
-                                        // Expected if the peer is already a member of the sync group
-                                        _logger.LogDebug(syncEx, "Sync group invite for peer (slot={SlotId}) did not succeed (may already be a member)",
-                                            peerKp.SlotId?[..Math.Min(16, peerKp.SlotId?.Length ?? 0)]);
+                                        _logger.LogInformation("Deleting stale locally-created sync group (not the inviter)");
+                                        await _messageService.ResetDeviceSyncGroupAsync();
                                     }
                                 }
                             }
