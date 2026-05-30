@@ -37,7 +37,20 @@ public partial class ChatListViewModel : ViewModelBase
     public ObservableCollection<FollowContactViewModel> Following { get; } = new();
     [Reactive] public partial bool IsRefreshingFollowing { get; set; }
 
-    [Reactive] public partial ChatItemViewModel? SelectedChat { get; set; }
+    private ChatItemViewModel? _selectedChat;
+    private bool _isSettingSelectedChat;
+
+    public ChatItemViewModel? SelectedChat
+    {
+        get => _selectedChat;
+        set
+        {
+            if (_isSettingSelectedChat) return;
+            _isSettingSelectedChat = true;
+            try { this.RaiseAndSetIfChanged(ref _selectedChat, value); }
+            finally { _isSettingSelectedChat = false; }
+        }
+    }
     [Reactive] public partial int ArchivedChatsCount { get; set; }
     [Reactive] public partial int AgentChatsCount { get; set; }
     [Reactive] public partial bool ShowArchivedSection { get; set; }
