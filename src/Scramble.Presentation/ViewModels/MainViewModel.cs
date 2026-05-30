@@ -30,6 +30,13 @@ public partial class MainViewModel : ViewModelBase
     private bool _connectionGracePeriodActive;
     private CancellationTokenSource? _noInternetDebounceCts;
 
+    /// <summary>
+    /// Signals when the external signer (Amber/NIP-46) has been wired into NostrService/MLS.
+    /// Completed immediately for local-key users. Background sync tasks await this before
+    /// attempting operations that require event signing (e.g., invites, announcements).
+    /// </summary>
+    private readonly TaskCompletionSource _signerReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     [Reactive] public partial User? CurrentUser { get; set; }
     [Reactive] public partial bool IsLoggedIn { get; set; }
     [Reactive] public partial bool IsConnected { get; set; }
@@ -492,6 +499,12 @@ public partial class MainViewModel : ViewModelBase
         else if (string.IsNullOrEmpty(CurrentUser.PrivateKeyHex) && ExternalSigner?.IsConnected == true)
         {
             WireExternalSigner();
+            _signerReady.TrySetResult();
+        }
+        else
+        {
+            // Local-key user — no signer needed, mark ready immediately
+            _signerReady.TrySetResult();
         }
 
         _logger.LogInformation("InitializeAfterLoginAsync completed (network init continuing in background)");
@@ -565,6 +578,7 @@ public partial class MainViewModel : ViewModelBase
                         {
                             ChatListViewModel.StatusMessage = null;
                             WireExternalSigner();
+                            _signerReady.TrySetResult();
                         });
                     return;
                 }
@@ -584,6 +598,7 @@ public partial class MainViewModel : ViewModelBase
 
         // All attempts exhausted
         _logger.LogWarning("Signer session restore failed after {Max} attempts — giving up", maxAttempts);
+        _signerReady.TrySetResult(); // Unblock waiters even though signer failed — sync will fail gracefully
         Observable.Return(System.Reactive.Unit.Default)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => ChatListViewModel.StatusMessage = "Signer disconnected. Restart your signer app.");
@@ -1066,6 +1081,26 @@ public partial class MainViewModel : ViewModelBase
                                 _logger.LogInformation("Detected {Count} NEW peer device KeyPackage(s), adding to groups",
                                     peerKps.Count);
 
+                                // For Amber/NIP-46 users, the signer may still be connecting in the
+                                // background. Wait for it before attempting operations that require
+                                // event signing (AddPeerDeviceToGroups, announce, invite, Welcome).
+                                if (string.IsNullOrEmpty(CurrentUser.PrivateKeyHex))
+                                {
+                                    _logger.LogInformation("Peer devices detected — waiting for external signer before adding to groups...");
+                                    var signerTimeout = Task.Delay(TimeSpan.FromSeconds(90));
+                                    await Task.WhenAny(_signerReady.Task, signerTimeout);
+                                    if (!_nostrService.HasExternalSigner)
+                                    {
+                                        _logger.LogWarning("External signer not available — skipping peer device group additions");
+                                        // Still mark as seen so we don't retry every login
+                                        foreach (var kp in peerKps)
+                                            seenSlotIds.Add(kp.SlotId!);
+                                        await _storageService.SaveSettingAsync("seen_peer_slot_ids",
+                                            string.Join(",", seenSlotIds));
+                                        peerKps.Clear();
+                                    }
+                                }
+
                                 var allSkippedGroups = new List<string>();
                                 var allSkippedDetails = new List<SkippedGroupInfo>();
 
@@ -1114,6 +1149,42 @@ public partial class MainViewModel : ViewModelBase
                         // ── Device-sync group: create/load and invite new peer devices ──
                         // This runs regardless of whether a local slot ID exists, so that
                         // the sync group (Private Notes) is always created on login.
+                        //
+                        // For Amber/NIP-46 users, the signer may still be connecting in the
+                        // background. Wait for it before attempting operations that require
+                        // event signing (announce, invite, Welcome).
+                        if (string.IsNullOrEmpty(CurrentUser.PrivateKeyHex) && !_nostrService.HasExternalSigner)
+                        {
+                            _logger.LogInformation("DeviceSync: waiting for external signer before sync operations...");
+                            var signerTimeout = Task.Delay(TimeSpan.FromSeconds(90));
+                            var completed = await Task.WhenAny(_signerReady.Task, signerTimeout);
+                            if (completed == signerTimeout)
+                            {
+                                _logger.LogWarning("DeviceSync: signer not ready after 90 s — skipping sync operations this session");
+                            }
+                            else
+                            {
+                                _logger.LogInformation("DeviceSync: signer ready, proceeding with sync operations");
+                            }
+
+                            // Even if signer timed out, still create the group (local-only).
+                            // But skip announce/invite if signer never connected.
+                            if (!_nostrService.HasExternalSigner)
+                            {
+                                _logger.LogWarning("DeviceSync: no external signer available — creating group only, skipping announce/invite");
+                                try
+                                {
+                                    await _messageService.GetOrCreateDeviceSyncGroupAsync();
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogWarning(ex, "Failed to create device-sync group");
+                                }
+                                // Skip the rest of the sync flow — no signer
+                                return;
+                            }
+                        }
+
                         try
                         {
                             var syncChat = await _messageService.GetOrCreateDeviceSyncGroupAsync();
@@ -1147,7 +1218,11 @@ public partial class MainViewModel : ViewModelBase
                                         && !string.IsNullOrEmpty(kp.SlotId)
                                         && kp.SlotId != localSlotId
                                         && !lostSlotIds2.Contains(kp.SlotId!)
-                                        && !dummySlotIds2.Contains(kp.SlotId!))
+                                        && !dummySlotIds2.Contains(kp.SlotId!)
+                                        && kp.ExpiresAt > DateTime.UtcNow) // skip expired KPs
+                                    // Deduplicate by slot ID — keep only the newest KP per device
+                                    .GroupBy(kp => kp.SlotId)
+                                    .Select(g => g.OrderByDescending(kp => kp.CreatedAt).First())
                                     .ToList();
 
                                 // Deterministic inviter: only smallest slot ID invites.

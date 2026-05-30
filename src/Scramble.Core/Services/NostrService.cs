@@ -2194,7 +2194,21 @@ public class NostrService : INostrService, IDisposable
             }
         }
 
-        return keyPackages;
+        // NIP-33 addressable events: only the latest event per d-tag (slot ID) is valid.
+        // Deduplicate by slot ID, keeping the newest KeyPackage for each device.
+        // KPs without a slot ID are kept as-is (legacy format).
+        var deduped = keyPackages
+            .GroupBy(kp => kp.SlotId ?? kp.Id) // group by slot ID, or event ID if no slot
+            .Select(g => g.OrderByDescending(kp => kp.CreatedAt).First())
+            .ToList();
+
+        if (deduped.Count < keyPackages.Count)
+        {
+            _logger.LogInformation("FetchKeyPackages: deduplicated {Before} -> {After} KeyPackages by slot ID",
+                keyPackages.Count, deduped.Count);
+        }
+
+        return deduped;
     }
 
     private async Task<List<KeyPackage>> FetchKeyPackagesFromRelayAsync(string relayUrl, string publicKeyHex, int limit)

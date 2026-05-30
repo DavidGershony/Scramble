@@ -619,11 +619,38 @@ public class MessageService : IMessageService, IDisposable
             var existing = await _storageService.GetChatAsync(syncChatId);
             if (existing != null)
             {
-                _logger.LogInformation("GetOrCreateDeviceSyncGroup: found existing sync group {ChatId}", syncChatId);
-                return existing;
+                // Verify MLS state actually exists for this group — it may have been
+                // lost after an account switch if InitializeAsync failed to restore it.
+                if (existing.MlsGroupId != null)
+                {
+                    var existingGroupInfo = await _mlsService.GetGroupInfoAsync(existing.MlsGroupId);
+                    if (existingGroupInfo == null)
+                    {
+                        _logger.LogWarning(
+                            "GetOrCreateDeviceSyncGroup: chat {ChatId} exists but MLS group state is missing — deleting stale chat and recreating",
+                            syncChatId);
+                        await _storageService.DeleteChatAsync(syncChatId);
+                        await _storageService.SaveSettingAsync("device_sync_chat_id", "");
+                        await _storageService.SaveSettingAsync("sync_group_converged", "");
+                        // Fall through to create a new group below
+                    }
+                    else
+                    {
+                        _logger.LogInformation("GetOrCreateDeviceSyncGroup: found existing sync group {ChatId}", syncChatId);
+                        return existing;
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation("GetOrCreateDeviceSyncGroup: found existing sync group {ChatId}", syncChatId);
+                    return existing;
+                }
             }
-            // Chat was deleted but setting remains — recreate
-            _logger.LogWarning("GetOrCreateDeviceSyncGroup: sync chat {ChatId} not found in storage, recreating", syncChatId);
+            else
+            {
+                // Chat was deleted but setting remains — recreate
+                _logger.LogWarning("GetOrCreateDeviceSyncGroup: sync chat {ChatId} not found in storage, recreating", syncChatId);
+            }
         }
 
         // Also check by ChatType in case the setting was lost
@@ -631,9 +658,31 @@ public class MessageService : IMessageService, IDisposable
         var existingSync = allChats.FirstOrDefault(c => c.Type == ChatType.DeviceSync);
         if (existingSync != null)
         {
-            await _storageService.SaveSettingAsync("device_sync_chat_id", existingSync.Id);
-            _logger.LogInformation("GetOrCreateDeviceSyncGroup: recovered sync group {ChatId} from chat list", existingSync.Id);
-            return existingSync;
+            // Same MLS state check for the recovered chat
+            if (existingSync.MlsGroupId != null)
+            {
+                var recoveredGroupInfo = await _mlsService.GetGroupInfoAsync(existingSync.MlsGroupId);
+                if (recoveredGroupInfo == null)
+                {
+                    _logger.LogWarning(
+                        "GetOrCreateDeviceSyncGroup: recovered chat {ChatId} has missing MLS state — deleting and recreating",
+                        existingSync.Id);
+                    await _storageService.DeleteChatAsync(existingSync.Id);
+                    // Fall through to create a new group below
+                }
+                else
+                {
+                    await _storageService.SaveSettingAsync("device_sync_chat_id", existingSync.Id);
+                    _logger.LogInformation("GetOrCreateDeviceSyncGroup: recovered sync group {ChatId} from chat list", existingSync.Id);
+                    return existingSync;
+                }
+            }
+            else
+            {
+                await _storageService.SaveSettingAsync("device_sync_chat_id", existingSync.Id);
+                _logger.LogInformation("GetOrCreateDeviceSyncGroup: recovered sync group {ChatId} from chat list", existingSync.Id);
+                return existingSync;
+            }
         }
 
         // Create a new MLS group for device sync

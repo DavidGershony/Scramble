@@ -184,7 +184,7 @@ public class ManagedMlsService : IMlsService
                 {
                     var allChats = await _storageService.GetAllChatsAsync();
                     var groupCount = 0;
-                    foreach (var chat in allChats.Where(c => c.Type == ChatType.Group && c.MlsGroupId != null))
+                    foreach (var chat in allChats.Where(c => (c.Type == ChatType.Group || c.Type == ChatType.DeviceSync) && c.MlsGroupId != null))
                     {
                         try
                         {
