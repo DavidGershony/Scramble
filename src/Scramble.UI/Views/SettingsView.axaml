@@ -23,6 +23,11 @@
         </Border>
 
     <TabControl Grid.Row="1">
+        <TabControl.Styles>
+            <Style Selector="ItemsPresenter#PART_ItemsPresenter">
+                <Setter Property="HorizontalAlignment" Value="Center" />
+            </Style>
+        </TabControl.Styles>
 
         <!-- ════════════════════════════════════════════════════════════ -->
         <!--  ACCOUNT TAB — settings tied to the user's Nostr identity  -->
