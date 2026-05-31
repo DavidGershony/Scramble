@@ -148,6 +148,7 @@ public partial class SettingsViewModel : ViewModelBase
     public ObservableCollection<string> DmRelays { get; } = new();
     public ObservableCollection<string> KpRelays { get; } = new();
     public ObservableCollection<RelayPickerItem> PopularRelays { get; } = new();
+    public ObservableCollection<UnifiedRelayViewModel> AllRelays { get; } = new();
 
     /// <summary>Popular relay domains shown in the relay picker.</summary>
     internal static readonly string[] PopularRelayDomains =
@@ -205,6 +206,9 @@ public partial class SettingsViewModel : ViewModelBase
     public ReactiveCommand<Unit, Unit> SaveSyncRelayCommand { get; }
     public ReactiveCommand<Unit, Unit> EditSyncRelayCommand { get; }
     public ReactiveCommand<Unit, Unit> CancelEditSyncRelayCommand { get; }
+    public ReactiveCommand<UnifiedRelayViewModel, Unit> SyncRelayMembershipCommand { get; }
+    public ReactiveCommand<UnifiedRelayViewModel, Unit> RemoveUnifiedRelayCommand { get; }
+    public ReactiveCommand<UnifiedRelayViewModel, Unit> CycleUnifiedRelayUsageCommand { get; }
 
     /// <summary>
     /// Assigned by the parent (<see cref="MainViewModel"/>) — shell-agnostic navigation
@@ -349,7 +353,14 @@ public partial class SettingsViewModel : ViewModelBase
             var disconnected = Relays.Where(r => !r.IsConnected).Select(r => r.Url).ToList();
             foreach (var url in disconnected)
             {
-                try { await _nostrService.ReconnectRelayAsync(url); }
+                try
+                {
+                    await _nostrService.ReconnectRelayAsync(url);
+                    // Sync connection state to unified view
+                    var unified = AllRelays.FirstOrDefault(u =>
+                        string.Equals(u.Url, url, StringComparison.OrdinalIgnoreCase));
+                    if (unified != null) unified.IsConnected = true;
+                }
                 catch (Exception ex) { _logger.LogError(ex, "Failed to reconnect to {Url}", url); }
             }
         });
@@ -361,6 +372,9 @@ public partial class SettingsViewModel : ViewModelBase
         SaveSyncRelayCommand = ReactiveCommand.CreateFromTask(SaveSyncRelayAsync);
         EditSyncRelayCommand = ReactiveCommand.Create(() => { IsEditingSyncRelay = true; });
         CancelEditSyncRelayCommand = ReactiveCommand.Create(() => { IsEditingSyncRelay = false; });
+        SyncRelayMembershipCommand = ReactiveCommand.CreateFromTask<UnifiedRelayViewModel>(SyncRelayMembershipAsync);
+        RemoveUnifiedRelayCommand = ReactiveCommand.CreateFromTask<UnifiedRelayViewModel>(RemoveUnifiedRelayAsync);
+        CycleUnifiedRelayUsageCommand = ReactiveCommand.CreateFromTask<UnifiedRelayViewModel>(CycleUnifiedRelayUsageAsync);
 
         // Persist show/hide device-sync chat toggle
         this.WhenAnyValue(x => x.ShowDeviceSyncChat)
@@ -638,6 +652,9 @@ public partial class SettingsViewModel : ViewModelBase
 
         _logger.LogInformation("Loaded purpose relay lists: {DmCount} DM, {KpCount} KP", DmRelays.Count, KpRelays.Count);
 
+        // Build unified relay view from all backing stores
+        BuildAllRelays();
+
         // Load local device slot ID
         var slotId = _mlsService.GetLocalKeyPackageSlotId();
         LocalSlotId = slotId;
@@ -848,30 +865,154 @@ public partial class SettingsViewModel : ViewModelBase
 
     private async Task AddRelayToListsAsync(string url)
     {
-        if (AddToGeneral)
+        // Check if already in unified list
+        var existing = AllRelays.FirstOrDefault(r =>
+            string.Equals(r.Url, url, StringComparison.OrdinalIgnoreCase));
+
+        if (existing != null)
         {
-            if (!Relays.Any(r => r.Url == url))
+            // Already exists — update toggles based on picker checkboxes
+            if (AddToGeneral) existing.IsGeneral = true;
+            if (AddToDm) existing.IsDm = true;
+            if (AddToKp) existing.IsKp = true;
+            await SyncRelayMembershipAsync(existing);
+        }
+        else
+        {
+            // New relay — add to unified list and sync to backing stores
+            var unified = new UnifiedRelayViewModel
             {
-                Relays.Add(new RelayViewModel { Url = url, IsConnected = false });
-                await _nostrService.ConnectAsync(url);
+                Url = url,
+                IsConnected = false,
+                IsGeneral = AddToGeneral,
+                IsDm = AddToDm,
+                IsKp = AddToKp,
+            };
+            AllRelays.Add(unified);
+            await SyncRelayMembershipAsync(unified);
+        }
+    }
+
+    // ── Unified relay management ──
+
+    /// <summary>Build the unified relay list from all backing stores.</summary>
+    private void BuildAllRelays()
+    {
+        AllRelays.Clear();
+
+        var allUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var r in Relays) allUrls.Add(r.Url);
+        foreach (var url in DmRelays) allUrls.Add(url);
+        foreach (var url in KpRelays) allUrls.Add(url);
+
+        foreach (var url in allUrls)
+        {
+            var generalRelay = Relays.FirstOrDefault(r =>
+                string.Equals(r.Url, url, StringComparison.OrdinalIgnoreCase));
+
+            AllRelays.Add(new UnifiedRelayViewModel
+            {
+                Url = url,
+                IsConnected = generalRelay?.IsConnected ?? false,
+                Error = generalRelay?.Error,
+                IsGeneral = generalRelay != null,
+                IsDm = DmRelays.Any(u => string.Equals(u, url, StringComparison.OrdinalIgnoreCase)),
+                IsKp = KpRelays.Any(u => string.Equals(u, url, StringComparison.OrdinalIgnoreCase)),
+                Usage = generalRelay?.Usage ?? RelayUsage.Both,
+            });
+        }
+    }
+
+    /// <summary>
+    /// Syncs a unified relay's toggle state back to the backing stores.
+    /// Called when the user toggles General/DM/KP checkboxes on a relay card.
+    /// </summary>
+    private async Task SyncRelayMembershipAsync(UnifiedRelayViewModel relay)
+    {
+        // Sync General list
+        var existingGeneral = Relays.FirstOrDefault(r =>
+            string.Equals(r.Url, relay.Url, StringComparison.OrdinalIgnoreCase));
+
+        if (relay.IsGeneral && existingGeneral == null)
+        {
+            Relays.Add(new RelayViewModel { Url = relay.Url, IsConnected = false, Usage = relay.Usage });
+            try
+            {
+                await _nostrService.ConnectAsync(relay.Url);
+                relay.IsConnected = true;
             }
-            await SaveRelayListAsync();
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to connect to relay {Url}", relay.Url);
+            }
         }
-
-        if (AddToDm)
+        else if (!relay.IsGeneral && existingGeneral != null)
         {
-            if (!DmRelays.Contains(url))
-                DmRelays.Add(url);
+            Relays.Remove(existingGeneral);
+            try { await _nostrService.DisconnectRelayAsync(relay.Url); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Failed to disconnect relay {Url}", relay.Url); }
+            relay.IsConnected = false;
         }
 
-        if (AddToKp)
+        await SaveRelayListAsync();
+
+        // Sync DM list
+        var hasDm = DmRelays.Any(u => string.Equals(u, relay.Url, StringComparison.OrdinalIgnoreCase));
+        if (relay.IsDm && !hasDm)
+            DmRelays.Add(relay.Url);
+        else if (!relay.IsDm && hasDm)
+            DmRelays.Remove(DmRelays.First(u => string.Equals(u, relay.Url, StringComparison.OrdinalIgnoreCase)));
+
+        // Sync KP list
+        var hasKp = KpRelays.Any(u => string.Equals(u, relay.Url, StringComparison.OrdinalIgnoreCase));
+        if (relay.IsKp && !hasKp)
+            KpRelays.Add(relay.Url);
+        else if (!relay.IsKp && hasKp)
+            KpRelays.Remove(KpRelays.First(u => string.Equals(u, relay.Url, StringComparison.OrdinalIgnoreCase)));
+
+        await SavePurposeRelaysAsync();
+    }
+
+    /// <summary>Remove a relay from all lists.</summary>
+    private async Task RemoveUnifiedRelayAsync(UnifiedRelayViewModel relay)
+    {
+        AllRelays.Remove(relay);
+
+        var existingGeneral = Relays.FirstOrDefault(r =>
+            string.Equals(r.Url, relay.Url, StringComparison.OrdinalIgnoreCase));
+        if (existingGeneral != null)
         {
-            if (!KpRelays.Contains(url))
-                KpRelays.Add(url);
+            Relays.Remove(existingGeneral);
+            try { await _nostrService.DisconnectRelayAsync(relay.Url); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Failed to disconnect relay {Url}", relay.Url); }
         }
+        await SaveRelayListAsync();
 
-        if (AddToDm || AddToKp)
-            await SavePurposeRelaysAsync();
+        var dmMatch = DmRelays.FirstOrDefault(u => string.Equals(u, relay.Url, StringComparison.OrdinalIgnoreCase));
+        if (dmMatch != null) DmRelays.Remove(dmMatch);
+        var kpMatch = KpRelays.FirstOrDefault(u => string.Equals(u, relay.Url, StringComparison.OrdinalIgnoreCase));
+        if (kpMatch != null) KpRelays.Remove(kpMatch);
+        await SavePurposeRelaysAsync();
+    }
+
+    /// <summary>Cycle relay usage (Read &amp; Write / Read / Write).</summary>
+    private async Task CycleUnifiedRelayUsageAsync(UnifiedRelayViewModel relay)
+    {
+        relay.Usage = relay.Usage switch
+        {
+            RelayUsage.Both => RelayUsage.Read,
+            RelayUsage.Read => RelayUsage.Write,
+            RelayUsage.Write => RelayUsage.Both,
+            _ => RelayUsage.Both
+        };
+
+        // Sync to the backing RelayViewModel
+        var existingGeneral = Relays.FirstOrDefault(r =>
+            string.Equals(r.Url, relay.Url, StringComparison.OrdinalIgnoreCase));
+        if (existingGeneral != null)
+            existingGeneral.Usage = relay.Usage;
+
+        await SaveRelayListAsync();
     }
 
     // ── NIP-65 fetch ──
@@ -1564,6 +1705,36 @@ public partial class RelayPickerItem : ViewModelBase
 {
     [Reactive] public partial string Domain { get; set; } = string.Empty;
     [Reactive] public partial bool IsSelected { get; set; }
+}
+
+/// <summary>
+/// Unified view model for a relay that shows its membership across all relay lists
+/// (General, DM/NIP-17, KeyPackage) with toggles for each.
+/// </summary>
+public partial class UnifiedRelayViewModel : ViewModelBase
+{
+    [Reactive] public partial string Url { get; set; } = string.Empty;
+    [Reactive] public partial bool IsConnected { get; set; }
+    [Reactive] public partial string? Error { get; set; }
+    [Reactive] public partial bool IsGeneral { get; set; }
+    [Reactive] public partial bool IsDm { get; set; }
+    [Reactive] public partial bool IsKp { get; set; }
+    [Reactive] public partial RelayUsage Usage { get; set; } = RelayUsage.Both;
+
+    private readonly ObservableAsPropertyHelper<string> _usageLabel;
+    public string UsageLabel => _usageLabel.Value;
+
+    public UnifiedRelayViewModel()
+    {
+        _usageLabel = this.WhenAnyValue(x => x.Usage)
+            .Select(u => u switch
+            {
+                RelayUsage.Read => "Read",
+                RelayUsage.Write => "Write",
+                _ => "R&W"
+            })
+            .ToProperty(this, x => x.UsageLabel);
+    }
 }
 
 public partial class DeviceViewModel : ViewModelBase

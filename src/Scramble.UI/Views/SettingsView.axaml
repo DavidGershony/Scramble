@@ -151,164 +151,99 @@
                 </StackPanel>
             </Border>
 
-            <!-- ── General Relays ── -->
-            <Border Classes="card" Padding="0">
-                <StackPanel>
-                    <Button Classes="icon" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                            Padding="16,12" Command="{Binding ToggleGeneralRelaySectionCommand}">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <PathIcon Data="M480 -120 160 -440l64 -64 256 256 256 -256 64 64 -320 320Z"
-                                      Width="14" Height="14" IsVisible="{Binding ShowGeneralRelaySection}" />
-                            <PathIcon Data="M560 -240 320 -480l64 -64 256 256 256 -256 64 64 -400 400Z"
-                                      Width="14" Height="14" IsVisible="{Binding !ShowGeneralRelaySection}">
-                                <PathIcon.RenderTransform>
-                                    <RotateTransform Angle="-90" />
-                                </PathIcon.RenderTransform>
-                            </PathIcon>
-                            <TextBlock Text="General Relays" FontWeight="SemiBold" FontSize="13" />
-                            <TextBlock Text="{Binding Relays.Count, StringFormat='({0})'}"
-                                       Classes="muted" FontSize="12" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Button>
-
-                    <StackPanel IsVisible="{Binding ShowGeneralRelaySection}" Spacing="8" Margin="16,0,16,16">
-                        <TextBlock Text="Your connected relays for sending and receiving messages"
-                                   Classes="muted" FontSize="11" TextWrapping="Wrap" />
-
-                        <ItemsControl x:Name="RelaysItemsControl" ItemsSource="{Binding Relays}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="vm:RelayViewModel">
-                                    <Border Background="{DynamicResource SurfaceSecondaryBrush}"
-                                            CornerRadius="6" Padding="10,6" Margin="0,2">
-                                        <Grid ColumnDefinitions="Auto,*,Auto,Auto">
-                                            <Panel Grid.Column="0" Width="10" Height="10" Margin="0,0,8,0">
-                                                <Ellipse Fill="{DynamicResource StatusOnlineBrush}" IsVisible="{Binding IsConnected}" />
-                                                <Ellipse Fill="{DynamicResource StatusErrorBrush}" IsVisible="{Binding !IsConnected}" />
-                                            </Panel>
-                                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                                <TextBlock Text="{Binding Url}" FontFamily="Consolas" FontSize="12" />
-                                                <TextBlock Text="{Binding Error}" Classes="muted" FontSize="11"
-                                                           IsVisible="{Binding Error, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                            </StackPanel>
-                                            <Button Grid.Column="2" Classes="icon" Margin="4,0"
-                                                    Command="{ReflectionBinding DataContext.CycleRelayUsageCommand, ElementName=RelaysItemsControl}"
-                                                    CommandParameter="{Binding}"
-                                                    ToolTip.Tip="Toggle relay usage: Read &amp; Write / Read / Write">
-                                                <TextBlock Text="{Binding UsageLabel}" FontSize="11" Opacity="0.7" />
-                                            </Button>
-                                            <Button Grid.Column="3" Classes="icon"
-                                                    Command="{ReflectionBinding DataContext.RemoveRelayCommand, ElementName=RelaysItemsControl}"
-                                                    CommandParameter="{Binding}">
-                                                <PathIcon Data="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"
-                                                          Width="14" Height="14" />
-                                            </Button>
-                                        </Grid>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-
-                        <!-- Reconnect only offline relays -->
-                        <Button Classes="secondary" Content="Reconnect offline relays"
-                                Command="{Binding ReconnectDisconnectedCommand}"
-                                HorizontalAlignment="Left" />
+            <!-- ── Your Relays (unified) ── -->
+            <Border Classes="card">
+                <StackPanel Spacing="12">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Your Relays" FontWeight="SemiBold" FontSize="16" />
+                        <TextBlock Text="{Binding AllRelays.Count, StringFormat='({0})'}"
+                                   Classes="muted" FontSize="12" VerticalAlignment="Center" />
                     </StackPanel>
-                </StackPanel>
-            </Border>
+                    <TextBlock Text="Manage which relay lists each relay belongs to. General = active connection, DM = direct messages (NIP-17), KP = KeyPackage discovery."
+                               Classes="muted" FontSize="11" TextWrapping="Wrap" />
 
-            <!-- ── DM Relays (kind 10050) ── -->
-            <Border Classes="card" Padding="0">
-                <StackPanel>
-                    <Button Classes="icon" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                            Padding="16,12" Command="{Binding ToggleDmRelaySectionCommand}">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <PathIcon Data="M480 -120 160 -440l64 -64 256 256 256 -256 64 64 -320 320Z"
-                                      Width="14" Height="14" IsVisible="{Binding ShowDmRelaySection}" />
-                            <PathIcon Data="M560 -240 320 -480l64 -64 256 256 256 -256 64 64 -400 400Z"
-                                      Width="14" Height="14" IsVisible="{Binding !ShowDmRelaySection}">
-                                <PathIcon.RenderTransform>
-                                    <RotateTransform Angle="-90" />
-                                </PathIcon.RenderTransform>
-                            </PathIcon>
-                            <TextBlock Text="DM Relays (NIP-17)" FontWeight="SemiBold" FontSize="13" />
-                            <TextBlock Text="{Binding DmRelays.Count, StringFormat='({0})'}"
-                                       Classes="muted" FontSize="12" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Button>
+                    <!-- Column headers -->
+                    <Grid ColumnDefinitions="Auto,*,32,32,32,Auto,Auto" Margin="0,4,0,0">
+                        <TextBlock Grid.Column="2" Text="Gen" FontSize="10" Classes="muted"
+                                   HorizontalAlignment="Center" />
+                        <TextBlock Grid.Column="3" Text="DM" FontSize="10" Classes="muted"
+                                   HorizontalAlignment="Center" />
+                        <TextBlock Grid.Column="4" Text="KP" FontSize="10" Classes="muted"
+                                   HorizontalAlignment="Center" />
+                    </Grid>
 
-                    <StackPanel IsVisible="{Binding ShowDmRelaySection}" Spacing="8" Margin="16,0,16,16">
-                        <TextBlock Text="Relays where others send you direct messages (kind 10050). When empty, your general relay list is used."
-                                   Classes="muted" FontSize="11" TextWrapping="Wrap" />
+                    <ItemsControl x:Name="AllRelaysControl" ItemsSource="{Binding AllRelays}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:UnifiedRelayViewModel">
+                                <Border Background="{DynamicResource SurfaceSecondaryBrush}"
+                                        CornerRadius="6" Padding="10,6" Margin="0,2">
+                                    <Grid ColumnDefinitions="Auto,*,32,32,32,Auto,Auto">
+                                        <!-- Connection status dot -->
+                                        <Panel Grid.Column="0" Width="10" Height="10" Margin="0,0,8,0">
+                                            <Ellipse Fill="{DynamicResource StatusOnlineBrush}"
+                                                     IsVisible="{Binding IsConnected}" />
+                                            <Ellipse Fill="{DynamicResource StatusErrorBrush}">
+                                                <Ellipse.IsVisible>
+                                                    <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                                        <Binding Path="IsGeneral" />
+                                                        <Binding Path="!IsConnected" />
+                                                    </MultiBinding>
+                                                </Ellipse.IsVisible>
+                                            </Ellipse>
+                                            <Ellipse Fill="{DynamicResource TextMutedBrush}"
+                                                     IsVisible="{Binding !IsGeneral}" />
+                                        </Panel>
 
-                        <ItemsControl x:Name="DmRelaysItemsControl" ItemsSource="{Binding DmRelays}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="sys:String">
-                                    <Border Background="{DynamicResource SurfaceSecondaryBrush}"
-                                            CornerRadius="6" Padding="10,6" Margin="0,2">
-                                        <Grid ColumnDefinitions="*,Auto">
-                                            <TextBlock Grid.Column="0" Text="{Binding}"
-                                                       FontFamily="Consolas" FontSize="12"
-                                                       VerticalAlignment="Center" />
-                                            <Button Grid.Column="1" Classes="icon"
-                                                    Command="{ReflectionBinding DataContext.RemoveDmRelayCommand, ElementName=DmRelaysItemsControl}"
-                                                    CommandParameter="{Binding}">
-                                                <PathIcon Data="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"
-                                                          Width="14" Height="14" />
-                                            </Button>
-                                        </Grid>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </StackPanel>
-                </StackPanel>
-            </Border>
+                                        <!-- Relay URL -->
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding Url}" FontFamily="Consolas" FontSize="12" />
+                                            <TextBlock Text="{Binding Error}" Classes="muted" FontSize="11"
+                                                       IsVisible="{Binding Error, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                        </StackPanel>
 
-            <!-- ── KeyPackage Relays (kind 10051) ── -->
-            <Border Classes="card" Padding="0">
-                <StackPanel>
-                    <Button Classes="icon" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                            Padding="16,12" Command="{Binding ToggleKpRelaySectionCommand}">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <PathIcon Data="M480 -120 160 -440l64 -64 256 256 256 -256 64 64 -320 320Z"
-                                      Width="14" Height="14" IsVisible="{Binding ShowKpRelaySection}" />
-                            <PathIcon Data="M560 -240 320 -480l64 -64 256 256 256 -256 64 64 -400 400Z"
-                                      Width="14" Height="14" IsVisible="{Binding !ShowKpRelaySection}">
-                                <PathIcon.RenderTransform>
-                                    <RotateTransform Angle="-90" />
-                                </PathIcon.RenderTransform>
-                            </PathIcon>
-                            <TextBlock Text="KeyPackage Relays" FontWeight="SemiBold" FontSize="13" />
-                            <TextBlock Text="{Binding KpRelays.Count, StringFormat='({0})'}"
-                                       Classes="muted" FontSize="12" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Button>
+                                        <!-- General toggle -->
+                                        <CheckBox Grid.Column="2" IsChecked="{Binding IsGeneral}"
+                                                  Command="{ReflectionBinding DataContext.SyncRelayMembershipCommand, ElementName=AllRelaysControl}"
+                                                  CommandParameter="{Binding}"
+                                                  HorizontalAlignment="Center" Padding="0" MinWidth="0" />
 
-                    <StackPanel IsVisible="{Binding ShowKpRelaySection}" Spacing="8" Margin="16,0,16,16">
-                        <TextBlock Text="Relays where your MLS KeyPackages are published (kind 10051). When empty, your general relay list is used."
-                                   Classes="muted" FontSize="11" TextWrapping="Wrap" />
+                                        <!-- DM toggle -->
+                                        <CheckBox Grid.Column="3" IsChecked="{Binding IsDm}"
+                                                  Command="{ReflectionBinding DataContext.SyncRelayMembershipCommand, ElementName=AllRelaysControl}"
+                                                  CommandParameter="{Binding}"
+                                                  HorizontalAlignment="Center" Padding="0" MinWidth="0" />
 
-                        <ItemsControl x:Name="KpRelaysItemsControl" ItemsSource="{Binding KpRelays}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="sys:String">
-                                    <Border Background="{DynamicResource SurfaceSecondaryBrush}"
-                                            CornerRadius="6" Padding="10,6" Margin="0,2">
-                                        <Grid ColumnDefinitions="*,Auto">
-                                            <TextBlock Grid.Column="0" Text="{Binding}"
-                                                       FontFamily="Consolas" FontSize="12"
-                                                       VerticalAlignment="Center" />
-                                            <Button Grid.Column="1" Classes="icon"
-                                                    Command="{ReflectionBinding DataContext.RemoveKpRelayCommand, ElementName=KpRelaysItemsControl}"
-                                                    CommandParameter="{Binding}">
-                                                <PathIcon Data="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"
-                                                          Width="14" Height="14" />
-                                            </Button>
-                                        </Grid>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </StackPanel>
+                                        <!-- KP toggle -->
+                                        <CheckBox Grid.Column="4" IsChecked="{Binding IsKp}"
+                                                  Command="{ReflectionBinding DataContext.SyncRelayMembershipCommand, ElementName=AllRelaysControl}"
+                                                  CommandParameter="{Binding}"
+                                                  HorizontalAlignment="Center" Padding="0" MinWidth="0" />
+
+                                        <!-- Usage cycle button -->
+                                        <Button Grid.Column="5" Classes="icon" Margin="4,0"
+                                                Command="{ReflectionBinding DataContext.CycleUnifiedRelayUsageCommand, ElementName=AllRelaysControl}"
+                                                CommandParameter="{Binding}"
+                                                ToolTip.Tip="Toggle relay usage: Read &amp; Write / Read / Write">
+                                            <TextBlock Text="{Binding UsageLabel}" FontSize="11" Opacity="0.7" />
+                                        </Button>
+
+                                        <!-- Remove button -->
+                                        <Button Grid.Column="6" Classes="icon"
+                                                Command="{ReflectionBinding DataContext.RemoveUnifiedRelayCommand, ElementName=AllRelaysControl}"
+                                                CommandParameter="{Binding}">
+                                            <PathIcon Data="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"
+                                                      Width="14" Height="14" />
+                                        </Button>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- Reconnect only offline relays -->
+                    <Button Classes="secondary" Content="Reconnect offline relays"
+                            Command="{Binding ReconnectDisconnectedCommand}"
+                            HorizontalAlignment="Left" />
                 </StackPanel>
             </Border>
 
