@@ -1525,7 +1525,7 @@ public partial class SettingsViewModel : ViewModelBase
                 {
                     ShortSlotId = group.Key.Length >= 8 ? group.Key[..8] : group.Key,
                     FullSlotId = group.Key,
-                    CreatedAt = latestKp.CreatedAt,
+                    CreatedAt = latestKp.CreatedAt.ToLocalTime(),
                     IsThisDevice = isThisDevice,
                     IsLost = lostSlotIds.Contains(group.Key),
                     CipherSuite = latestKp.CipherSuiteName,
@@ -1546,7 +1546,7 @@ public partial class SettingsViewModel : ViewModelBase
                 {
                     ShortSlotId = "(legacy)",
                     FullSlotId = "",
-                    CreatedAt = kp.CreatedAt,
+                    CreatedAt = kp.CreatedAt.ToLocalTime(),
                     IsThisDevice = string.IsNullOrEmpty(localSlotId), // likely this device if we have no local slot
                     CipherSuite = kp.CipherSuiteName,
                     IsSupported = kp.IsCipherSuiteSupported,

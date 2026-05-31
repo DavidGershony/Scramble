@@ -1907,7 +1907,7 @@ public partial class ChatItemViewModel : ViewModelBase
         Name = chat.Name;
         AvatarUrl = chat.AvatarUrl;
         LastMessagePreview = chat.LastMessage?.Content;
-        LastActivityAt = chat.LastActivityAt;
+        LastActivityAt = chat.LastActivityAt.ToLocalTime();
         UnreadCount = chat.UnreadCount;
         this.RaisePropertyChanged(nameof(HasUnread));
         IsPinned = chat.IsPinned;

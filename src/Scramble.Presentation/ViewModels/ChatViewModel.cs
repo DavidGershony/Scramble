@@ -1544,7 +1544,7 @@ public partial class MessageViewModel : ViewModelBase
         SenderName = message.Sender?.GetDisplayNameOrNpub() ?? "Anonymous";
         SenderAvatarUrl = message.Sender?.AvatarUrl;
         Content = StripNostrMentions(message.Content);
-        Timestamp = message.Timestamp;
+        Timestamp = message.Timestamp.ToLocalTime();
         IsFromCurrentUser = message.IsFromCurrentUser;
         Status = message.Status;
 
