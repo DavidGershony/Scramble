@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using Avalonia.Threading;
 using Scramble.Core.Configuration;
 using Scramble.Core.Services;
 using Scramble.MobileAndroid.Services;
@@ -9,6 +10,7 @@ using Scramble.MobileAndroid.Views;
 using Scramble.Presentation.Services;
 using Scramble.Presentation.ViewModels;
 using Scramble.UI.Services;
+using System.Linq;
 
 namespace Scramble.MobileAndroid;
 
@@ -25,6 +27,16 @@ namespace Scramble.MobileAndroid;
 /// </summary>
 public partial class App : Avalonia.Application
 {
+    private static readonly string[] ThemeNames = { "Nostr", "Golden Axe", "Cyber Teal", "AMOLED Black", "AMOLED Purple" };
+    private static readonly string[] ThemeUris =
+    {
+        "avares://Scramble.UI/Themes/NostrColors.axaml",
+        "avares://Scramble.UI/Themes/GoldenAxeTheme.axaml",
+        "avares://Scramble.UI/Themes/CyberTealTheme.axaml",
+        "avares://Scramble.UI/Themes/AmoledBlackTheme.axaml",
+        "avares://Scramble.UI/Themes/AmoledPurpleTheme.axaml",
+    };
+
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
     public override void OnFrameworkInitializationCompleted()
@@ -121,6 +133,12 @@ public partial class App : Avalonia.Application
                 return (data, file.Name, mime);
             };
 
+            // Theme switching — default to AMOLED Purple (same as desktop)
+            const int defaultThemeIndex = 4;
+            SettingsViewModel.AvailableThemeNames = ThemeNames;
+            SettingsViewModel.OnThemeChanged = index => Dispatcher.UIThread.Post(() => ApplyTheme(index));
+            ApplyTheme(defaultThemeIndex);
+
             singleView.MainView = new MobileMainView
             {
                 DataContext = shellViewModel
@@ -128,5 +146,33 @@ public partial class App : Avalonia.Application
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    private void ApplyTheme(int index)
+    {
+        if (index < 0 || index >= ThemeUris.Length) return;
+
+        try
+        {
+            var uri = new System.Uri(ThemeUris[index]);
+            var resources = Resources as Avalonia.Controls.ResourceDictionary;
+            if (resources == null) return;
+
+            // Remove old color dictionary
+            var existing = resources.MergedDictionaries
+                .OfType<Avalonia.Markup.Xaml.Styling.ResourceInclude>()
+                .FirstOrDefault(r => r.Source?.ToString().Contains("/Themes/") == true);
+
+            if (existing != null)
+                resources.MergedDictionaries.Remove(existing);
+
+            // Add new color dictionary
+            var newTheme = new Avalonia.Markup.Xaml.Styling.ResourceInclude(uri) { Source = uri };
+            resources.MergedDictionaries.Add(newTheme);
+        }
+        catch
+        {
+            // Silently fail — theme is cosmetic, not critical
+        }
     }
 }
