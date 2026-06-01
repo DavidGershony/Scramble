@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Reactive.Disposables;
+using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using Android.App;
 using Android.Content.PM;
@@ -6,6 +8,9 @@ using Android.Views;
 using AndroidX.Core.App;
 using AndroidX.Core.Content;
 using Avalonia.Android;
+using ReactiveUI;
+using Scramble.MobileAndroid.Services;
+using Scramble.Presentation.Services;
 using Scramble.Presentation.ViewModels;
 
 namespace Scramble.MobileAndroid;
@@ -33,20 +38,79 @@ public class MainActivity : AvaloniaMainActivity
 
     private int _nextRequestCode = 2000;
     private readonly ConcurrentDictionary<int, TaskCompletionSource<bool>> _pendingPermissions = new();
+    private CompositeDisposable _disposables = new();
 
     protected override void OnCreate(Android.OS.Bundle? savedInstanceState)
     {
         Current = this;
         base.OnCreate(savedInstanceState);
 
+        // Create notification channels (safe to call multiple times)
+        RelayForegroundService.CreateNotificationChannel(this);
+        MobileAndroidNotificationService.CreateChannel(this);
+
+        // Set platform notification service for the orchestrator
+        NotificationOrchestrator.NotificationService = new MobileAndroidNotificationService(this);
+
+        // Observe login state to start/stop relay foreground service
+        if (Shell != null)
+        {
+            Shell.WhenAnyValue(x => x.IsLoggedIn)
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(isLoggedIn =>
+                {
+                    if (isLoggedIn && Shell.MainViewModel != null)
+                        StartRelayServiceIfEnabled(Shell.MainViewModel);
+                    else
+                        RelayForegroundService.Stop(this);
+                })
+                .DisposeWith(_disposables);
+        }
+
         // Handle the Android back button / gesture to navigate within the app
         OnBackPressedDispatcher.AddCallback(this, new ScrambleBackCallback());
     }
 
+    protected override void OnPause()
+    {
+        base.OnPause();
+        NotificationOrchestrator.IsAppInForeground = false;
+    }
+
+    protected override void OnResume()
+    {
+        base.OnResume();
+        NotificationOrchestrator.IsAppInForeground = true;
+    }
+
     protected override void OnDestroy()
     {
+        _disposables.Dispose();
         if (Current == this) Current = null;
         base.OnDestroy();
+    }
+
+    /// <summary>
+    /// Observes the NotificationModeBackground and NotificationsEnabled settings
+    /// and starts/stops the relay foreground service accordingly.
+    /// The service only runs when BOTH the master toggle AND background mode are enabled.
+    /// </summary>
+    private void StartRelayServiceIfEnabled(MainViewModel mainVm)
+    {
+        var settingsVm = mainVm.SettingsViewModel;
+        settingsVm.WhenAnyValue(
+                x => x.NotificationsEnabled,
+                x => x.NotificationModeBackground,
+                (enabled, background) => enabled && background)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(shouldRun =>
+            {
+                if (shouldRun)
+                    RelayForegroundService.Start(this);
+                else
+                    RelayForegroundService.Stop(this);
+            })
+            .DisposeWith(_disposables);
     }
 
     /// <summary>

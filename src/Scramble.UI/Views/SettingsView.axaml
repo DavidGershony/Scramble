@@ -745,11 +745,21 @@
 
                     <!-- Mobile: opt-in background/push modes -->
                     <StackPanel Spacing="8" IsVisible="{Binding IsMobile}">
-                        <TextBlock Text="Choose how you want to receive notifications. Both options are off by default."
-                                   Classes="muted" FontSize="12" />
+                        <!-- Master toggle -->
+                        <Grid ColumnDefinitions="*,Auto">
+                            <StackPanel Grid.Column="0" Spacing="4">
+                                <TextBlock Text="Enable notifications" FontSize="14" />
+                                <TextBlock Text="Receive notifications for incoming messages when the app is in the background."
+                                           Classes="muted" FontSize="12" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <ToggleSwitch Grid.Column="1" IsChecked="{Binding NotificationsEnabled}"
+                                          VerticalAlignment="Center" />
+                        </Grid>
 
-                        <!-- Mode selection -->
-                        <StackPanel Spacing="8">
+                        <!-- Mode selection (visible when enabled) -->
+                        <StackPanel Spacing="8" IsVisible="{Binding NotificationsEnabled}">
+                            <TextBlock Text="Choose how you want to receive notifications."
+                                       Classes="muted" FontSize="12" />
                             <RadioButton IsChecked="{Binding NotificationModeBackground}">
                                 <TextBlock Text="Background service (keep relay connections alive)"
                                            TextWrapping="Wrap" />

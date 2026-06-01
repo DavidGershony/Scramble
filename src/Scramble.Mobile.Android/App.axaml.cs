@@ -21,9 +21,12 @@ namespace Scramble.MobileAndroid;
 /// be evaluated as a possible replacement for the native Scramble.Android app.
 ///
 /// What's intentionally NOT wired here (yet):
-///   - Push notifications, QR scanner.
-///   - Theme switching (defaults to NostrTheme via App.axaml StyleInclude).
+///   - Push notifications (UnifiedPush/ntfy), QR scanner.
 /// Each will be added only when its absence blocks an evaluation milestone.
+///
+/// Background notifications (foreground service + message notifications) are wired
+/// in MainActivity.cs — notification channels, NotificationOrchestrator, and the
+/// relay foreground service lifecycle are all managed there.
 /// </summary>
 public partial class App : Avalonia.Application
 {

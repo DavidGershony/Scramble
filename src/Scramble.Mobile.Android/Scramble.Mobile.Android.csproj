@@ -53,6 +53,7 @@
     <AndroidResource Include="..\Scramble.Android\Resources\mipmap-xxhdpi\ic_launcher.png"  Link="Resources\mipmap-xxhdpi\ic_launcher.png" />
     <AndroidResource Include="..\Scramble.Android\Resources\mipmap-xxxhdpi\ic_launcher.png" Link="Resources\mipmap-xxxhdpi\ic_launcher.png" />
     <AndroidResource Include="..\Scramble.Android\Resources\mipmap-xxhdpi\ic_launcher.png"  Link="Resources\drawable\Icon.png" />
+    <AndroidResource Include="..\Scramble.Android\Resources\drawable\ic_notification.xml"   Link="Resources\drawable\ic_notification.xml" />
   </ItemGroup>
 
 </Project>

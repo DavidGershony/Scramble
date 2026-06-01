@@ -24,6 +24,7 @@ public partial class SettingsViewModel : ViewModelBase
     private readonly IMessageService _messageService;
     private readonly IPlatformLauncher _launcher;
     private readonly PlatformContext? _platform;
+    private bool _isRestoringSettings;
 
     [Reactive] public partial string? PublicKeyHex { get; set; }
     [Reactive] public partial string? PrivateKeyHex { get; set; }
@@ -98,7 +99,8 @@ public partial class SettingsViewModel : ViewModelBase
     [Reactive] public partial string? BlossomStatus { get; set; }
     [Reactive] public partial bool BlossomStatusIsError { get; set; }
 
-    // Notifications — both default to false (opt-in only)
+    // Notifications — master toggle + mode selection (all default to off)
+    [Reactive] public partial bool NotificationsEnabled { get; set; }
     [Reactive] public partial bool NotificationModeBackground { get; set; }
 
     /// <summary>Whether the app is running as a desktop (non-mobile) host.</summary>
@@ -442,8 +444,37 @@ public partial class SettingsViewModel : ViewModelBase
                 }
             });
 
+        // Master notification toggle — when turned off, disable both modes;
+        // when turned on by user action, restore the previously saved mode.
+        this.WhenAnyValue(x => x.NotificationsEnabled)
+            .Skip(1) // skip initial default
+            .Subscribe(async enabled =>
+            {
+                try { await _storageService.SaveSettingAsync("notifications_enabled", enabled ? "true" : "false"); }
+                catch (Exception ex) { _logger.LogError(ex, "Failed to save notifications enabled"); }
+
+                if (!enabled)
+                {
+                    NotificationModeBackground = false;
+                    NotificationModePush = false;
+                }
+                else if (!_isRestoringSettings)
+                {
+                    // Restore previously saved mode when user explicitly turns notifications on
+                    try
+                    {
+                        var savedMode = await _storageService.GetSettingAsync("notification_mode");
+                        if (savedMode == "background")
+                            NotificationModeBackground = true;
+                        else if (savedMode == "push")
+                            NotificationModePush = true;
+                    }
+                    catch (Exception ex) { _logger.LogError(ex, "Failed to restore notification mode"); }
+                }
+            });
+
         // Persist notification mode; request POST_NOTIFICATIONS only when user explicitly
-        // enables background service mode (opt-in, not on startup).
+        // enables background service mode (opt-in, not on startup or settings restore).
         this.WhenAnyValue(x => x.NotificationModeBackground)
             .Skip(1) // skip initial value
             .Subscribe(async isBackground =>
@@ -453,7 +484,8 @@ public partial class SettingsViewModel : ViewModelBase
                     try { await _storageService.SaveSettingAsync("notification_mode", "background"); }
                     catch (Exception ex) { _logger.LogError(ex, "Failed to save notification mode"); }
 
-                    if (PermissionRequestFunc != null)
+                    // Only request permission on explicit user action, not when restoring saved settings
+                    if (!_isRestoringSettings && PermissionRequestFunc != null)
                     {
                         // Android 13+ requires POST_NOTIFICATIONS for the foreground service notification
                         const string postNotifications = "android.permission.POST_NOTIFICATIONS";
@@ -588,28 +620,49 @@ public partial class SettingsViewModel : ViewModelBase
         }
         _logger.LogInformation("Loaded Blossom server domain: {Domain}", BlossomServerDomain);
 
-        // Load notification settings — both modes default to off (opt-in)
-        var notifMode = await _storageService.GetSettingAsync("notification_mode");
-        if (notifMode == "push")
+        // Load notification settings — suppress permission prompts while restoring saved state
+        _isRestoringSettings = true;
+        try
         {
-            NotificationModePush = true;
-            NotificationModeBackground = false;
+            var notifEnabled = await _storageService.GetSettingAsync("notifications_enabled");
+            var notifMode = await _storageService.GetSettingAsync("notification_mode");
+
+            // Backward compatibility: if notifications_enabled key doesn't exist yet,
+            // derive it from whether a mode was previously saved.
+            if (notifEnabled == null)
+                NotificationsEnabled = notifMode is "background" or "push";
+            else
+                NotificationsEnabled = notifEnabled == "true";
+
+            if (NotificationsEnabled)
+            {
+                if (notifMode == "push")
+                {
+                    NotificationModePush = true;
+                    NotificationModeBackground = false;
+                }
+                else if (notifMode == "background")
+                {
+                    NotificationModeBackground = true;
+                    NotificationModePush = false;
+                }
+            }
+            // else: both remain false — user hasn't opted in yet
+
+            var notifNpub = await _storageService.GetSettingAsync("notification_server_npub");
+            if (!string.IsNullOrEmpty(notifNpub))
+                NotificationServerNpub = notifNpub;
+            var notifRelay = await _storageService.GetSettingAsync("notification_server_relay");
+            if (!string.IsNullOrEmpty(notifRelay))
+                NotificationServerRelay = notifRelay;
+            var notifPushUrl = await _storageService.GetSettingAsync("notification_push_url");
+            if (!string.IsNullOrEmpty(notifPushUrl))
+                NotificationPushUrl = notifPushUrl;
         }
-        else if (notifMode == "background")
+        finally
         {
-            NotificationModeBackground = true;
-            NotificationModePush = false;
+            _isRestoringSettings = false;
         }
-        // else: both remain false — user hasn't opted in yet
-        var notifNpub = await _storageService.GetSettingAsync("notification_server_npub");
-        if (!string.IsNullOrEmpty(notifNpub))
-            NotificationServerNpub = notifNpub;
-        var notifRelay = await _storageService.GetSettingAsync("notification_server_relay");
-        if (!string.IsNullOrEmpty(notifRelay))
-            NotificationServerRelay = notifRelay;
-        var notifPushUrl = await _storageService.GetSettingAsync("notification_push_url");
-        if (!string.IsNullOrEmpty(notifPushUrl))
-            NotificationPushUrl = notifPushUrl;
 
         // Load per-purpose relay lists
         var dmRelayJson = await _storageService.GetSettingAsync("dm_relay_urls");
