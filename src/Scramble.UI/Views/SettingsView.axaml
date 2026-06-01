@@ -10,7 +10,7 @@
 
     <Grid RowDefinitions="Auto,*">
         <!-- Fixed Header -->
-        <Border Grid.Row="0" Padding="24,16" Background="{DynamicResource BackgroundDarkBrush}">
+        <Border Grid.Row="0" Padding="16,12" Background="{DynamicResource BackgroundDarkBrush}">
             <Grid ColumnDefinitions="Auto,*">
                 <Button Grid.Column="0" Classes="icon" Margin="0,0,12,0"
                         Command="{Binding BackCommand}"
@@ -34,7 +34,7 @@
         <!-- ════════════════════════════════════════════════════════════ -->
         <TabItem Header="Account">
         <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel Spacing="24" Margin="24">
+        <StackPanel Spacing="24" Margin="16">
 
             <!-- Profile Section (hidden when using external signer) -->
             <Border Classes="card" IsVisible="{Binding CanEditProfile}">
@@ -54,23 +54,23 @@
                         </StackPanel>
                     </StackPanel>
 
-                    <Grid ColumnDefinitions="*,16,*" RowDefinitions="Auto,12,Auto">
-                        <StackPanel Grid.Column="0" Grid.Row="0" Spacing="4">
+                    <StackPanel Spacing="12">
+                        <StackPanel Spacing="4">
                             <TextBlock Text="Display Name" Classes="muted" FontSize="12" />
                             <TextBox Text="{Binding DisplayName}" PlaceholderText="Your display name" />
                         </StackPanel>
 
-                        <StackPanel Grid.Column="2" Grid.Row="0" Spacing="4">
+                        <StackPanel Spacing="4">
                             <TextBlock Text="Username" Classes="muted" FontSize="12" />
                             <TextBox Text="{Binding Username}" PlaceholderText="@username" />
                         </StackPanel>
 
-                        <StackPanel Grid.Column="0" Grid.Row="2" Grid.ColumnSpan="3" Spacing="4">
+                        <StackPanel Spacing="4">
                             <TextBlock Text="About" Classes="muted" FontSize="12" />
                             <TextBox Text="{Binding About}" PlaceholderText="Tell others about yourself..."
                                      AcceptsReturn="True" TextWrapping="Wrap" Height="80" />
                         </StackPanel>
-                    </Grid>
+                    </StackPanel>
 
                     <Button Classes="primary" Content="Save Profile" Command="{Binding SaveProfileCommand}"
                             HorizontalAlignment="Left" />
@@ -121,27 +121,30 @@
                     </ItemsControl>
 
                     <!-- Custom relay input -->
-                    <Grid ColumnDefinitions="Auto,*,Auto">
-                        <TextBlock Grid.Column="0" Text="wss://" FontFamily="Consolas,monospace"
-                                   FontSize="13" VerticalAlignment="Center" Opacity="0.5" Margin="0,0,2,0" />
-                        <TextBox Grid.Column="1" Text="{Binding CustomRelayDomain}"
-                                 PlaceholderText="custom.relay.com" FontSize="13">
-                            <TextBox.KeyBindings>
-                                <KeyBinding Gesture="Enter" Command="{Binding AddCustomRelayCommand}" />
-                            </TextBox.KeyBindings>
-                        </TextBox>
-                        <Button Grid.Column="2" Classes="secondary" Content="Add Custom"
-                                Command="{Binding AddCustomRelayCommand}" Margin="8,0,0,0" />
-                    </Grid>
+                    <StackPanel Spacing="8">
+                        <Grid ColumnDefinitions="Auto,*">
+                            <TextBlock Grid.Column="0" Text="wss://" FontFamily="Consolas,monospace"
+                                       FontSize="13" VerticalAlignment="Center" Opacity="0.5" Margin="0,0,2,0" />
+                            <TextBox Grid.Column="1" Text="{Binding CustomRelayDomain}"
+                                     PlaceholderText="custom.relay.com" FontSize="13">
+                                <TextBox.KeyBindings>
+                                    <KeyBinding Gesture="Enter" Command="{Binding AddCustomRelayCommand}" />
+                                </TextBox.KeyBindings>
+                            </TextBox>
+                        </Grid>
+                        <Button Classes="secondary" Content="Add Custom"
+                                Command="{Binding AddCustomRelayCommand}"
+                                HorizontalAlignment="Left" />
+                    </StackPanel>
 
                     <!-- Target list checkboxes -->
                     <StackPanel Spacing="4">
                         <TextBlock Text="Add to:" FontSize="13" FontWeight="SemiBold" />
-                        <StackPanel Orientation="Horizontal" Spacing="16">
-                            <CheckBox IsChecked="{Binding AddToGeneral}" Content="General" FontSize="13" />
-                            <CheckBox IsChecked="{Binding AddToDm}" Content="DM (NIP-17)" FontSize="13" />
+                        <WrapPanel Orientation="Horizontal">
+                            <CheckBox IsChecked="{Binding AddToGeneral}" Content="General" FontSize="13" Margin="0,0,12,0" />
+                            <CheckBox IsChecked="{Binding AddToDm}" Content="DM (NIP-17)" FontSize="13" Margin="0,0,12,0" />
                             <CheckBox IsChecked="{Binding AddToKp}" Content="KeyPackage" FontSize="13" />
-                        </StackPanel>
+                        </WrapPanel>
                     </StackPanel>
 
                     <!-- Add selected button -->
@@ -163,7 +166,7 @@
                                Classes="muted" FontSize="11" TextWrapping="Wrap" />
 
                     <!-- Column headers -->
-                    <Grid ColumnDefinitions="Auto,*,32,32,32,Auto,Auto" Margin="0,4,0,0">
+                    <Grid ColumnDefinitions="Auto,*,28,28,28,Auto,Auto" Margin="0,4,0,0">
                         <TextBlock Grid.Column="2" Text="Gen" FontSize="10" Classes="muted"
                                    HorizontalAlignment="Center" />
                         <TextBlock Grid.Column="3" Text="DM" FontSize="10" Classes="muted"
@@ -176,10 +179,10 @@
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:UnifiedRelayViewModel">
                                 <Border Background="{DynamicResource SurfaceSecondaryBrush}"
-                                        CornerRadius="6" Padding="10,6" Margin="0,2">
-                                    <Grid ColumnDefinitions="Auto,*,32,32,32,Auto,Auto">
+                                        CornerRadius="6" Padding="6,6" Margin="0,2">
+                                    <Grid ColumnDefinitions="Auto,*,28,28,28,Auto,Auto">
                                         <!-- Connection status dot -->
-                                        <Panel Grid.Column="0" Width="10" Height="10" Margin="0,0,8,0">
+                                        <Panel Grid.Column="0" Width="10" Height="10" Margin="0,0,6,0">
                                             <Ellipse Fill="{DynamicResource StatusOnlineBrush}"
                                                      IsVisible="{Binding IsConnected}" />
                                             <Ellipse Fill="{DynamicResource StatusErrorBrush}">
@@ -195,8 +198,9 @@
                                         </Panel>
 
                                         <!-- Relay URL -->
-                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                            <TextBlock Text="{Binding Url}" FontFamily="Consolas" FontSize="12" />
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" MinWidth="0">
+                                            <TextBlock Text="{Binding Url}" FontFamily="Consolas" FontSize="12"
+                                                       TextTrimming="CharacterEllipsis" />
                                             <TextBlock Text="{Binding Error}" Classes="muted" FontSize="11"
                                                        IsVisible="{Binding Error, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                         </StackPanel>
@@ -220,7 +224,7 @@
                                                   HorizontalAlignment="Center" Padding="0" MinWidth="0" />
 
                                         <!-- Usage cycle button -->
-                                        <Button Grid.Column="5" Classes="icon" Margin="4,0"
+                                        <Button Grid.Column="5" Classes="icon" Margin="2,0"
                                                 Command="{ReflectionBinding DataContext.CycleUnifiedRelayUsageCommand, ElementName=AllRelaysControl}"
                                                 CommandParameter="{Binding}"
                                                 ToolTip.Tip="Toggle relay usage: Read &amp; Write / Read / Write">
@@ -254,13 +258,15 @@
                     <TextBlock Text="Your relay preferences as published on the Nostr network (kind 10002)"
                                Classes="secondary" FontSize="13" TextWrapping="Wrap" />
 
-                    <StackPanel Orientation="Horizontal" Spacing="8">
+                    <WrapPanel Orientation="Horizontal">
                         <Button Classes="secondary" Content="Fetch from Network"
                                 Command="{Binding FetchNip65Command}"
-                                IsEnabled="{Binding !IsFetchingNip65}" />
+                                IsEnabled="{Binding !IsFetchingNip65}"
+                                Margin="0,0,8,8" />
                         <Button Classes="primary" Content="Publish Relay List"
-                                Command="{Binding PublishRelayListCommand}" />
-                    </StackPanel>
+                                Command="{Binding PublishRelayListCommand}"
+                                Margin="0,0,0,8" />
+                    </WrapPanel>
 
                     <!-- Fetch status -->
                     <TextBlock Text="{Binding Nip65Status}"
@@ -282,7 +288,8 @@
                                     <Grid ColumnDefinitions="*,Auto">
                                         <TextBlock Grid.Column="0" Text="{Binding Url}"
                                                    FontFamily="Consolas" FontSize="12"
-                                                   VerticalAlignment="Center" />
+                                                   VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis" />
                                         <TextBlock Grid.Column="1" Text="{Binding UsageLabel}"
                                                    FontSize="11" Opacity="0.6"
                                                    VerticalAlignment="Center" Margin="8,0,0,0" />
@@ -562,7 +569,7 @@
         <!-- ════════════════════════════════════════════════════════════ -->
         <TabItem Header="App">
         <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel Spacing="24" Margin="24">
+        <StackPanel Spacing="24" Margin="16">
 
             <!-- Theme Section -->
             <Border Classes="card">
@@ -634,21 +641,22 @@
                                    Classes="muted" FontSize="12" />
 
                         <!-- Display mode: label showing current domain -->
-                        <StackPanel IsVisible="{Binding !IsEditingBlossom}" Orientation="Horizontal" Spacing="8">
-                            <TextBlock Text="https://" FontFamily="Consolas,monospace" FontSize="13"
+                        <Grid IsVisible="{Binding !IsEditingBlossom}" ColumnDefinitions="Auto,*,Auto">
+                            <TextBlock Grid.Column="0" Text="https://" FontFamily="Consolas,monospace" FontSize="13"
                                        VerticalAlignment="Center" Opacity="0.5" />
-                            <TextBlock Text="{Binding BlossomServerDomain}" FontFamily="Consolas,monospace"
-                                       FontSize="13" VerticalAlignment="Center" Cursor="Hand" />
-                            <Button Classes="icon" Command="{Binding EditBlossomCommand}"
-                                    ToolTip.Tip="Edit" Padding="4">
+                            <TextBlock Grid.Column="1" Text="{Binding BlossomServerDomain}" FontFamily="Consolas,monospace"
+                                       FontSize="13" VerticalAlignment="Center" Cursor="Hand"
+                                       TextTrimming="CharacterEllipsis" />
+                            <Button Grid.Column="2" Classes="icon" Command="{Binding EditBlossomCommand}"
+                                    ToolTip.Tip="Edit" Padding="4" Margin="4,0,0,0">
                                 <PathIcon Data="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1.003 1.003 0 0 0 0-1.42l-2.34-2.34a1.003 1.003 0 0 0-1.42 0l-1.83 1.83 3.75 3.75 1.84-1.82z"
                                           Width="14" Height="14" />
                             </Button>
-                        </StackPanel>
+                        </Grid>
 
                         <!-- Edit mode: input + save/cancel -->
-                        <StackPanel IsVisible="{Binding IsEditingBlossom}" Spacing="4">
-                            <Grid ColumnDefinitions="Auto,*,Auto,Auto">
+                        <StackPanel IsVisible="{Binding IsEditingBlossom}" Spacing="6">
+                            <Grid ColumnDefinitions="Auto,*">
                                 <TextBlock Grid.Column="0" Text="https://" FontFamily="Consolas,monospace"
                                            FontSize="13" VerticalAlignment="Center" Opacity="0.5" Margin="0,0,2,0" />
                                 <TextBox Grid.Column="1" Text="{Binding BlossomServerDomain}"
@@ -658,11 +666,13 @@
                                         <KeyBinding Gesture="Enter" Command="{Binding SaveBlossomCommand}" />
                                     </TextBox.KeyBindings>
                                 </TextBox>
-                                <Button Grid.Column="2" Classes="primary" Content="Save"
-                                        Command="{Binding SaveBlossomCommand}" Margin="8,0,0,0" />
-                                <Button Grid.Column="3" Classes="secondary" Content="Cancel"
-                                        Command="{Binding CancelEditBlossomCommand}" Margin="4,0,0,0" />
                             </Grid>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button Classes="primary" Content="Save"
+                                        Command="{Binding SaveBlossomCommand}" />
+                                <Button Classes="secondary" Content="Cancel"
+                                        Command="{Binding CancelEditBlossomCommand}" />
+                            </StackPanel>
                         </StackPanel>
 
                         <!-- Validation status -->
@@ -740,13 +750,16 @@
 
                         <!-- Mode selection -->
                         <StackPanel Spacing="8">
-                            <RadioButton Content="Background service (keep relay connections alive)"
-                                         IsChecked="{Binding NotificationModeBackground}" />
+                            <RadioButton IsChecked="{Binding NotificationModeBackground}">
+                                <TextBlock Text="Background service (keep relay connections alive)"
+                                           TextWrapping="Wrap" />
+                            </RadioButton>
                             <TextBlock Text="The app keeps relay connections open in the background. Uses more battery but works without a notification server. Requires notification permission on Android 13+."
-                                       Classes="muted" FontSize="12"
+                                       Classes="muted" FontSize="12" TextWrapping="Wrap"
                                        IsVisible="{Binding NotificationModeBackground}" />
-                            <RadioButton Content="UnifiedPush (via ntfy)"
-                                         IsChecked="{Binding NotificationModePush}" />
+                            <RadioButton IsChecked="{Binding NotificationModePush}">
+                                <TextBlock Text="UnifiedPush (via ntfy)" TextWrapping="Wrap" />
+                            </RadioButton>
                         </StackPanel>
                     </StackPanel>
 
@@ -776,12 +789,12 @@
                                      PlaceholderText="https://ntfy.sh/your-topic" />
                         </StackPanel>
 
-                        <StackPanel Orientation="Horizontal" Spacing="8">
+                        <WrapPanel Orientation="Horizontal">
                             <Button Classes="secondary" Content="Generate topic"
-                                    Command="{Binding GeneratePushTopicCommand}" />
+                                    Command="{Binding GeneratePushTopicCommand}" Margin="0,0,8,8" />
                             <Button Classes="secondary" Content="Open in ntfy"
-                                    Command="{Binding SubscribeInNtfyCommand}" />
-                        </StackPanel>
+                                    Command="{Binding SubscribeInNtfyCommand}" Margin="0,0,0,8" />
+                        </WrapPanel>
 
                         <Button Classes="primary" Content="Register"
                                 Command="{Binding RegisterNotificationsCommand}"
@@ -808,21 +821,12 @@
 
             <!-- Developer Section -->
             <Border Classes="card">
-                <StackPanel Spacing="16">
+                <StackPanel Spacing="12">
                     <TextBlock Text="Developer" FontWeight="SemiBold" FontSize="16" />
-
-                    <!-- View Logs -->
-                    <StackPanel Spacing="8">
-                        <TextBlock Text="Application Logs" Classes="secondary" FontSize="13" />
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button Classes="secondary" Content="View Logs"
-                                    Command="{Binding ViewLogsCommand}" />
-                            <Button Classes="secondary" Content="Open Log Folder"
-                                    Command="{Binding OpenLogFolderCommand}" />
-                            <Button Classes="secondary" Content="Export Logs"
-                                    Command="{Binding ExportLogsCommand}" />
-                        </StackPanel>
-                    </StackPanel>
+                    <TextBlock Text="Application Logs" Classes="secondary" FontSize="13" />
+                    <Button Classes="secondary" Content="View Logs"
+                            Command="{Binding ViewLogsCommand}"
+                            HorizontalAlignment="Left" />
                 </StackPanel>
             </Border>
 
@@ -832,7 +836,7 @@
                     <TextBlock Text="About Scramble" FontWeight="SemiBold" FontSize="16" />
                     <TextBlock Text="Scramble is an open-source chat application built with Nostr and the Marmot Protocol (MLS) for end-to-end encrypted messaging."
                                Classes="secondary" TextWrapping="Wrap" />
-                    <StackPanel Orientation="Horizontal" Spacing="16">
+                    <StackPanel Spacing="4">
                         <TextBlock Text="Version 0.1.0" Classes="muted" />
                         <TextBlock Text="Built with Avalonia" Classes="muted" />
                     </StackPanel>
