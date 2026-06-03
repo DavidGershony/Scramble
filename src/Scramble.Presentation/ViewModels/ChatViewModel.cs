@@ -342,29 +342,42 @@ public partial class ChatViewModel : ViewModelBase
         {
             if (_currentChat == null || !IsCurrentUserAdmin) return;
 
-            var newRole = member.IsAdmin ? "member" : "admin";
+            var promoting = !member.IsAdmin;
             _logger.LogInformation("ToggleAdmin: {Action} {PubKey} in {Chat}",
-                member.IsAdmin ? "Demoting" : "Promoting",
+                promoting ? "Promoting" : "Demoting",
                 member.PublicKeyHex[..Math.Min(12, member.PublicKeyHex.Length)],
                 _currentChat.Name);
 
-            if (newRole == "admin")
+            // Build the new admin list from the current chat state
+            var newAdmins = new List<string>(_currentChat.AdminPublicKeys
+                .Select(pk => pk.ToLowerInvariant()));
+            var targetPk = member.PublicKeyHex.ToLowerInvariant();
+
+            if (promoting)
             {
-                if (!_currentChat.AdminPublicKeys.Contains(member.PublicKeyHex.ToLowerInvariant()))
-                    _currentChat.AdminPublicKeys.Add(member.PublicKeyHex.ToLowerInvariant());
+                if (!newAdmins.Contains(targetPk))
+                    newAdmins.Add(targetPk);
             }
             else
             {
-                _currentChat.AdminPublicKeys.Remove(member.PublicKeyHex.ToLowerInvariant());
+                newAdmins.Remove(targetPk);
             }
 
-            member.IsAdmin = newRole == "admin";
-            await _storageService.SaveChatAsync(_currentChat);
+            try
+            {
+                // Stage + publish + merge via MLS GroupContextExtensions proposal
+                await _messageService.UpdateAdminPubkeysAsync(_currentChat.Id, newAdmins);
+                member.IsAdmin = promoting;
 
-            // Send system message to notify group
-            var action = newRole == "admin" ? "promoted to admin" : "removed from admin";
-            await _messageService.SendMessageAsync(_currentChat.Id,
-                $"[System] {member.DisplayName} was {action}");
+                // Send system message to notify group
+                var action = promoting ? "promoted to admin" : "removed from admin";
+                await _messageService.SendMessageAsync(_currentChat.Id,
+                    $"[System] {member.DisplayName} was {action}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "ToggleAdmin: failed to update admin list via MLS");
+            }
         });
 
         SaveGroupNameCommand = ReactiveCommand.CreateFromTask(async () =>

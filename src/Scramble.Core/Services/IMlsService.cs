@@ -161,6 +161,16 @@ public interface IMlsService
     List<string> GetAdminPubkeys(byte[] groupId);
 
     /// <summary>
+    /// Stage a commit that updates the group's admin public keys in the 0xF2EE extension.
+    /// Returns the commit bytes for MIP-03 publish-then-merge flow.
+    /// Call <see cref="MergeStagedAsync"/> after the relay confirms the commit.
+    /// </summary>
+    /// <param name="groupId">The MLS group identifier.</param>
+    /// <param name="adminPubkeysHex">The new admin public keys (lowercase hex strings).</param>
+    /// <returns>The commit bytes to encrypt and publish as a kind 445 event.</returns>
+    Task<byte[]> StageUpdateAdminPubkeysAsync(byte[] groupId, List<string> adminPubkeysHex);
+
+    /// <summary>
     /// Get the number of KeyPackages for which we have private key material stored locally.
     /// </summary>
     int GetStoredKeyPackageCount();

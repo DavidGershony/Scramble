@@ -1360,6 +1360,34 @@ public class ManagedMlsService : IMlsService
         }
     }
 
+    /// <inheritdoc />
+    public async Task<byte[]> StageUpdateAdminPubkeysAsync(byte[] groupId, List<string> adminPubkeysHex)
+    {
+        EnsureInitialized();
+
+        // Read current group data so we preserve name, relays, image, etc.
+        var currentData = _mdk!.GetNostrGroupData(groupId)
+            ?? throw new InvalidOperationException("Group has no 0xF2EE extension — cannot update admin pubkeys");
+
+        // Build concatenated 32-byte admin pubkeys
+        var adminBytes = new byte[adminPubkeysHex.Count * 32];
+        for (int i = 0; i < adminPubkeysHex.Count; i++)
+        {
+            var pkBytes = Convert.FromHexString(adminPubkeysHex[i]);
+            if (pkBytes.Length != 32)
+                throw new ArgumentException($"Admin pubkey at index {i} is {pkBytes.Length} bytes, expected 32");
+            Array.Copy(pkBytes, 0, adminBytes, i * 32, 32);
+        }
+
+        currentData.AdminPubkeys = adminBytes;
+
+        var result = await _mdk.StageGroupDataUpdateAsync(groupId, currentData);
+        _logger.LogInformation("Staged admin pubkey update for group, {Count} admins, commit ready for publish",
+            adminPubkeysHex.Count);
+
+        return result.CommitMessageBytes;
+    }
+
     // TODO: DIAGNOSTIC ONLY — remove after cross-impl epoch divergence is resolved
     /// <summary>
     /// Get the MIP-03 exporter secret for a group (for diagnostic/comparison purposes).

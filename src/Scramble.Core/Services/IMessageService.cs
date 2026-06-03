@@ -165,6 +165,14 @@ public interface IMessageService
     Task RemoveMemberAsync(string chatId, string memberPublicKey);
 
     /// <summary>
+    /// Update the admin list for a group. Stages an MLS commit with a
+    /// GroupContextExtensions proposal, publishes it, and merges locally.
+    /// Only callable by a current admin. The change propagates to all
+    /// group members via the MLS group state.
+    /// </summary>
+    Task UpdateAdminPubkeysAsync(string chatId, List<string> adminPubkeysHex);
+
+    /// <summary>
     /// Leave a group chat.
     /// </summary>
     Task LeaveGroupAsync(string chatId);

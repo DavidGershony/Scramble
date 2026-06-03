@@ -1126,6 +1126,9 @@ public class MessageService : IMessageService, IDisposable
 
     public async Task AddMemberAsync(string chatId, string memberPublicKey)
     {
+        if (_currentUser == null)
+            throw new InvalidOperationException("User not logged in");
+
         _logger.LogInformation("AddMember: adding {Member} to chat {ChatId}",
             memberPublicKey[..Math.Min(16, memberPublicKey.Length)], chatId);
 
@@ -1134,6 +1137,15 @@ public class MessageService : IMessageService, IDisposable
 
         if (chat.MlsGroupId == null)
             throw new InvalidOperationException("Cannot add member to non-MLS chat");
+
+        // Admin enforcement: only admins can add members.
+        // Empty admin list (legacy groups) allows any member to add — preserves backward compat.
+        var adminPubkeys = _mlsService.GetAdminPubkeys(chat.MlsGroupId);
+        if (adminPubkeys.Count > 0 &&
+            !adminPubkeys.Contains(_currentUser.PublicKeyHex.ToLowerInvariant()))
+        {
+            throw new InvalidOperationException("Only group admins can add members");
+        }
 
         var groupIdHex = Convert.ToHexString(chat.MlsGroupId).ToLowerInvariant();
 
@@ -1377,11 +1389,23 @@ public class MessageService : IMessageService, IDisposable
 
     public async Task RemoveMemberAsync(string chatId, string memberPublicKey)
     {
+        if (_currentUser == null)
+            throw new InvalidOperationException("User not logged in");
+
         var chat = await _storageService.GetChatAsync(chatId)
             ?? throw new ArgumentException("Chat not found", nameof(chatId));
 
         if (chat.MlsGroupId == null)
             throw new InvalidOperationException("Cannot remove member from non-MLS chat");
+
+        // Admin enforcement: only admins can remove members.
+        // Empty admin list (legacy groups) allows any member to remove — preserves backward compat.
+        var adminPubkeys = _mlsService.GetAdminPubkeys(chat.MlsGroupId);
+        if (adminPubkeys.Count > 0 &&
+            !adminPubkeys.Contains(_currentUser.PublicKeyHex.ToLowerInvariant()))
+        {
+            throw new InvalidOperationException("Only group admins can remove members");
+        }
 
         // MIP-03 §"Commit Message Race Conditions" — stage, publish, merge
         var commitData = await _mlsService.StageRemoveMemberAsync(chat.MlsGroupId, memberPublicKey);
@@ -1404,6 +1428,55 @@ public class MessageService : IMessageService, IDisposable
         catch (PublishUnconfirmedException ex)
         {
             _logger.LogWarning(ex, "RemoveMember: commit publish failed, rolling back");
+            await _mlsService.ClearStagedAsync(chat.MlsGroupId);
+            throw;
+        }
+    }
+
+    public async Task UpdateAdminPubkeysAsync(string chatId, List<string> adminPubkeysHex)
+    {
+        if (_currentUser == null)
+            throw new InvalidOperationException("User not logged in");
+
+        var chat = await _storageService.GetChatAsync(chatId)
+            ?? throw new ArgumentException("Chat not found", nameof(chatId));
+
+        if (chat.MlsGroupId == null)
+            throw new InvalidOperationException("Cannot update admins for non-MLS chat");
+
+        // Only current admins can change the admin list.
+        // Empty admin list (legacy groups) allows any member — preserves backward compat.
+        var currentAdmins = _mlsService.GetAdminPubkeys(chat.MlsGroupId);
+        if (currentAdmins.Count > 0 &&
+            !currentAdmins.Contains(_currentUser.PublicKeyHex.ToLowerInvariant()))
+        {
+            throw new InvalidOperationException("Only group admins can update the admin list");
+        }
+
+        // Normalize to lowercase
+        var normalized = adminPubkeysHex.Select(pk => pk.ToLowerInvariant()).Distinct().ToList();
+
+        // MIP-03 stage-publish-merge pattern
+        var commitData = await _mlsService.StageUpdateAdminPubkeysAsync(chat.MlsGroupId, normalized);
+
+        try
+        {
+            var groupIdHex = Convert.ToHexString(chat.MlsGroupId).ToLowerInvariant();
+            await _nostrService.PublishGroupMessageAsync(commitData, groupIdHex, _currentUser.PrivateKeyHex);
+
+            await _mlsService.MergeStagedAsync(chat.MlsGroupId);
+
+            // Update local chat state
+            chat.AdminPublicKeys = normalized;
+            await _storageService.SaveChatAsync(chat);
+            _chatUpdates.OnNext(chat);
+
+            _logger.LogInformation("UpdateAdminPubkeys: updated admin list for chat {ChatId}, admins={Count}",
+                chatId, normalized.Count);
+        }
+        catch (PublishUnconfirmedException ex)
+        {
+            _logger.LogWarning(ex, "UpdateAdminPubkeys: commit publish failed, rolling back");
             await _mlsService.ClearStagedAsync(chat.MlsGroupId);
             throw;
         }
@@ -2189,6 +2262,27 @@ public class MessageService : IMessageService, IDisposable
         {
             _logger.LogInformation("HandleGroupMessage: processed commit for group {GroupId}, epoch advanced",
                 groupIdHex[..Math.Min(16, groupIdHex.Length)]);
+
+            // Refresh admin list from MLS state — the commit may have included a
+            // GroupContextExtensions proposal that changed AdminPubkeys in the 0xF2EE extension.
+            try
+            {
+                var updatedAdmins = _mlsService.GetAdminPubkeys(chat.MlsGroupId!);
+                if (updatedAdmins.Count > 0 && !updatedAdmins.SequenceEqual(chat.AdminPublicKeys))
+                {
+                    _logger.LogInformation("HandleGroupMessage: admin list updated for group {GroupId}: [{Admins}]",
+                        groupIdHex[..Math.Min(16, groupIdHex.Length)],
+                        string.Join(", ", updatedAdmins.Select(a => a[..Math.Min(16, a.Length)])));
+                    chat.AdminPublicKeys = updatedAdmins;
+                    await _storageService.SaveChatAsync(chat);
+                    _chatUpdates.OnNext(chat);
+                }
+            }
+            catch (Exception adminEx)
+            {
+                _logger.LogWarning(adminEx, "HandleGroupMessage: failed to refresh admin list after commit");
+            }
+
             return;
         }
 

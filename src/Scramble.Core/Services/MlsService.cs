@@ -313,6 +313,12 @@ public class MlsService : IMlsService
         return new List<string>();
     }
 
+    public Task<byte[]> StageUpdateAdminPubkeysAsync(byte[] groupId, List<string> adminPubkeysHex)
+    {
+        // Rust MDK doesn't expose GroupContextExtensions proposals — not supported.
+        throw new NotSupportedException("Admin pubkey updates are not supported with the Rust MDK backend");
+    }
+
     public int GetStoredKeyPackageCount()
     {
         // Rust MDK stores KeyPackages internally in MdkMemoryStorage.
