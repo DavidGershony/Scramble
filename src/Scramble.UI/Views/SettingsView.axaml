@@ -488,9 +488,9 @@
                                 <DataTemplate x:DataType="vm:DeviceViewModel">
                                     <Border Background="{DynamicResource SurfaceSecondaryBrush}"
                                             CornerRadius="6" Padding="10,8" Margin="0,2">
-                                        <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto">
+                                        <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto,Auto">
                                             <!-- Device status dot -->
-                                            <Panel Grid.Column="0" Grid.RowSpan="2" Width="10" Height="10"
+                                            <Panel Grid.Column="0" Grid.RowSpan="3" Width="10" Height="10"
                                                    Margin="0,0,10,0" VerticalAlignment="Center">
                                                 <Ellipse Fill="{DynamicResource StatusOnlineBrush}" IsVisible="{Binding IsThisDevice}" />
                                                 <Ellipse Fill="{DynamicResource StatusErrorBrush}" IsVisible="{Binding IsLost}" />
@@ -504,9 +504,10 @@
                                                 </Ellipse>
                                             </Panel>
 
-                                            <!-- Slot ID + label -->
+                                            <!-- Slot ID + label badges -->
                                             <StackPanel Grid.Column="1" Grid.Row="0" Orientation="Horizontal" Spacing="8">
-                                                <TextBlock Text="{Binding ShortSlotId}" FontFamily="Consolas" FontSize="12" />
+                                                <TextBlock Text="{Binding ShortSlotId}" FontFamily="Consolas" FontSize="12"
+                                                           ToolTip.Tip="{Binding FullSlotId}" />
                                                 <Border Background="{DynamicResource NostrPurpleBrush}"
                                                         CornerRadius="4" Padding="6,1"
                                                         IsVisible="{Binding IsThisDevice}">
@@ -517,15 +518,32 @@
                                                         IsVisible="{Binding IsLost}">
                                                     <TextBlock Text="Lost" FontSize="10" Foreground="White" />
                                                 </Border>
+                                                <Border Background="{DynamicResource TextMutedBrush}"
+                                                        CornerRadius="4" Padding="6,1">
+                                                    <Border.IsVisible>
+                                                        <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                                            <Binding Path="!IsThisDevice" />
+                                                            <Binding Path="!IsLost" />
+                                                        </MultiBinding>
+                                                    </Border.IsVisible>
+                                                    <TextBlock Text="Peer" FontSize="10" Foreground="White" />
+                                                </Border>
+                                            </StackPanel>
+
+                                            <!-- Cipher suite + KP count -->
+                                            <StackPanel Grid.Column="1" Grid.Row="1" Orientation="Horizontal" Spacing="8">
+                                                <TextBlock Text="{Binding CipherSuite}" Classes="muted" FontSize="11" />
+                                                <TextBlock Text="{Binding KeyPackageCount, StringFormat='{}{0} KP(s)'}"
+                                                           Classes="muted" FontSize="11" />
                                             </StackPanel>
 
                                             <!-- Date -->
-                                            <TextBlock Grid.Column="1" Grid.Row="1"
+                                            <TextBlock Grid.Column="1" Grid.Row="2"
                                                        Text="{Binding CreatedAt, StringFormat='{}{0:yyyy-MM-dd HH:mm}'}"
                                                        Classes="muted" FontSize="11" />
 
                                             <!-- Actions column -->
-                                            <StackPanel Grid.Column="2" Grid.RowSpan="2"
+                                            <StackPanel Grid.Column="2" Grid.RowSpan="3"
                                                         VerticalAlignment="Center" Orientation="Horizontal" Spacing="6">
                                                 <!-- Unsupported indicator -->
                                                 <TextBlock Text="Unsupported" FontSize="10"

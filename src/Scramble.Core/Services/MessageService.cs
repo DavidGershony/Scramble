@@ -1856,6 +1856,15 @@ public class MessageService : IMessageService, IDisposable
                     await _storageService.DismissWelcomeEventAsync(nostrEvent.EventId);
                     _chatUpdates.OnNext(syncChat);
 
+                    // Subscribe to kind 445 messages for this group so we receive
+                    // sync messages without needing an app restart.
+                    var subGroupId = syncChat.NostrGroupId != null && syncChat.NostrGroupId.Length > 0
+                        ? Convert.ToHexString(syncChat.NostrGroupId).ToLowerInvariant()
+                        : groupIdHex2;
+                    var since = new DateTimeOffset(syncChat.CreatedAt, TimeSpan.Zero).AddMinutes(-5);
+                    await _nostrService.SubscribeToGroupMessagesAsync(new[] { subGroupId }, since);
+                    _logger.LogInformation("HandleWelcome: subscribed to kind 445 for sync group {GroupId}", subGroupId[..Math.Min(16, subGroupId.Length)]);
+
                     // Mark consumed KeyPackage as used
                     if (!string.IsNullOrEmpty(keyPackageEventId))
                     {
@@ -2711,6 +2720,14 @@ public class MessageService : IMessageService, IDisposable
         _logger.LogInformation("AuditKeyPackages: {Count} KeyPackages with local private keys",
             storedKpCount >= 0 ? storedKpCount.ToString() : "unknown (native backend)");
 
+        // Build set of known peer device slot IDs (different slot, not lost, not dummy)
+        // so we can distinguish "peer device" from "truly lost" in the audit.
+        var localSlotId = _mlsService.GetLocalKeyPackageSlotId();
+        var dummySlotIds = ComputeDummySlotIds(_currentUser.PrivateKeyHex);
+        var lostRaw = await _storageService.GetSettingAsync("lost_slot_ids");
+        var lostSlotIds = new HashSet<string>(
+            lostRaw?.Split(',', StringSplitOptions.RemoveEmptyEntries) ?? Array.Empty<string>());
+
         foreach (var relayKp in relayKeyPackages)
         {
             // Check if expired
@@ -2729,6 +2746,19 @@ public class MessageService : IMessageService, IDisposable
                 _logger.LogDebug("AuditKeyPackages: KeyPackage {EventId} has local keys (active)",
                     relayKp.NostrEventId?[..Math.Min(16, relayKp.NostrEventId?.Length ?? 0)] ?? "unknown");
             }
+            // Check if this belongs to a known peer device (different slot, not dummy, not lost)
+            else if (!string.IsNullOrEmpty(relayKp.SlotId)
+                     && !string.IsNullOrEmpty(localSlotId)
+                     && relayKp.SlotId != localSlotId
+                     && !dummySlotIds.Contains(relayKp.SlotId)
+                     && !lostSlotIds.Contains(relayKp.SlotId))
+            {
+                result.PeerDevice++;
+                relayKp.Status = KeyPackageStatus.Active; // peer device KPs are valid, just on another device
+                _logger.LogDebug("AuditKeyPackages: KeyPackage {EventId} belongs to peer device (slot={SlotId})",
+                    relayKp.NostrEventId?[..Math.Min(16, relayKp.NostrEventId?.Length ?? 0)] ?? "unknown",
+                    relayKp.SlotId[..Math.Min(8, relayKp.SlotId.Length)]);
+            }
             else
             {
                 result.Lost++;
@@ -2744,8 +2774,8 @@ public class MessageService : IMessageService, IDisposable
         }
 
         _logger.LogInformation(
-            "AuditKeyPackages: complete — {Total} on relays, {Active} active, {Lost} lost, {Expired} expired",
-            result.TotalOnRelays, result.ActiveWithKeys, result.Lost, result.Expired);
+            "AuditKeyPackages: complete — {Total} on relays, {Active} active, {Peer} peer device, {Lost} lost, {Expired} expired",
+            result.TotalOnRelays, result.ActiveWithKeys, result.PeerDevice, result.Lost, result.Expired);
 
         return result;
     }

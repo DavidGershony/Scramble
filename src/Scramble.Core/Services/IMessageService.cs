@@ -313,6 +313,8 @@ public class KeyPackageAuditResult
 {
     public int TotalOnRelays { get; set; }
     public int ActiveWithKeys { get; set; }
+    /// <summary>KPs belonging to a known peer device (different slot ID, not lost/dummy).</summary>
+    public int PeerDevice { get; set; }
     public int Lost { get; set; }
     public int Expired { get; set; }
     public List<string> LostEventIds { get; set; } = new();

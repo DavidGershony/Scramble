@@ -890,7 +890,8 @@ public partial class MainViewModel : ViewModelBase
             var allGroupChats = chats.Concat(archivedChats);
 
             var groupIds = allGroupChats
-                .Where(c => c.Type == ChatType.Group && c.MlsGroupId != null && c.MlsGroupId.Length > 0)
+                .Where(c => (c.Type == ChatType.Group || c.Type == ChatType.DeviceSync)
+                         && c.MlsGroupId != null && c.MlsGroupId.Length > 0)
                 .Select(c => c.NostrGroupId != null && c.NostrGroupId.Length > 0
                     ? Convert.ToHexString(c.NostrGroupId).ToLowerInvariant()
                     : Convert.ToHexString(c.MlsGroupId!).ToLowerInvariant())
@@ -900,7 +901,8 @@ public partial class MainViewModel : ViewModelBase
             if (groupIds.Count > 0)
             {
                 var latestActivity = chats
-                    .Where(c => c.Type == ChatType.Group && c.MlsGroupId != null)
+                    .Where(c => (c.Type == ChatType.Group || c.Type == ChatType.DeviceSync)
+                             && c.MlsGroupId != null)
                     .Select(c => c.LastActivityAt)
                     .DefaultIfEmpty(DateTime.MinValue)
                     .Max();
@@ -1189,6 +1191,20 @@ public partial class MainViewModel : ViewModelBase
                         {
                             var syncChat = await _messageService.GetOrCreateDeviceSyncGroupAsync();
                             _logger.LogInformation("Device-sync group ready: {ChatId}", syncChat.Id);
+
+                            // Subscribe to kind 445 messages for the sync group so we receive
+                            // messages in this session (the bulk subscription at login may have
+                            // run before the sync group existed).
+                            if (syncChat.MlsGroupId != null && syncChat.MlsGroupId.Length > 0)
+                            {
+                                var subGroupId = syncChat.NostrGroupId != null && syncChat.NostrGroupId.Length > 0
+                                    ? Convert.ToHexString(syncChat.NostrGroupId).ToLowerInvariant()
+                                    : Convert.ToHexString(syncChat.MlsGroupId).ToLowerInvariant();
+                                var since = new DateTimeOffset(syncChat.LastActivityAt, TimeSpan.Zero).AddMinutes(-5);
+                                await _nostrService.SubscribeToGroupMessagesAsync(new[] { subGroupId }, since);
+                                _logger.LogInformation("Subscribed to kind 445 for sync group {GroupId}",
+                                    subGroupId[..Math.Min(16, subGroupId.Length)]);
+                            }
 
                             // Announce this device's OS + slot ID so the user can see which
                             // devices are alive and what they're running from Private Notes.

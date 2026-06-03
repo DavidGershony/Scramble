@@ -503,7 +503,7 @@ public partial class ChatListViewModel : ViewModelBase
                     // Always cache the device-sync chat item so visibility can be toggled live
                     _deviceSyncChatItem = chatItem;
                     var showSync = await _storageService.GetSettingAsync("show_device_sync_chat");
-                    if (showSync == "true")
+                    if (showSync != "false") // default: visible
                         Chats.Insert(0, chatItem); // always at top (pinned)
                 }
                 else

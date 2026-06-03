@@ -721,7 +721,7 @@ public partial class SettingsViewModel : ViewModelBase
 
         // Load device-sync chat visibility
         var showSync = await _storageService.GetSettingAsync("show_device_sync_chat");
-        ShowDeviceSyncChat = showSync == "true";
+        ShowDeviceSyncChat = showSync != "false"; // default: visible
 
         // Load dummy KeyPackage obfuscation setting (default: off)
         var dummyKpEnabled = await _storageService.GetSettingAsync("dummy_keypackages_enabled");
@@ -1223,8 +1223,18 @@ public partial class SettingsViewModel : ViewModelBase
             }
             else
             {
-                AuditStatus = $"Audit complete: {result.TotalOnRelays} on relays, " +
-                              $"{result.ActiveWithKeys} active, {result.Lost} lost, {result.Expired} expired";
+                var parts = new List<string>
+                {
+                    $"{result.TotalOnRelays} on relays",
+                    $"{result.ActiveWithKeys} active (this device)"
+                };
+                if (result.PeerDevice > 0)
+                    parts.Add($"{result.PeerDevice} peer device");
+                if (result.Lost > 0)
+                    parts.Add($"{result.Lost} lost");
+                if (result.Expired > 0)
+                    parts.Add($"{result.Expired} expired");
+                AuditStatus = $"Audit complete: {string.Join(", ", parts)}";
             }
 
             if (result.Lost > 0)
@@ -1576,13 +1586,14 @@ public partial class SettingsViewModel : ViewModelBase
 
                 MyDevices.Add(new DeviceViewModel
                 {
-                    ShortSlotId = group.Key.Length >= 8 ? group.Key[..8] : group.Key,
+                    ShortSlotId = group.Key.Length >= 16 ? group.Key[..16] : group.Key,
                     FullSlotId = group.Key,
                     CreatedAt = latestKp.CreatedAt.ToLocalTime(),
                     IsThisDevice = isThisDevice,
                     IsLost = lostSlotIds.Contains(group.Key),
                     CipherSuite = latestKp.CipherSuiteName,
                     IsSupported = latestKp.IsCipherSuiteSupported,
+                    KeyPackageCount = group.Count(),
                     NostrEventIds = group
                         .Where(kp => !string.IsNullOrEmpty(kp.NostrEventId))
                         .Select(kp => kp.NostrEventId!)
@@ -1792,7 +1803,7 @@ public partial class UnifiedRelayViewModel : ViewModelBase
 
 public partial class DeviceViewModel : ViewModelBase
 {
-    /// <summary>Short display label: first 8 chars of slot ID.</summary>
+    /// <summary>Short display label: first 16 chars of slot ID.</summary>
     [Reactive] public partial string ShortSlotId { get; set; } = string.Empty;
 
     /// <summary>Full 64-char slot ID hex string.</summary>
@@ -1815,6 +1826,9 @@ public partial class DeviceViewModel : ViewModelBase
 
     /// <summary>Whether the KP uses a supported cipher suite.</summary>
     [Reactive] public partial bool IsSupported { get; set; } = true;
+
+    /// <summary>Number of KeyPackage events published for this slot on relays.</summary>
+    public int KeyPackageCount { get; set; }
 
     /// <summary>Nostr event IDs for the KeyPackage events in this slot (for NIP-09 deletion).</summary>
     public List<string> NostrEventIds { get; set; } = new();

@@ -1042,17 +1042,116 @@ public class NostrService : INostrService, IDisposable
             return false;
 
         // Step 2: Verify BIP-340 Schnorr signature over the event ID
+        // Uses BouncyCastle EC math instead of NBitcoin.Secp256k1 which has a broken
+        // SigVerifyBIP340 implementation on the .NET Android runtime.
+        return VerifyBip340Schnorr(pubkeyBytes, eventIdBytes, sigBytes);
+    }
+
+    /// <summary>
+    /// Pure BIP-340 Schnorr signature verification using BouncyCastle EC math.
+    /// Replaces NBitcoin.Secp256k1's SigVerifyBIP340 which is broken on .NET Android.
+    /// See https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki
+    /// </summary>
+    internal static bool VerifyBip340Schnorr(byte[] pubkeyBytes, byte[] msgBytes, byte[] sigBytes)
+    {
+        if (pubkeyBytes.Length != 32 || msgBytes.Length != 32 || sigBytes.Length != 64)
+            return false;
+
         try
         {
-            var xOnlyPub = ECXOnlyPubKey.Create(pubkeyBytes);
-            if (!SecpSchnorrSignature.TryCreate(sigBytes, out var schnorrSig) || schnorrSig is null)
+            var curve = Org.BouncyCastle.Asn1.X9.ECNamedCurveTable.GetByName("secp256k1");
+            var domainParams = new Org.BouncyCastle.Crypto.Parameters.ECDomainParameters(
+                curve.Curve, curve.G, curve.N, curve.H);
+            var p = curve.Curve.Field.Characteristic;
+            var n = curve.N;
+
+            // Parse R.x from signature bytes [0..32]
+            var rX = new Org.BouncyCastle.Math.BigInteger(1, sigBytes, 0, 32);
+            // Parse s from signature bytes [32..64]
+            var s = new Org.BouncyCastle.Math.BigInteger(1, sigBytes, 32, 32);
+
+            // Verify R.x < p and s < n
+            if (rX.CompareTo(p) >= 0 || s.CompareTo(n) >= 0)
                 return false;
-            return xOnlyPub.SigVerifyBIP340(schnorrSig, eventIdBytes);
+
+            // Lift x-coordinate to curve point P (with even y)
+            var pX = new Org.BouncyCastle.Math.BigInteger(1, pubkeyBytes);
+            if (pX.CompareTo(p) >= 0)
+                return false;
+
+            var P = LiftX(curve.Curve, pX);
+            if (P == null || P.IsInfinity)
+                return false;
+
+            // Compute challenge: e = tagged_hash("BIP0340/challenge", R_x || P_x || m) mod n
+            var challengeData = new byte[96];
+            Buffer.BlockCopy(sigBytes, 0, challengeData, 0, 32);    // R.x (32 bytes)
+            Buffer.BlockCopy(pubkeyBytes, 0, challengeData, 32, 32); // P.x (32 bytes)
+            Buffer.BlockCopy(msgBytes, 0, challengeData, 64, 32);    // message (32 bytes)
+            var eHash = Bip340TaggedHash("BIP0340/challenge", challengeData);
+            var e = new Org.BouncyCastle.Math.BigInteger(1, eHash).Mod(n);
+
+            // Compute R' = s*G - e*P
+            var sG = domainParams.G.Multiply(s);
+            var eP = P.Multiply(e);
+            var R = sG.Add(eP.Negate()).Normalize();
+
+            if (R.IsInfinity)
+                return false;
+
+            // Verify R'.y is even (BIP-340: y must have even parity)
+            if (R.AffineYCoord.ToBigInteger().TestBit(0))
+                return false;
+
+            // Verify R'.x == R_x
+            return R.AffineXCoord.ToBigInteger().Equals(rX);
         }
         catch
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Lifts an x-coordinate to a secp256k1 curve point with even y.
+    /// Returns null if x is not on the curve.
+    /// </summary>
+    private static Org.BouncyCastle.Math.EC.ECPoint? LiftX(
+        Org.BouncyCastle.Math.EC.ECCurve curve, Org.BouncyCastle.Math.BigInteger x)
+    {
+        var p = curve.Field.Characteristic;
+        if (x.CompareTo(p) >= 0)
+            return null;
+
+        // y^2 = x^3 + 7 (mod p)
+        var y2 = x.ModPow(Org.BouncyCastle.Math.BigInteger.Three, p)
+            .Add(Org.BouncyCastle.Math.BigInteger.ValueOf(7)).Mod(p);
+
+        // Compute square root: y = y2^((p+1)/4) mod p (works because p ≡ 3 mod 4)
+        var y = y2.ModPow(p.Add(Org.BouncyCastle.Math.BigInteger.One).ShiftRight(2), p);
+
+        // Verify y^2 == y2
+        if (!y.ModPow(Org.BouncyCastle.Math.BigInteger.Two, p).Equals(y2))
+            return null;
+
+        // Ensure even y
+        if (y.TestBit(0))
+            y = p.Subtract(y);
+
+        return curve.CreatePoint(x, y);
+    }
+
+    /// <summary>
+    /// BIP-340 tagged hash: SHA256(SHA256(tag) || SHA256(tag) || data)
+    /// </summary>
+    private static byte[] Bip340TaggedHash(string tag, byte[] data)
+    {
+        var tagHash = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(tag));
+        var buf = new byte[64 + data.Length];
+        Buffer.BlockCopy(tagHash, 0, buf, 0, 32);
+        Buffer.BlockCopy(tagHash, 0, buf, 32, 32);
+        Buffer.BlockCopy(data, 0, buf, 64, data.Length);
+        return System.Security.Cryptography.SHA256.HashData(buf);
     }
 
     /// <summary>
