@@ -103,6 +103,19 @@ public class NostrService : INostrService, IDisposable
     // Relays connected for outbox model (contacts' preferred relays) — excluded from group/KP broadcasts
     private readonly ConcurrentDictionary<string, byte> _outboxRelays = new();
 
+    // Circuit breaker for gift wrap events that permanently fail to unwrap.
+    // Tracks eventId -> consecutive failure count. Once a gift wrap exceeds
+    // MaxGiftWrapFailures it is skipped on future attempts to avoid burning
+    // CPU and log lines on permanently undecryptable events.
+    private readonly ConcurrentDictionary<string, int> _failedGiftWrapEventIds = new();
+    private const int MaxGiftWrapFailures = 3;
+
+    // Circuit breaker for outbox relays that are permanently unreachable.
+    // Tracks relay URL -> consecutive failure count. Once an outbox relay exceeds
+    // MaxOutboxRelayConsecutiveFailures, retries are suspended until next app restart.
+    private readonly ConcurrentDictionary<string, int> _relayConsecutiveFailures = new();
+    private const int MaxOutboxRelayConsecutiveFailures = 10;
+
     // Optional storage service for contact relay list caching
     private IStorageService? _storageService;
     private static readonly TimeSpan RelayListCacheTtl = TimeSpan.FromMinutes(30);
@@ -456,6 +469,9 @@ public class NostrService : INostrService, IDisposable
 
             _logger.LogInformation("Successfully connected to relay: {RelayUrl}", relayUrl);
 
+            // Reset consecutive failure counter on successful connection
+            _relayConsecutiveFailures.TryRemove(relayUrl, out _);
+
             // Register active subscriptions on this new connection
             await RegisterActiveSubscriptionsAsync(connection);
         }
@@ -490,9 +506,26 @@ public class NostrService : INostrService, IDisposable
     /// automatically recovers without requiring the user to manually reconnect.
     /// Retries indefinitely with backoff capped at <see cref="MaxInitialConnectBackoffSeconds"/>,
     /// matching the post-connection auto-reconnect behaviour in <see cref="NostrRelayConnection"/>.
+    /// For outbox relays, retries are suspended after <see cref="MaxOutboxRelayConsecutiveFailures"/>
+    /// consecutive failures to avoid wasting resources on permanently unreachable relays.
     /// </summary>
     private void ScheduleConnectionRetry(string relayUrl, int currentAttempt, int? forcedBackoffSeconds = null)
     {
+        // Track consecutive failures
+        var failures = _relayConsecutiveFailures.AddOrUpdate(relayUrl, 1, (_, count) => count + 1);
+
+        // Circuit breaker for outbox relays: stop retrying after too many consecutive failures.
+        // Outbox relays are discovered from contacts' NIP-65 relay lists and may be permanently
+        // unreachable (dead, geo-blocked, etc.). Without this, each one retries every ~60s
+        // indefinitely, producing hundreds of ERR lines per session.
+        if (IsOutboxRelay(relayUrl) && failures >= MaxOutboxRelayConsecutiveFailures)
+        {
+            _logger.LogWarning(
+                "Outbox relay {RelayUrl} has failed {Failures} consecutive times — suspending retries until restart",
+                relayUrl, failures);
+            return;
+        }
+
         var backoff = forcedBackoffSeconds
             ?? Math.Min((int)Math.Pow(2, currentAttempt + 1), MaxInitialConnectBackoffSeconds);
         _logger.LogInformation("Scheduling retry for {RelayUrl} in {Seconds}s (attempt {Attempt})",
@@ -658,6 +691,18 @@ public class NostrService : INostrService, IDisposable
                     if (nostrEvent.Kind == 1059 &&
                         (!string.IsNullOrEmpty(_subscribedUserPrivKey) || _externalSigner != null))
                     {
+                        // Circuit breaker: skip gift wraps that have permanently failed to unwrap.
+                        // Prevents burning CPU and log lines on undecryptable events (e.g. events
+                        // encrypted to a previous key that the signer can never decrypt).
+                        if (!string.IsNullOrEmpty(nostrEvent.EventId) &&
+                            _failedGiftWrapEventIds.TryGetValue(nostrEvent.EventId, out var failCount) &&
+                            failCount >= MaxGiftWrapFailures)
+                        {
+                            _logger.LogDebug("Skipping permanently failed gift wrap {EventId} ({Failures} failures)",
+                                nostrEvent.EventId[..Math.Min(16, nostrEvent.EventId.Length)], failCount);
+                            return;
+                        }
+
                         // NIP-59 Gift Wrap — unwrap to find the inner rumor
                         var rumor = await UnwrapGiftWrapAsync(nostrEvent);
                         if (rumor != null)
@@ -1988,8 +2033,32 @@ public class NostrService : INostrService, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogWarning("Failed to unwrap gift wrap event {EventId}: {ExceptionType}",
-                giftWrapEvent.EventId[..Math.Min(16, giftWrapEvent.EventId.Length)], ex.GetType().Name);
+            // Track failure count for circuit breaker — permanently undecryptable gift wraps
+            // (e.g. encrypted to a rotated key) will be skipped after MaxGiftWrapFailures.
+            if (!string.IsNullOrEmpty(giftWrapEvent.EventId))
+            {
+                var newCount = _failedGiftWrapEventIds.AddOrUpdate(
+                    giftWrapEvent.EventId, 1, (_, count) => count + 1);
+
+                if (newCount >= MaxGiftWrapFailures)
+                {
+                    _logger.LogWarning(
+                        "Gift wrap {EventId} has failed {Count} times — circuit breaker tripped, will skip future attempts",
+                        giftWrapEvent.EventId[..Math.Min(16, giftWrapEvent.EventId.Length)], newCount);
+                }
+                else
+                {
+                    _logger.LogWarning("Failed to unwrap gift wrap event {EventId}: {ExceptionType} (failure {Count}/{Max})",
+                        giftWrapEvent.EventId[..Math.Min(16, giftWrapEvent.EventId.Length)], ex.GetType().Name,
+                        newCount, MaxGiftWrapFailures);
+                }
+            }
+            else
+            {
+                _logger.LogWarning("Failed to unwrap gift wrap event {EventId}: {ExceptionType}",
+                    giftWrapEvent.EventId[..Math.Min(16, giftWrapEvent.EventId.Length)], ex.GetType().Name);
+            }
+
             return null;
         }
     }

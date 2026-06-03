@@ -236,6 +236,30 @@ public class MessageService : IMessageService, IDisposable
                 _logger.LogDebug("SendMessage: encrypted to {Len} bytes, publishing kind 445", eventJsonBytes.Length);
 
                 message.RumorEventId = _mlsService.LastEncryptedRumorEventId;
+
+                // Pre-parse the Nostr event ID from the encrypted JSON and persist it
+                // BEFORE publishing. This closes a race where the relay echoes our own
+                // event back before PublishRawEventJsonAsync returns — without the early
+                // save, HandleGroupMessageEventAsync's MessageExistsByNostrEventIdAsync
+                // check misses it and MLS decryption fails with "Generation X has already
+                // been consumed" (the ciphertext was already consumed by EncryptMessageAsync).
+                try
+                {
+                    using var preDoc = System.Text.Json.JsonDocument.Parse(eventJsonBytes);
+                    var parsedId = preDoc.RootElement.GetProperty("id").GetString();
+                    if (!string.IsNullOrEmpty(parsedId))
+                    {
+                        message.NostrEventId = parsedId;
+                        await _storageService.SaveMessageAsync(message);
+                        _logger.LogDebug("SendMessage: pre-saved NostrEventId {EventId} for self-echo dedup",
+                            parsedId[..Math.Min(16, parsedId.Length)]);
+                    }
+                }
+                catch (Exception parseEx)
+                {
+                    _logger.LogWarning(parseEx, "SendMessage: failed to pre-parse event ID — self-echo race possible");
+                }
+
                 message.NostrEventId = await _nostrService.PublishRawEventJsonAsync(eventJsonBytes);
                 _logger.LogInformation("SendMessage: published kind 445 event {EventId}, rumorId={RumorId}",
                     message.NostrEventId, message.RumorEventId?[..Math.Min(16, message.RumorEventId?.Length ?? 0)]);
@@ -2064,9 +2088,10 @@ public class MessageService : IMessageService, IDisposable
         }
 
         // Deduplicate: skip events already processed and saved to DB.
-        // This also catches self-echoes (our own messages saved locally by SendMessageAsync
-        // before the relay echoes them back). With MIP-03 ephemeral keys, we can't use
-        // pubkey comparison for self-echo detection since the event pubkey is ephemeral.
+        // This catches self-echoes too: SendMessageAsync pre-saves the NostrEventId to the
+        // DB before publishing, so the relay echo is already known by the time it arrives.
+        // With MIP-03 ephemeral keys, we can't use pubkey comparison for self-echo detection
+        // since the event pubkey is ephemeral.
         if (!string.IsNullOrEmpty(nostrEvent.EventId) &&
             await _storageService.MessageExistsByNostrEventIdAsync(nostrEvent.EventId))
         {
