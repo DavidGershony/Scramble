@@ -34,6 +34,12 @@ public class HeadlessSettingsTests : HeadlessTestBase
 
         var settingsVm = mainVm.SettingsViewModel;
 
+        // LoadSettingsAsync is no longer called from the constructor (moved to
+        // MainViewModel.InitializeAfterLoginAsync). Call it explicitly so
+        // PublicKeyHex and other persisted settings are populated.
+        await settingsVm.LoadSettingsAsync();
+        Dispatcher.UIThread.RunJobs();
+
         Assert.NotNull(settingsVm.PublicKeyHex);
 
         // Publish a KeyPackage
@@ -136,6 +142,12 @@ public class HeadlessSettingsTests : HeadlessTestBase
 
         var settingsVm = mainVm.SettingsViewModel;
 
+        // LoadSettingsAsync is no longer called from the constructor (moved to
+        // MainViewModel.InitializeAfterLoginAsync). Call it explicitly so
+        // default relays and other persisted settings are populated.
+        await settingsVm.LoadSettingsAsync();
+        Dispatcher.UIThread.RunJobs();
+
         // Default relays should be loaded
         Assert.Equal(NostrConstants.DefaultRelays.Length, settingsVm.Relays.Count);
         Assert.All(settingsVm.Relays, r => Assert.Equal(RelayUsage.Both, r.Usage));
@@ -198,6 +210,12 @@ public class HeadlessSettingsTests : HeadlessTestBase
         Dispatcher.UIThread.RunJobs();
 
         var settingsVm = mainVm.SettingsViewModel;
+
+        // LoadSettingsAsync is no longer called from the constructor (moved to
+        // MainViewModel.InitializeAfterLoginAsync). Call it explicitly so
+        // default relays are populated before publishing.
+        await settingsVm.LoadSettingsAsync();
+        Dispatcher.UIThread.RunJobs();
 
         // Publish relay list
         settingsVm.PublishRelayListCommand.Execute().Subscribe();

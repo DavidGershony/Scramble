@@ -23,4 +23,8 @@
     <ProjectReference Include="..\Scramble.Core\Scramble.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Scramble.UI.Tests" />
+  </ItemGroup>
+
 </Project>

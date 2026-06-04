@@ -38,6 +38,7 @@ public partial class ShellViewModel : ViewModelBase
     private IMlsService? _mlsService;
     private IMessageService? _messageService;
     private bool _sessionActivated;
+    private volatile bool _loginFlowTaken;
 
     // Multi-account state
     private string? _previousActiveAccountPubKey;
@@ -135,6 +136,13 @@ public partial class ShellViewModel : ViewModelBase
         // the total time from onCreate past the 5-second ANR threshold.
         await Task.Delay(50).ConfigureAwait(true);
 
+        // If another login flow (SwitchAccountAsync, OnLoginCompleted, etc.)
+        // started while we were yielding, bail out to avoid clobbering its
+        // UI state (e.g. clearing an error message set by a guard check).
+        if (_loginFlowTaken)
+            return;
+        _loginFlowTaken = true;
+
         try
         {
             // If no profile was set yet (e.g. Android, or desktop without --profile),
@@ -204,6 +212,7 @@ public partial class ShellViewModel : ViewModelBase
 
     private async void OnLoginCompleted(User user)
     {
+        _loginFlowTaken = true; // prevent deferred TryAutoLoginAsync from clobbering UI state
         try
         {
             _logger.LogInformation("Login completed for {Npub}..., setting up profile", user.Npub?[..Math.Min(12, user.Npub.Length)]);
@@ -481,6 +490,7 @@ public partial class ShellViewModel : ViewModelBase
 
         _logger.LogInformation("Switching account to {PubKey}...", targetPubKeyHex[..Math.Min(16, targetPubKeyHex.Length)]);
         ShowAccountSwitcher = false;
+        _loginFlowTaken = true; // prevent deferred TryAutoLoginAsync from clobbering UI state
 
         if (IsLoggedIn)
             await TeardownSessionAsync();
