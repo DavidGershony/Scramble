@@ -423,6 +423,14 @@ public partial class MainViewModel : ViewModelBase
         ChatListViewModel.IsLoading = true;
         IsHeaderLoading = string.IsNullOrEmpty(CurrentUser.DisplayName);
 
+        // Fire settings load on the UI thread (ObservableCollection modifications
+        // require the SynchronizationContext). This replaces the fire-and-forget
+        // that used to live in the SettingsViewModel constructor — moving it here
+        // ensures the view model is already bound so theme changes apply, and
+        // avoids running on a thread-pool thread when the constructor is called
+        // inside Task.Run (no SynchronizationContext).
+        _ = SettingsViewModel.LoadSettingsAsync();
+
         _logger.LogDebug("Initializing message service");
         // Run heavy service initialization (SQLite, MLS crypto) on a thread pool
         // thread to avoid blocking the Android UI thread (ANR). The await resumes

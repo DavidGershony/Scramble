@@ -383,6 +383,7 @@ public partial class SettingsViewModel : ViewModelBase
             .Skip(1)
             .Subscribe(async show =>
             {
+                if (_isRestoringSettings) return;
                 try
                 {
                     await _storageService.SaveSettingAsync("show_device_sync_chat", show ? "true" : "false");
@@ -396,6 +397,7 @@ public partial class SettingsViewModel : ViewModelBase
             .Skip(1)
             .Subscribe(async enabled =>
             {
+                if (_isRestoringSettings) return;
                 try
                 {
                     await _storageService.SaveSettingAsync("dummy_keypackages_enabled", enabled ? "true" : "false");
@@ -413,6 +415,7 @@ public partial class SettingsViewModel : ViewModelBase
             .Skip(1) // Skip initial default value
             .Subscribe(async enabled =>
             {
+                if (_isRestoringSettings) return;
                 try
                 {
                     await _storageService.SaveSettingAsync("mip04_enabled", enabled ? "true" : "false");
@@ -450,6 +453,7 @@ public partial class SettingsViewModel : ViewModelBase
             .Skip(1) // skip initial default
             .Subscribe(async enabled =>
             {
+                if (_isRestoringSettings) return;
                 try { await _storageService.SaveSettingAsync("notifications_enabled", enabled ? "true" : "false"); }
                 catch (Exception ex) { _logger.LogError(ex, "Failed to save notifications enabled"); }
 
@@ -458,7 +462,7 @@ public partial class SettingsViewModel : ViewModelBase
                     NotificationModeBackground = false;
                     NotificationModePush = false;
                 }
-                else if (!_isRestoringSettings)
+                else
                 {
                     // Restore previously saved mode when user explicitly turns notifications on
                     try
@@ -479,13 +483,14 @@ public partial class SettingsViewModel : ViewModelBase
             .Skip(1) // skip initial value
             .Subscribe(async isBackground =>
             {
+                if (_isRestoringSettings) return;
                 if (isBackground)
                 {
                     try { await _storageService.SaveSettingAsync("notification_mode", "background"); }
                     catch (Exception ex) { _logger.LogError(ex, "Failed to save notification mode"); }
 
-                    // Only request permission on explicit user action, not when restoring saved settings
-                    if (!_isRestoringSettings && PermissionRequestFunc != null)
+                    // Only request permission on explicit user action
+                    if (PermissionRequestFunc != null)
                     {
                         // Android 13+ requires POST_NOTIFICATIONS for the foreground service notification
                         const string postNotifications = "android.permission.POST_NOTIFICATIONS";
@@ -500,6 +505,7 @@ public partial class SettingsViewModel : ViewModelBase
             .Where(push => push) // only persist when toggled ON
             .Subscribe(async _ =>
             {
+                if (_isRestoringSettings) return;
                 try { await _storageService.SaveSettingAsync("notification_mode", "push"); }
                 catch (Exception ex) { _logger.LogError(ex, "Failed to save notification mode"); }
             });
@@ -510,6 +516,7 @@ public partial class SettingsViewModel : ViewModelBase
             .Where(v => !string.IsNullOrWhiteSpace(v))
             .Subscribe(async v =>
             {
+                if (_isRestoringSettings) return;
                 try { await _storageService.SaveSettingAsync("notification_server_npub", v.Trim()); }
                 catch (Exception ex) { _logger.LogError(ex, "Failed to save notification server npub"); }
             });
@@ -519,6 +526,7 @@ public partial class SettingsViewModel : ViewModelBase
             .Where(v => !string.IsNullOrWhiteSpace(v))
             .Subscribe(async v =>
             {
+                if (_isRestoringSettings) return;
                 try { await _storageService.SaveSettingAsync("notification_server_relay", v.Trim()); }
                 catch (Exception ex) { _logger.LogError(ex, "Failed to save notification server relay"); }
             });
@@ -528,6 +536,7 @@ public partial class SettingsViewModel : ViewModelBase
             .Where(v => !string.IsNullOrWhiteSpace(v))
             .Subscribe(async v =>
             {
+                if (_isRestoringSettings) return;
                 try { await _storageService.SaveSettingAsync("notification_push_url", v.Trim()); }
                 catch (Exception ex) { _logger.LogError(ex, "Failed to save notification push URL"); }
             });
@@ -539,6 +548,7 @@ public partial class SettingsViewModel : ViewModelBase
             {
                 _logger.LogInformation("Theme changed to index {Index}", index);
                 OnThemeChanged?.Invoke(index);
+                if (_isRestoringSettings) return;
                 try { await _storageService.SaveSettingAsync("theme_index", index.ToString()); }
                 catch (Exception ex) { _logger.LogError(ex, "Failed to save theme index"); }
             });
@@ -553,16 +563,35 @@ public partial class SettingsViewModel : ViewModelBase
                     var (enabled, difficulty) = tuple;
                     var effectiveBits = enabled ? (int)difficulty : 0;
                     _nostrService.SetNip46ProofOfWorkDifficulty(effectiveBits);
-                    await _storageService.SaveSettingAsync("pow_difficulty", effectiveBits.ToString());
+                    if (!_isRestoringSettings)
+                        await _storageService.SaveSettingAsync("pow_difficulty", effectiveBits.ToString());
                 }
                 catch (Exception ex) { _logger.LogError(ex, "Failed to save PoW setting"); }
             });
 
-        LoadSettingsAsync().ConfigureAwait(false);
+        // Settings are loaded separately via LoadSettingsAsync(), called by
+        // MainViewModel.InitializeAfterLoginAsync on the UI thread. This
+        // ensures ObservableCollection modifications are safe for data binding
+        // and avoids running on a thread-pool thread when the constructor is
+        // invoked inside Task.Run (no SynchronizationContext).
     }
 
-    private async Task LoadSettingsAsync()
+    /// <summary>
+    /// Loads all persisted settings from the profile database. Called by
+    /// <see cref="MainViewModel.InitializeAfterLoginAsync"/> on the UI thread
+    /// after the view model is bound to the view (so ObservableCollection
+    /// modifications are safe). Wraps the entire operation in
+    /// <c>_isRestoringSettings = true</c> to suppress redundant
+    /// <c>SaveSettingAsync</c> calls from reactive subscriptions.
+    /// </summary>
+    internal async Task LoadSettingsAsync()
     {
+        // Suppress reactive subscription side-effects (SaveSettingAsync calls)
+        // while we're restoring values from the database — writing back the
+        // same values that were just read is a wasteful I/O round-trip.
+        _isRestoringSettings = true;
+        try
+        {
         var user = await _storageService.GetCurrentUserAsync();
         if (user != null)
         {
@@ -620,9 +649,8 @@ public partial class SettingsViewModel : ViewModelBase
         }
         _logger.LogInformation("Loaded Blossom server domain: {Domain}", BlossomServerDomain);
 
-        // Load notification settings — suppress permission prompts while restoring saved state
-        _isRestoringSettings = true;
-        try
+        // Load notification settings — _isRestoringSettings is already true
+        // from the outer guard, suppressing permission prompts and redundant saves.
         {
             var notifEnabled = await _storageService.GetSettingAsync("notifications_enabled");
             var notifMode = await _storageService.GetSettingAsync("notification_mode");
@@ -658,10 +686,6 @@ public partial class SettingsViewModel : ViewModelBase
             var notifPushUrl = await _storageService.GetSettingAsync("notification_push_url");
             if (!string.IsNullOrEmpty(notifPushUrl))
                 NotificationPushUrl = notifPushUrl;
-        }
-        finally
-        {
-            _isRestoringSettings = false;
         }
 
         // Load per-purpose relay lists
@@ -743,6 +767,11 @@ public partial class SettingsViewModel : ViewModelBase
 
         // Auto-fetch devices from relays
         _ = FetchDevicesAsync();
+        }
+        finally
+        {
+            _isRestoringSettings = false;
+        }
     }
 
     private async Task SaveProfileAsync()

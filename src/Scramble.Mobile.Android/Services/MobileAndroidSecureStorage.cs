@@ -26,6 +26,7 @@ public class MobileAndroidSecureStorage : ISecureStorage
     private readonly ILogger<MobileAndroidSecureStorage> _logger;
     private readonly object _initLock = new();
     private bool _keyEnsured;
+    private IKey? _cachedKey;
 
     public MobileAndroidSecureStorage()
     {
@@ -55,7 +56,7 @@ public class MobileAndroidSecureStorage : ISecureStorage
         EnsureLazyInit();
         _logger.LogInformation("Protecting {Length} bytes with Android Keystore", data.Length);
 
-        var key = GetKey();
+        var key = GetCachedKey();
         var cipher = Cipher.GetInstance(Transformation)!;
         cipher.Init(CipherMode.EncryptMode, key);
 
@@ -89,7 +90,7 @@ public class MobileAndroidSecureStorage : ISecureStorage
         var encrypted = new byte[encryptedLength];
         Array.Copy(data, MagicPrefix.Length + GcmIvLength, encrypted, 0, encryptedLength);
 
-        var key = GetKey();
+        var key = GetCachedKey();
         var cipher = Cipher.GetInstance(Transformation)!;
         var spec = new GCMParameterSpec(GcmTagLength, iv);
         cipher.Init(CipherMode.DecryptMode, key, spec);
@@ -128,6 +129,18 @@ public class MobileAndroidSecureStorage : ISecureStorage
         var keyStore = KeyStore.GetInstance(AndroidKeyStore)!;
         keyStore.Load(null);
         return keyStore.GetKey(KeyAlias, null)!;
+    }
+
+    /// <summary>
+    /// Returns the cached AES key, loading it from the Android Keystore on
+    /// first call. Avoids repeated <c>KeyStore.GetInstance</c> + <c>Load</c>
+    /// round-trips through the TEE/HSM on every Protect/Unprotect call.
+    /// Thread-safe: worst case two threads both load the key and one write
+    /// is lost — both produce the same IKey reference from the Keystore.
+    /// </summary>
+    private IKey GetCachedKey()
+    {
+        return _cachedKey ??= GetKey();
     }
 
     private static bool HasMagicPrefix(byte[] data)

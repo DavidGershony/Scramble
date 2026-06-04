@@ -119,12 +119,22 @@ public partial class ShellViewModel : ViewModelBase
         AccountRegistryService.Load();
         RefreshKnownAccounts();
 
-        // Try auto-login on startup
+        // Try auto-login on startup — deferred so Avalonia can render the
+        // initial view (splash / login screen) before heavy init begins.
+        // On Android the runtime bootstrap alone takes 2-4 s; starting
+        // auto-login immediately from the constructor can push past the
+        // ANR threshold before the first frame is drawn.
         _ = TryAutoLoginAsync();
     }
 
     private async Task TryAutoLoginAsync()
     {
+        // Yield to the Avalonia message loop so the framework can complete
+        // its initial layout/render pass. Without this, the auto-login
+        // continuations can preempt the first frame on Android, pushing
+        // the total time from onCreate past the 5-second ANR threshold.
+        await Task.Delay(50).ConfigureAwait(true);
+
         try
         {
             // If no profile was set yet (e.g. Android, or desktop without --profile),
@@ -304,18 +314,30 @@ public partial class ShellViewModel : ViewModelBase
         // Provide storage to NostrService for contact relay list caching (outbox model)
         _nostrService.SetStorageService(storageService);
 
-        // Create MLS service via platform factory
-        _mlsService = MlsServiceFactory?.Invoke(storageService)
-            ?? new ManagedMlsService(storageService);
+        // Create services and view models on a thread-pool thread so the UI
+        // thread stays free for Avalonia rendering during startup. Constructor
+        // work includes MLS service, MessageService, MainViewModel (with 3
+        // child ViewModels and ~45 ReactiveCommands). SettingsViewModel's
+        // LoadSettingsAsync is called later from InitializeAfterLoginAsync
+        // (on the UI thread) so its ObservableCollection modifications are
+        // safe for data binding.
+        IMlsService mlsService = null!;
+        IMessageService messageService = null!;
+        MainViewModel mainVm = null!;
 
-        // Create MessageService
-        _messageService = new MessageService(storageService, _nostrService, _mlsService);
+        await Task.Run(() =>
+        {
+            mlsService = MlsServiceFactory?.Invoke(storageService)
+                ?? new ManagedMlsService(storageService);
+            messageService = new MessageService(storageService, _nostrService, mlsService);
+            mainVm = new MainViewModel(
+                messageService, _nostrService, storageService, mlsService,
+                _clipboard, _qrCodeGenerator, _launcher, _platform,
+                onLogoutRequested: OnLogoutRequested);
+        });
 
-        // Create MainViewModel with all services
-        var mainVm = new MainViewModel(
-            _messageService, _nostrService, storageService, _mlsService,
-            _clipboard, _qrCodeGenerator, _launcher, _platform,
-            onLogoutRequested: OnLogoutRequested);
+        _mlsService = mlsService;
+        _messageService = messageService;
 
         // Pass the external signer if the user logged in via Amber
         mainVm.ExternalSigner = LoginViewModel.ExternalSigner;
