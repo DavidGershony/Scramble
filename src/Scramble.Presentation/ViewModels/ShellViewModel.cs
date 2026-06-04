@@ -323,30 +323,28 @@ public partial class ShellViewModel : ViewModelBase
         // Provide storage to NostrService for contact relay list caching (outbox model)
         _nostrService.SetStorageService(storageService);
 
-        // Create services and view models on a thread-pool thread so the UI
-        // thread stays free for Avalonia rendering during startup. Constructor
-        // work includes MLS service, MessageService, MainViewModel (with 3
-        // child ViewModels and ~45 ReactiveCommands). SettingsViewModel's
-        // LoadSettingsAsync is called later from InitializeAfterLoginAsync
-        // (on the UI thread) so its ObservableCollection modifications are
-        // safe for data binding.
-        IMlsService mlsService = null!;
-        IMessageService messageService = null!;
-        MainViewModel mainVm = null!;
+        // Create MLS service via platform factory
+        _mlsService = MlsServiceFactory?.Invoke(storageService)
+            ?? new ManagedMlsService(storageService);
 
-        await Task.Run(() =>
-        {
-            mlsService = MlsServiceFactory?.Invoke(storageService)
-                ?? new ManagedMlsService(storageService);
-            messageService = new MessageService(storageService, _nostrService, mlsService);
-            mainVm = new MainViewModel(
-                messageService, _nostrService, storageService, mlsService,
-                _clipboard, _qrCodeGenerator, _launcher, _platform,
-                onLogoutRequested: OnLogoutRequested);
-        });
+        // Create MessageService
+        _messageService = new MessageService(storageService, _nostrService, _mlsService);
 
-        _mlsService = mlsService;
-        _messageService = messageService;
+        // Create MainViewModel with all services.
+        // SettingsViewModel's LoadSettingsAsync is called later from
+        // InitializeAfterLoginAsync (on the UI thread) so its
+        // ObservableCollection modifications are safe for data binding.
+        //
+        // NOTE: We intentionally do NOT use Task.Run here. ReactiveUI
+        // ViewModels rely on SynchronizationContext for WhenAnyValue /
+        // Subscribe / ReactiveCommand scheduling. Constructing them on a
+        // thread-pool thread (which lacks the UI SynchronizationContext)
+        // causes silent subscription failures on Android — the app appears
+        // to open but immediately backgrounds because bindings never fire.
+        var mainVm = new MainViewModel(
+            _messageService, _nostrService, storageService, _mlsService,
+            _clipboard, _qrCodeGenerator, _launcher, _platform,
+            onLogoutRequested: OnLogoutRequested);
 
         // Pass the external signer if the user logged in via Amber
         mainVm.ExternalSigner = LoginViewModel.ExternalSigner;
