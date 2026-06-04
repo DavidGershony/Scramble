@@ -9,6 +9,13 @@ on:
         description: 'Version tag (e.g. v0.6.32)'
         required: true
 
+# ReactiveUI / Splat NuGet packages have a revoked author signing certificate.
+# Linux .NET SDK does full OCSP/CRL checking via OpenSSL, which nuget.config's
+# signatureValidationMode=accept cannot suppress. Disable verification entirely
+# until the packages are re-signed.
+env:
+  DOTNET_NUGET_SIGNATURE_VERIFICATION: false
+
 jobs:
   # Gate: run the test suite before building any release artifacts.
   # Mirrors the test step from dotnet-desktop.yml so a tag push cannot
