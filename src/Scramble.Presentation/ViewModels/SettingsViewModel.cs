@@ -141,6 +141,9 @@ public partial class SettingsViewModel : ViewModelBase
     public string MarmotCsVersion { get; } = GetPackageVersion("MarmotCs.Core");
     public string DotnetMlsVersion { get; } = GetPackageVersion("DotnetMls");
 
+    // App version (read from assembly InformationalVersion set by Directory.Build.props)
+    public string AppVersion { get; } = GetPackageVersion("Scramble.Core");
+
     // Theme selection
     [Reactive] public partial int SelectedThemeIndex { get; set; } = 4;
     public static string[] AvailableThemeNames { get; set; } = Array.Empty<string>();

@@ -865,7 +865,9 @@
                     <TextBlock Text="Scramble is an open-source chat application built with Nostr and the Marmot Protocol (MLS) for end-to-end encrypted messaging."
                                Classes="secondary" TextWrapping="Wrap" />
                     <StackPanel Spacing="4">
-                        <TextBlock Text="Version 0.1.0" Classes="muted" />
+                        <TextBlock Text="{Binding AppVersion, StringFormat='Version {0}'}" Classes="muted" />
+                        <TextBlock Text="{Binding MarmotCsVersion, StringFormat='Marmot SDK: {0}'}" Classes="muted" />
+                        <TextBlock Text="{Binding DotnetMlsVersion, StringFormat='MLS Engine: {0}'}" Classes="muted" />
                         <TextBlock Text="Built with Avalonia" Classes="muted" />
                     </StackPanel>
                 </StackPanel>
