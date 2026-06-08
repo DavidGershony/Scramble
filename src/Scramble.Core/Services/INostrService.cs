@@ -23,6 +23,12 @@ public interface INostrService
     IObservable<NostrConnectionStatus> ConnectionStatus { get; }
 
     /// <summary>
+    /// Observable stream of sync status messages (e.g. "Syncing 70 message(s)...").
+    /// Emits null when sync is complete.
+    /// </summary>
+    IObservable<string?> SyncStatus { get; }
+
+    /// <summary>
     /// Observable stream of received Nostr events.
     /// </summary>
     IObservable<NostrEventReceived> Events { get; }

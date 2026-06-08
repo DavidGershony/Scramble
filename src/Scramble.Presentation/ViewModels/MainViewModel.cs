@@ -490,6 +490,18 @@ public partial class MainViewModel : ViewModelBase
         await ChatListViewModel.LoadChatsAsync();
         _logger.LogInformation("Chat list loaded from DB — UI is now responsive");
 
+        // Subscribe to sync status from NostrService (e.g. "Syncing 70 message(s)...")
+        // and surface it in the chat list status bar so the user sees progress.
+        _nostrService.SyncStatus
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(status =>
+            {
+                // Only update StatusMessage if it's a sync message or clearing one —
+                // don't overwrite error/invite messages set by other code paths.
+                if (status != null || ChatListViewModel.StatusMessage?.StartsWith("Syncing") == true)
+                    ChatListViewModel.StatusMessage = status;
+            });
+
         // === BACKGROUND: All relay/network operations run without blocking the UI ===
         // Suppress the "no internet" banner for 15 s while initial connections + retries complete.
         _connectionGracePeriodActive = true;

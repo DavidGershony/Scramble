@@ -751,12 +751,21 @@ public partial class SettingsViewModel : ViewModelBase
         var dummyKpEnabled = await _storageService.GetSettingAsync("dummy_keypackages_enabled");
         DummyKeyPackagesEnabled = dummyKpEnabled == "true";
 
-        // Load PoW difficulty setting (default: 0 = disabled)
+        // Load PoW difficulty setting (default: 0 = disabled for local keys,
+        // 28 bits for NIP-46 remote signers since common relays like nos.lol require it)
         var powSetting = await _storageService.GetSettingAsync("pow_difficulty");
         if (powSetting != null && int.TryParse(powSetting, out var powBits) && powBits > 0)
         {
             ProofOfWorkEnabled = true;
             ProofOfWorkDifficulty = Math.Clamp(powBits, 21, 28);
+        }
+        else if (powSetting == null && user?.IsRemoteSigner == true)
+        {
+            // Auto-enable PoW for NIP-46 users who haven't configured it yet.
+            // Most NIP-46 relay infrastructure (nos.lol) requires 28-bit PoW.
+            ProofOfWorkEnabled = true;
+            ProofOfWorkDifficulty = 28;
+            await _storageService.SaveSettingAsync("pow_difficulty", "28");
         }
         else
         {

@@ -37,6 +37,7 @@ public class LogAuditP0Tests
         var mockNostrService = new Mock<INostrService>();
         mockNostrService.Setup(n => n.ConnectionStatus)
             .Returns(Observable.Empty<NostrConnectionStatus>());
+        mockNostrService.Setup(n => n.SyncStatus).Returns(Observable.Empty<string?>());
 
         var mockMlsService = new Mock<IMlsService>();
         var mockClipboard = new Mock<IPlatformClipboard>();

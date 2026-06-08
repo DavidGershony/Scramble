@@ -48,6 +48,7 @@ public class ShellViewModelProfileGuardTests : IDisposable
         m.Setup(n => n.WelcomeMessages).Returns(Observable.Empty<MarmotWelcomeEvent>());
         m.Setup(n => n.GroupMessages).Returns(Observable.Empty<MarmotGroupMessageEvent>());
         m.Setup(n => n.ConnectionStatus).Returns(Observable.Empty<NostrConnectionStatus>());
+        m.Setup(n => n.SyncStatus).Returns(Observable.Empty<string?>());
         m.Setup(n => n.ConnectedRelayUrls).Returns(new List<string>());
         m.Setup(n => n.ConnectAsync(It.IsAny<IEnumerable<string>>())).Returns(Task.CompletedTask);
         m.Setup(n => n.DisconnectAsync()).Returns(Task.CompletedTask);

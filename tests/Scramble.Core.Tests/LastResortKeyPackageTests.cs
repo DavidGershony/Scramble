@@ -320,6 +320,7 @@ public class LastResortKeyPackageTests : IAsyncLifetime
         mock.Setup(n => n.WelcomeMessages).Returns(Observable.Empty<MarmotWelcomeEvent>());
         mock.Setup(n => n.GroupMessages).Returns(Observable.Empty<MarmotGroupMessageEvent>());
         mock.Setup(n => n.ConnectionStatus).Returns(Observable.Empty<NostrConnectionStatus>());
+        mock.Setup(n => n.SyncStatus).Returns(Observable.Empty<string?>());
         mock.Setup(n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>()))
             .ReturnsAsync(() => "fakekp_" + Guid.NewGuid().ToString("N"));
         mock.Setup(n => n.PublishWelcomeAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))

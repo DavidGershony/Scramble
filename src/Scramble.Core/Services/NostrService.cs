@@ -28,6 +28,7 @@ public class NostrService : INostrService, IDisposable
     private readonly Subject<NostrEventReceived> _events = new();
     private readonly Subject<MarmotWelcomeEvent> _welcomeMessages = new();
     private readonly Subject<MarmotGroupMessageEvent> _groupMessages = new();
+    private readonly Subject<string?> _syncStatus = new();
     private readonly ConcurrentDictionary<string, IDisposable> _subscriptions = new();
     private readonly ConcurrentDictionary<string, byte> _connectedRelays = new();
     private readonly ConcurrentDictionary<string, NostrRelayConnection> _relayConnections = new();
@@ -157,6 +158,7 @@ public class NostrService : INostrService, IDisposable
     public IObservable<NostrEventReceived> Events => _events.AsObservable();
     public IObservable<MarmotWelcomeEvent> WelcomeMessages => _welcomeMessages.AsObservable();
     public IObservable<MarmotGroupMessageEvent> GroupMessages => _groupMessages.AsObservable();
+    public IObservable<string?> SyncStatus => _syncStatus.AsObservable();
 
     public void SetExternalSigner(IExternalSigner? signer)
     {
@@ -179,40 +181,64 @@ public class NostrService : INostrService, IDisposable
     /// <summary>
     /// Drains the pending gift wrap buffer and processes each event now that the
     /// external signer is available for NIP-44 decryption.
+    /// Runs entirely on the thread pool to avoid blocking the UI thread during
+    /// the potentially long sequence of NIP-46 round-trips.
     /// </summary>
     private async Task ProcessPendingGiftWrapsAsync()
     {
         var count = _pendingGiftWraps.Count;
         _logger.LogInformation("Processing {Count} buffered gift wrap(s) after signer became available", count);
+        _syncStatus.OnNext($"Syncing {count} message(s)...");
 
-        while (_pendingGiftWraps.TryDequeue(out var giftWrapEvent))
+        // Move to thread pool immediately — this method may be triggered from the UI
+        // thread (via SetExternalSigner) and each UnwrapGiftWrapAsync involves a NIP-46
+        // network round-trip. Processing dozens sequentially on the UI thread causes ANR.
+        await Task.Run(async () =>
         {
-            try
+            int processed = 0;
+            while (_pendingGiftWraps.TryDequeue(out var giftWrapEvent))
             {
-                var rumor = await UnwrapGiftWrapAsync(giftWrapEvent);
-                if (rumor != null)
+                try
                 {
-                    if (rumor.Kind == 444)
+                    var rumor = await UnwrapGiftWrapAsync(giftWrapEvent);
+                    if (rumor != null)
                     {
-                        _logger.LogInformation("Buffered gift wrap → kind 444 Welcome from {Sender}",
-                            rumor.PublicKey[..Math.Min(16, rumor.PublicKey.Length)]);
-                        _events.OnNext(rumor);
-                        ProcessWelcomeEvent(rumor);
-                    }
-                    else if (rumor.Kind == 14)
-                    {
-                        _logger.LogInformation("Buffered gift wrap → kind 14 DM from {Sender}",
-                            rumor.PublicKey[..Math.Min(16, rumor.PublicKey.Length)]);
-                        _events.OnNext(rumor);
+                        if (rumor.Kind == 444)
+                        {
+                            _logger.LogInformation("Buffered gift wrap → kind 444 Welcome from {Sender}",
+                                rumor.PublicKey[..Math.Min(16, rumor.PublicKey.Length)]);
+                            _events.OnNext(rumor);
+                            ProcessWelcomeEvent(rumor);
+                        }
+                        else if (rumor.Kind == 14)
+                        {
+                            _logger.LogInformation("Buffered gift wrap → kind 14 DM from {Sender}",
+                                rumor.PublicKey[..Math.Min(16, rumor.PublicKey.Length)]);
+                            _events.OnNext(rumor);
+                        }
                     }
                 }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to process buffered gift wrap {EventId}",
+                        giftWrapEvent.EventId[..Math.Min(16, giftWrapEvent.EventId.Length)]);
+                }
+
+                // Yield periodically to avoid monopolizing thread pool threads and to
+                // give the system breathing room between NIP-46 round-trips.
+                processed++;
+                if (processed % 5 == 0)
+                {
+                    var remaining = _pendingGiftWraps.Count;
+                    if (remaining > 0)
+                        _syncStatus.OnNext($"Syncing {remaining} message(s)...");
+                    await Task.Delay(50);
+                }
             }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to process buffered gift wrap {EventId}",
-                    giftWrapEvent.EventId[..Math.Min(16, giftWrapEvent.EventId.Length)]);
-            }
-        }
+
+            _logger.LogInformation("Finished processing {Count} buffered gift wraps", processed);
+            _syncStatus.OnNext(null); // Clear sync status
+        }).ConfigureAwait(false);
     }
 
     public bool HasExternalSigner => _externalSigner != null;

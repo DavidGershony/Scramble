@@ -87,6 +87,7 @@ public abstract class HeadlessTestBase : IDisposable
         mockNostr.Setup(n => n.WelcomeMessages).Returns(Observable.Empty<MarmotWelcomeEvent>());
         mockNostr.Setup(n => n.GroupMessages).Returns(Observable.Empty<MarmotGroupMessageEvent>());
         mockNostr.Setup(n => n.ConnectionStatus).Returns(Observable.Empty<NostrConnectionStatus>());
+        mockNostr.Setup(n => n.SyncStatus).Returns(Observable.Empty<string?>());
         mockNostr.Setup(n => n.ConnectedRelayUrls).Returns(new List<string> { "wss://relay.test" });
         mockNostr.Setup(n => n.ConnectAsync(It.IsAny<string>())).Returns(Task.CompletedTask);
         mockNostr.Setup(n => n.ConnectAsync(It.IsAny<IEnumerable<string>>())).Returns(Task.CompletedTask);

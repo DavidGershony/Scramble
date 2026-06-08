@@ -604,6 +604,14 @@ public partial class ChatListViewModel : ViewModelBase
 
     private async Task<string?> ResolveCachedAvatarAsync(Chat chat)
     {
+        // DeviceSync (Private Notes) is a self-chat — always use the current user's own avatar.
+        if (chat.Type == ChatType.DeviceSync)
+        {
+            if (_currentUserPubKeyHex == null) return null;
+            var self = await _storageService.GetUserByPublicKeyAsync(_currentUserPubKeyHex);
+            return self?.LocalAvatarPath is { } sp && File.Exists(sp) ? sp : null;
+        }
+
         if (chat.Type != ChatType.Group)
         {
             var otherPubKey = chat.ParticipantPublicKeys.FirstOrDefault(
