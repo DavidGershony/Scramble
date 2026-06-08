@@ -15,12 +15,21 @@ public class RelayForegroundService : global::Android.App.Service
     public const int NotificationId = 9001;
     private PowerManager.WakeLock? _wakeLock;
 
+    /// <summary>
+    /// Track whether the service is currently running so we can avoid
+    /// starting a new instance just to immediately stop it (which crashes
+    /// on Android 12+ because StartForeground is never called).
+    /// </summary>
+    private static volatile bool _isRunning;
+    public static bool IsRunning => _isRunning;
+
     public override IBinder? OnBind(Intent? intent) => null;
 
     public override StartCommandResult OnStartCommand(Intent? intent, StartCommandFlags flags, int startId)
     {
         if (intent?.Action == "STOP")
         {
+            _isRunning = false;
             StopForeground(StopForegroundFlags.Remove);
             StopSelf();
             return StartCommandResult.NotSticky;
@@ -34,14 +43,16 @@ public class RelayForegroundService : global::Android.App.Service
         StartForeground(NotificationId, notification, ForegroundService.TypeDataSync);
 
         AcquireWakeLock();
+        _isRunning = true;
 
-        // NotSticky: we manage the lifecycle ourselves from MainActivity;
-        // the system should not restart this service after process death.
-        return StartCommandResult.NotSticky;
+        // Sticky: if Android kills the process for memory pressure, restart the
+        // service (and thus the process) so relay connections can be re-established.
+        return StartCommandResult.Sticky;
     }
 
     public override void OnDestroy()
     {
+        _isRunning = false;
         ReleaseWakeLock();
         base.OnDestroy();
     }
@@ -64,7 +75,9 @@ public class RelayForegroundService : global::Android.App.Service
         if (_wakeLock != null) return;
         var pm = (PowerManager?)GetSystemService(PowerService);
         _wakeLock = pm?.NewWakeLock(WakeLockFlags.Partial, "Scramble::RelayService");
-        _wakeLock?.Acquire();
+        // Use a 30-minute timeout to avoid indefinite wake locks draining battery.
+        // The service will re-acquire on reconnect if needed.
+        _wakeLock?.Acquire(30 * 60 * 1000L);
     }
 
     private void ReleaseWakeLock()
@@ -100,11 +113,27 @@ public class RelayForegroundService : global::Android.App.Service
         ContextCompat.StartForegroundService(context, intent);
     }
 
-    /// <summary>Stop the foreground service.</summary>
+    /// <summary>
+    /// Stop the foreground service. Only sends the stop command if the service
+    /// is actually running — avoids starting a new instance just to stop it,
+    /// which would crash on Android 12+ (ForegroundServiceDidNotStartInTimeException).
+    /// </summary>
     public static void Stop(Context context)
     {
+        if (!_isRunning) return;
         var intent = new Intent(context, typeof(RelayForegroundService));
         intent.SetAction("STOP");
         context.StartService(intent);
+    }
+
+    /// <summary>
+    /// Safe variant of Stop — only stops if the service is currently running.
+    /// Use this from reactive subscriptions where Stop may be called spuriously
+    /// (e.g. when IsLoggedIn fires false on initial subscription).
+    /// </summary>
+    public static void StopIfRunning(Context context)
+    {
+        if (!_isRunning) return;
+        Stop(context);
     }
 }

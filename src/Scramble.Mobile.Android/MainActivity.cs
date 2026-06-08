@@ -34,7 +34,7 @@ public class MainActivity : AvaloniaMainActivity
     /// Reference to the ShellViewModel so the back button can navigate.
     /// Set from App.axaml.cs after creating the view model.
     /// </summary>
-    public static ShellViewModel? Shell { get; set; }
+    public static ShellViewModel? Shell { get; private set; }
 
     private int _nextRequestCode = 2000;
     private readonly ConcurrentDictionary<int, TaskCompletionSource<bool>> _pendingPermissions = new();
@@ -52,23 +52,45 @@ public class MainActivity : AvaloniaMainActivity
         // Set platform notification service for the orchestrator
         NotificationOrchestrator.NotificationService = new MobileAndroidNotificationService(this);
 
-        // Observe login state to start/stop relay foreground service
+        // If Shell was already set (normal cold start where OnFrameworkInitializationCompleted
+        // runs synchronously inside base.OnCreate), wire the subscription immediately.
         if (Shell != null)
-        {
-            Shell.WhenAnyValue(x => x.IsLoggedIn)
-                .ObserveOn(RxSchedulers.MainThreadScheduler)
-                .Subscribe(isLoggedIn =>
-                {
-                    if (isLoggedIn && Shell.MainViewModel != null)
-                        StartRelayServiceIfEnabled(Shell.MainViewModel);
-                    else
-                        RelayForegroundService.Stop(this);
-                })
-                .DisposeWith(_disposables);
-        }
+            SubscribeToLoginState();
 
         // Handle the Android back button / gesture to navigate within the app
         OnBackPressedDispatcher.AddCallback(this, new ScrambleBackCallback());
+    }
+
+    /// <summary>
+    /// Called from App.axaml.cs after the ShellViewModel is created. Handles the case
+    /// where OnCreate finishes before OnFrameworkInitializationCompleted (rare, but
+    /// possible on process restart). Safe to call multiple times — only the first
+    /// call wires the subscription.
+    /// </summary>
+    public static void SetShell(ShellViewModel shell)
+    {
+        Shell = shell;
+        // Wire subscription if the Activity is already alive but missed the Shell in OnCreate
+        Current?.SubscribeToLoginState();
+    }
+
+    private bool _loginStateSubscribed;
+
+    private void SubscribeToLoginState()
+    {
+        if (_loginStateSubscribed || Shell == null) return;
+        _loginStateSubscribed = true;
+
+        Shell.WhenAnyValue(x => x.IsLoggedIn)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(isLoggedIn =>
+            {
+                if (isLoggedIn && Shell.MainViewModel != null)
+                    StartRelayServiceIfEnabled(Shell.MainViewModel);
+                else
+                    RelayForegroundService.StopIfRunning(this);
+            })
+            .DisposeWith(_disposables);
     }
 
     protected override void OnPause()
@@ -85,7 +107,9 @@ public class MainActivity : AvaloniaMainActivity
 
     protected override void OnDestroy()
     {
+        _loginStateSubscribed = false;
         _disposables.Dispose();
+        _disposables = new CompositeDisposable();
         if (Current == this) Current = null;
         base.OnDestroy();
     }
@@ -108,7 +132,7 @@ public class MainActivity : AvaloniaMainActivity
                 if (shouldRun)
                     RelayForegroundService.Start(this);
                 else
-                    RelayForegroundService.Stop(this);
+                    RelayForegroundService.StopIfRunning(this);
             })
             .DisposeWith(_disposables);
     }

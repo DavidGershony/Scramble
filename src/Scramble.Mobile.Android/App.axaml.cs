@@ -85,7 +85,9 @@ public partial class App : Avalonia.Application
                 nostrService, secureStorage, clipboard, qrCodeGenerator, launcher, platform);
 
             // Expose ShellViewModel so MainActivity can handle the back button
-            MainActivity.Shell = shellViewModel;
+            // and wire the foreground service login-state subscription (handles
+            // the case where OnCreate ran before Shell was available).
+            MainActivity.SetShell(shellViewModel);
 
             // MLS service factory — Android cannot load the Rust uniffi backend (MlsService)
             // without the native libs cross-compiled for ARM; force Managed (pure-C#) here.
