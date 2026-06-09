@@ -101,6 +101,7 @@ public class KeyPackageE2EHeadlessTests : IDisposable
 
         mainVm.CurrentUser = user;
         mainVm.IsLoggedIn = true;
+        await mainVm.InitializeAfterLoginAsync();
 
         var settingsVm = mainVm.SettingsViewModel;
         _output.WriteLine($"\nSettingsVM pubkey: {settingsVm.PublicKeyHex}");
