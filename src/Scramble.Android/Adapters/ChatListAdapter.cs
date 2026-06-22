@@ -63,7 +63,7 @@ public class ChatListAdapter : RecyclerView.Adapter
         {
             _name.Text = item.Name;
             _lastMessage.Text = item.NeedsRepair
-                ? "[Orphaned - long press to reset or delete]"
+                ? "[Broken link — long-press to reset or delete]"
                 : item.LastMessagePreview ?? "";
             _timestamp.Text = FormatRelativeTime(item.LastActivityAt);
 

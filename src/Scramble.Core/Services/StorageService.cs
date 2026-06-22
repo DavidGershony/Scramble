@@ -382,6 +382,17 @@ public class StorageService : IStorageService
             }
             catch (SqliteException) { /* Column already exists */ }
 
+            // Migration: add AcceptsCrossKeyResponses to Chats so kind-14 DM routing fallbacks
+            // are off by default. Prior behavior silently bolted strangers onto the most recent
+            // active chat — see Chat.AcceptsCrossKeyResponses for the policy.
+            try
+            {
+                var migrate = connection.CreateCommand();
+                migrate.CommandText = "ALTER TABLE Chats ADD COLUMN AcceptsCrossKeyResponses INTEGER NOT NULL DEFAULT 0";
+                await migrate.ExecuteNonQueryAsync();
+            }
+            catch (SqliteException) { /* Column already exists */ }
+
             _initialized = true;
             _logger.LogInformation("Database schema initialized successfully");
         }
@@ -673,9 +684,9 @@ public class StorageService : IStorageService
         var command = connection.CreateCommand();
         command.CommandText = @"
             INSERT OR REPLACE INTO Chats
-            (Id, Name, Type, MlsGroupId, NostrGroupId, MlsEpoch, AvatarUrl, Description, UnreadCount, CreatedAt, LastActivityAt, IsMuted, IsPinned, IsArchived, WelcomeNostrEventId, CreatorPublicKey, IsOutOfSync, IsResyncPending)
+            (Id, Name, Type, MlsGroupId, NostrGroupId, MlsEpoch, AvatarUrl, Description, UnreadCount, CreatedAt, LastActivityAt, IsMuted, IsPinned, IsArchived, WelcomeNostrEventId, CreatorPublicKey, IsOutOfSync, IsResyncPending, AcceptsCrossKeyResponses)
             VALUES
-            (@Id, @Name, @Type, @MlsGroupId, @NostrGroupId, @MlsEpoch, @AvatarUrl, @Description, @UnreadCount, @CreatedAt, @LastActivityAt, @IsMuted, @IsPinned, @IsArchived, @WelcomeNostrEventId, @CreatorPublicKey, @IsOutOfSync, @IsResyncPending)";
+            (@Id, @Name, @Type, @MlsGroupId, @NostrGroupId, @MlsEpoch, @AvatarUrl, @Description, @UnreadCount, @CreatedAt, @LastActivityAt, @IsMuted, @IsPinned, @IsArchived, @WelcomeNostrEventId, @CreatorPublicKey, @IsOutOfSync, @IsResyncPending, @AcceptsCrossKeyResponses)";
 
         command.Parameters.AddWithValue("@Id", chat.Id);
         command.Parameters.AddWithValue("@Name", chat.Name);
@@ -695,6 +706,7 @@ public class StorageService : IStorageService
         command.Parameters.AddWithValue("@CreatorPublicKey", chat.CreatorPublicKey ?? (object)DBNull.Value);
         command.Parameters.AddWithValue("@IsOutOfSync", chat.IsOutOfSync ? 1 : 0);
         command.Parameters.AddWithValue("@IsResyncPending", chat.IsResyncPending ? 1 : 0);
+        command.Parameters.AddWithValue("@AcceptsCrossKeyResponses", chat.AcceptsCrossKeyResponses ? 1 : 0);
 
         await command.ExecuteNonQueryAsync();
 
@@ -908,6 +920,19 @@ public class StorageService : IStorageService
         command.CommandText = "UPDATE Messages SET Status = @Status WHERE Id = @Id";
         command.Parameters.AddWithValue("@Id", messageId);
         command.Parameters.AddWithValue("@Status", (int)status);
+
+        await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task UpdateMessageChatIdAsync(string messageId, string newChatId)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        var command = connection.CreateCommand();
+        command.CommandText = "UPDATE Messages SET ChatId = @ChatId WHERE Id = @Id";
+        command.Parameters.AddWithValue("@Id", messageId);
+        command.Parameters.AddWithValue("@ChatId", newChatId);
 
         await command.ExecuteNonQueryAsync();
     }
@@ -1713,6 +1738,13 @@ public class StorageService : IStorageService
         }
         catch (ArgumentOutOfRangeException) { /* Columns don't exist yet */ }
 
+        bool acceptsCrossKeyResponses = false;
+        try
+        {
+            acceptsCrossKeyResponses = reader.GetInt32(reader.GetOrdinal("AcceptsCrossKeyResponses")) != 0;
+        }
+        catch (ArgumentOutOfRangeException) { /* Column doesn't exist yet */ }
+
         return new Chat
         {
             Id = reader.GetString(reader.GetOrdinal("Id")),
@@ -1732,7 +1764,8 @@ public class StorageService : IStorageService
             WelcomeNostrEventId = reader.IsDBNull(welcomeOrdinal) ? null : reader.GetString(welcomeOrdinal),
             CreatorPublicKey = creatorPublicKey,
             IsOutOfSync = isOutOfSync,
-            IsResyncPending = isResyncPending
+            IsResyncPending = isResyncPending,
+            AcceptsCrossKeyResponses = acceptsCrossKeyResponses
         };
     }
 

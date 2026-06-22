@@ -32,6 +32,7 @@ public interface IStorageService
     Task<IEnumerable<Message>> GetMessagesForChatAsync(string chatId, int limit = 50, int offset = 0);
     Task SaveMessageAsync(Message message);
     Task UpdateMessageStatusAsync(string messageId, MessageStatus status);
+    Task UpdateMessageChatIdAsync(string messageId, string newChatId);
     Task DeleteMessageAsync(string messageId);
     Task<bool> MessageExistsByNostrEventIdAsync(string nostrEventId);
     Task<Message?> GetMessageByNostrEventIdAsync(string nostrEventId);

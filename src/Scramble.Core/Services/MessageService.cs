@@ -98,6 +98,11 @@ public class MessageService : IMessageService, IDisposable
 
             _logger.LogInformation("MessageService initialized for {PubKey}",
                 _currentUser.PublicKeyHex[..Math.Min(16, _currentUser.PublicKeyHex.Length)]);
+
+            // Daily self-heal pass for bot chats that received misrouted messages from the
+            // pre-fix routing.  Fire-and-forget: the audit gates itself to once every 24 h
+            // via AppSettings, so this is a cheap no-op on most launches.
+            _ = RunBotChatRoutingAuditAsync();
         }
     }
 
@@ -976,25 +981,33 @@ public class MessageService : IMessageService, IDisposable
     }
 
     /// <summary>
-    /// Finds the best bot chat for an incoming kind 14 message, or creates one when no match exists.
-    ///
-    /// DVMs frequently sign their responses with a different key than the one the user registered,
-    /// which would otherwise create a second orphan chat containing only the reply.  We use two
-    /// ordered fallback strategies before resorting to creating a new chat:
-    ///
-    ///   1. Exact key match  — the normal path; existing chat already contains senderPublicKey.
-    ///   2. Relay + recency  — the response arrived on a relay that is configured on an existing bot
-    ///      chat, AND the last message in that chat was sent by the current user (awaiting a reply)
-    ///      within the past hour.  Very accurate when relay URLs match.
-    ///   3. Time-only        — no relay URL clue; the most recently messaged bot chat where the
-    ///      user sent the last message, within a 30-minute window.  Covers DVMs that send from
-    ///      a different relay than configured.
-    ///
-    /// When a fallback match is found the response key is added to that chat's participants so
-    /// all subsequent messages from the same key route correctly via the exact-match path.
+    /// How an incoming kind 14 DM was routed to a chat.  Used for logging at save time
+    /// so cross-chat leaks would be visible if any reappeared.
     /// </summary>
-    private async Task<Chat> FindChatForIncomingBotMessageAsync(
-        string senderPublicKey, string responseRelayUrl, DateTime messageTimestamp)
+    internal enum IncomingBotRoute
+    {
+        /// <summary>Sender pubkey was already a participant of the chat.</summary>
+        Exact,
+        /// <summary>No match — a new chat was created for the sender.</summary>
+        NewChat
+    }
+
+    /// <summary>
+    /// Finds the bot chat for an incoming kind 14 message, or creates one when no match exists.
+    ///
+    /// Strict exact-match-only.  If the sender pubkey is in some chat's participants, that's the
+    /// chat; otherwise we create a brand new chat for the sender.
+    ///
+    /// Previously this method had two "DVM ergonomics" fallback rules that matched on relay+recency
+    /// or a 30-minute time window.  They silently bolted strangers onto the user's most recently
+    /// active chat — a real privacy/correctness leak.  Without a binding from a DVM's advertised
+    /// key to its worker keys (NIP-89 handler advertisement or NIP-26 delegation) the heuristic has
+    /// no way to tell a real DVM worker apart from anyone else, so it has been removed entirely.
+    /// <see cref="Chat.AcceptsCrossKeyResponses"/> remains as a dormant field so a future NIP-89-aware
+    /// path can re-enable a verified version of the fallback per-chat.
+    /// </summary>
+    private async Task<(Chat Chat, IncomingBotRoute Route)> FindChatForIncomingBotMessageAsync(
+        string senderPublicKey)
     {
         if (_currentUser == null)
             throw new InvalidOperationException("User not logged in");
@@ -1002,78 +1015,135 @@ public class MessageService : IMessageService, IDisposable
         var allChats = (await _storageService.GetAllChatsAsync()).ToList();
         var botChats = allChats.Where(c => c.Type == ChatType.Bot).ToList();
 
-        // 1. Exact key match — fastest and most reliable path.
         var exactMatch = botChats.FirstOrDefault(c =>
             c.ParticipantPublicKeys.Contains(senderPublicKey));
         if (exactMatch != null)
-            return exactMatch;
+            return (exactMatch, IncomingBotRoute.Exact);
 
-        // GetAllChatsAsync does not populate Chat.LastMessage; the relay-match and time-fallback
-        // predicates below depend on it, so hydrate from the last-message snapshot before evaluating.
-        if (botChats.Count > 0)
+        return (await GetOrCreateBotChatAsync(senderPublicKey), IncomingBotRoute.NewChat);
+    }
+
+    private const string BotChatAuditLastRunSettingKey = "bot_chat_audit_last_run_at";
+    private static readonly TimeSpan BotChatAuditMinInterval = TimeSpan.FromHours(24);
+
+    /// <summary>
+    /// Heals bot chats that received misrouted messages from the pre-fix routing
+    /// (rules 2 and 3 silently added strangers to the most recently active chat).
+    ///
+    /// For each Bot chat that does NOT opt into cross-key responses, treats the sender
+    /// of the earliest incoming (non-self) message as the chat's true counterpart, and
+    /// moves every message from another sender into its own chat.  Resets the chat's
+    /// <see cref="Chat.ParticipantPublicKeys"/> to [currentUser, trueSender] so the
+    /// lock-in via exact-match routing is cleared.
+    ///
+    /// Runs at most once every <see cref="BotChatAuditMinInterval"/>, gated by a
+    /// timestamp stored in <c>AppSettings</c>.  Mobile launches the app many times per
+    /// day; running on every cold start would be wasteful and battery-unfriendly.
+    /// </summary>
+    internal async Task RunBotChatRoutingAuditAsync()
+    {
+        if (_currentUser == null) return;
+
+        try
         {
-            var lastMessages = await _storageService.GetLastMessagePerChatAsync();
-            foreach (var c in botChats)
-                c.LastMessage = lastMessages.GetValueOrDefault(c.Id);
-        }
-
-        // 2. Relay + recency match: response came from a relay we recognise for a specific bot chat
-        //    that is currently waiting for a reply (last message was from the current user).
-        if (!string.IsNullOrEmpty(responseRelayUrl))
-        {
-            var relayNorm = responseRelayUrl.TrimEnd('/');
-            var relayMatch = botChats
-                .Where(c =>
-                    c.LastMessage?.IsFromCurrentUser == true &&
-                    (messageTimestamp - c.LastActivityAt).TotalHours <= 1 &&
-                    c.RelayUrls.Any(r =>
-                        string.Equals(r.TrimEnd('/'), relayNorm, StringComparison.OrdinalIgnoreCase)))
-                .OrderByDescending(c => c.LastActivityAt)
-                .FirstOrDefault();
-
-            if (relayMatch != null)
+            var lastRunRaw = await _storageService.GetSettingAsync(BotChatAuditLastRunSettingKey);
+            if (!string.IsNullOrEmpty(lastRunRaw)
+                && DateTime.TryParse(lastRunRaw, null, System.Globalization.DateTimeStyles.RoundtripKind, out var lastRun)
+                && DateTime.UtcNow - lastRun < BotChatAuditMinInterval)
             {
-                _logger.LogInformation(
-                    "FindChatForIncomingBot: relay match — routing response from {Sender} to existing chat {Chat}",
-                    senderPublicKey[..Math.Min(16, senderPublicKey.Length)],
-                    relayMatch.Id[..Math.Min(8, relayMatch.Id.Length)]);
+                return;
+            }
 
-                if (!relayMatch.ParticipantPublicKeys.Contains(senderPublicKey))
+            var allChats = (await _storageService.GetAllChatsAsync()).ToList();
+            var auditTargets = allChats
+                .Where(c => c.Type == ChatType.Bot && !c.AcceptsCrossKeyResponses)
+                .ToList();
+
+            int chatsScanned = 0;
+            int chatsHealed = 0;
+            int messagesMoved = 0;
+            int newChatsCreated = 0;
+
+            foreach (var chat in auditTargets)
+            {
+                chatsScanned++;
+
+                // Pull a generous window of history.  Bot chats shouldn't grow unbounded,
+                // and the alternative — pagination across an unknown size — adds complexity
+                // for a once-a-day pass that runs in the background.
+                var messages = (await _storageService.GetMessagesForChatAsync(chat.Id, limit: 10000, offset: 0)).ToList();
+
+                var trueSender = messages
+                    .Where(m => !m.IsFromCurrentUser
+                                && !string.Equals(m.SenderPublicKey, _currentUser.PublicKeyHex, StringComparison.OrdinalIgnoreCase))
+                    .OrderBy(m => m.Timestamp)
+                    .Select(m => m.SenderPublicKey)
+                    .FirstOrDefault();
+
+                if (string.IsNullOrEmpty(trueSender))
+                    continue; // Outgoing-only chat — nothing to repair.
+
+                var misrouted = messages
+                    .Where(m => !m.IsFromCurrentUser
+                                && !string.Equals(m.SenderPublicKey, trueSender, StringComparison.OrdinalIgnoreCase)
+                                && !string.Equals(m.SenderPublicKey, _currentUser.PublicKeyHex, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                if (misrouted.Count == 0)
                 {
-                    relayMatch.ParticipantPublicKeys.Add(senderPublicKey);
-                    await _storageService.SaveChatAsync(relayMatch);
+                    // No misrouted messages, but participants may still carry strangers from a
+                    // prior fallback enrollment.  Snap back to [currentUser, trueSender] so the
+                    // exact-match path can't silently route them here in the future.
+                    var expected = new HashSet<string>(new[] { _currentUser.PublicKeyHex, trueSender }, StringComparer.OrdinalIgnoreCase);
+                    if (chat.ParticipantPublicKeys.Any(p => !expected.Contains(p)))
+                    {
+                        chat.ParticipantPublicKeys = expected.ToList();
+                        await _storageService.SaveChatAsync(chat);
+                        _logger.LogInformation(
+                            "BotChatAudit: trimmed strangers from chat {Chat} participants (kept currentUser + {TrueSender})",
+                            chat.Id[..Math.Min(8, chat.Id.Length)],
+                            trueSender[..Math.Min(16, trueSender.Length)]);
+                    }
+                    continue;
                 }
-                return relayMatch;
+
+                // Move misrouted messages to a chat for their actual sender.
+                var newChatIds = new HashSet<string>();
+                foreach (var msg in misrouted)
+                {
+                    var targetChat = await GetOrCreateBotChatAsync(msg.SenderPublicKey);
+                    if (!string.Equals(targetChat.Id, chat.Id, StringComparison.Ordinal))
+                    {
+                        await _storageService.UpdateMessageChatIdAsync(msg.Id, targetChat.Id);
+                        newChatIds.Add(targetChat.Id);
+                        messagesMoved++;
+                    }
+                }
+                newChatsCreated += newChatIds.Count;
+
+                // Reset participants so the lock-in via exact-match routing is cleared.
+                chat.ParticipantPublicKeys = new List<string> { _currentUser.PublicKeyHex, trueSender };
+                await _storageService.SaveChatAsync(chat);
+                chatsHealed++;
+
+                _logger.LogWarning(
+                    "BotChatAudit: chat {Chat} (true sender {TrueSender}) had {Moved} misrouted message(s) moved into {NewChatCount} chat(s); participants reset",
+                    chat.Id[..Math.Min(8, chat.Id.Length)],
+                    trueSender[..Math.Min(16, trueSender.Length)],
+                    misrouted.Count,
+                    newChatIds.Count);
             }
-        }
 
-        // 3. Time-only fallback: pick the most recently messaged bot chat that is awaiting a reply,
-        //    within a 30-minute window.  Less precise than the relay match, but handles DVMs that
-        //    respond from a relay the user did not explicitly configure.
-        var timeMatch = botChats
-            .Where(c =>
-                c.LastMessage?.IsFromCurrentUser == true &&
-                (messageTimestamp - c.LastActivityAt).TotalMinutes <= 30)
-            .OrderByDescending(c => c.LastActivityAt)
-            .FirstOrDefault();
+            await _storageService.SaveSettingAsync(BotChatAuditLastRunSettingKey, DateTime.UtcNow.ToString("O"));
 
-        if (timeMatch != null)
-        {
             _logger.LogInformation(
-                "FindChatForIncomingBot: time fallback — routing response from {Sender} to existing chat {Chat}",
-                senderPublicKey[..Math.Min(16, senderPublicKey.Length)],
-                timeMatch.Id[..Math.Min(8, timeMatch.Id.Length)]);
-
-            if (!timeMatch.ParticipantPublicKeys.Contains(senderPublicKey))
-            {
-                timeMatch.ParticipantPublicKeys.Add(senderPublicKey);
-                await _storageService.SaveChatAsync(timeMatch);
-            }
-            return timeMatch;
+                "BotChatAudit: complete (scanned={Scanned}, healed={Healed}, messagesMoved={Moved}, newChats={New})",
+                chatsScanned, chatsHealed, messagesMoved, newChatsCreated);
         }
-
-        // 4. No suitable existing chat found — create a new one (original behaviour).
-        return await GetOrCreateBotChatAsync(senderPublicKey);
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "BotChatAudit failed");
+        }
     }
 
     public async Task<Chat> GetOrCreateBotChatAsync(string botPublicKey, List<string>? relayUrls = null)
@@ -1718,11 +1788,13 @@ public class MessageService : IMessageService, IDisposable
         //    extracted from the p tag above.
         //  - Incoming messages: DVMs sometimes respond with a different key than the
         //    one the user registered, so we fall back to relay-URL and recency
-        //    heuristics before creating a new chat.
+        //    heuristics — but only for chats that opt in via AcceptsCrossKeyResponses.
         Chat chat;
+        IncomingBotRoute route;
         if (isSelfSent)
         {
             chat = await GetOrCreateBotChatAsync(otherPartyPubKey);
+            route = IncomingBotRoute.Exact;
 
             // For self-sent rescued messages: SendMessageAsync stored the local copy
             // with NostrEventId = the kind-1059 wrap id, but the rescan unwraps and
@@ -1743,7 +1815,7 @@ public class MessageService : IMessageService, IDisposable
         }
         else
         {
-            chat = await FindChatForIncomingBotMessageAsync(senderPubKey, nostrEvent.RelayUrl, nostrEvent.CreatedAt);
+            (chat, route) = await FindChatForIncomingBotMessageAsync(senderPubKey);
         }
 
         // Content is already decrypted during gift-wrap unwrapping
@@ -1785,9 +1857,14 @@ public class MessageService : IMessageService, IDisposable
         await _storageService.SaveChatAsync(chat);
         _chatUpdates.OnNext(chat);
 
-        _logger.LogInformation("HandleBotMessage: saved {Direction} message {MsgId} in bot chat {ChatId}",
+        _logger.LogInformation(
+            "HandleBotMessage: saved {Direction} message {MsgId} sender={Sender} -> chat {ChatId} (route={Route}, participants={ParticipantCount})",
             isSelfSent ? "self-sent" : "incoming",
-            message.Id[..Math.Min(8, message.Id.Length)], chat.Id[..Math.Min(8, chat.Id.Length)]);
+            message.Id[..Math.Min(8, message.Id.Length)],
+            senderPubKey[..Math.Min(16, senderPubKey.Length)],
+            chat.Id[..Math.Min(8, chat.Id.Length)],
+            route,
+            chat.ParticipantPublicKeys.Count);
     }
 
     private async Task HandleKeyPackageEventAsync(NostrEventReceived nostrEvent)

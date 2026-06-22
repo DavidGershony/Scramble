@@ -151,13 +151,13 @@ public class HeadlessDmAndBotTests : HeadlessTestBase
     [AvaloniaTheory]
     [InlineData("rust")]
     [InlineData("managed")]
-    public async Task BotResponse_FromDifferentKey_RoutesToExistingChatViaRelayMatch(string backend)
+    public async Task BotResponse_FromDifferentKey_CreatesNewChat(string backend)
     {
         if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
-        // User registers a bot chat with key A using a specific relay
+        // User registers a bot chat with key A and sends an outgoing message.
         var registeredKey = "aa".PadLeft(64, 'a');
         var botRelayUrl = "wss://dvm.relay.test";
         ctx.MockNostr.Setup(n => n.PublishGiftWrapAsync(
@@ -166,11 +166,13 @@ public class HeadlessDmAndBotTests : HeadlessTestBase
             .ReturnsAsync("fakewrap_" + Guid.NewGuid().ToString("N"));
         var botChat = await ctx.MessageService.GetOrCreateBotChatAsync(registeredKey, new List<string> { botRelayUrl });
 
-        // Simulate user sending a message so LastMessage.IsFromCurrentUser = true
         await ctx.MessageService.SendMessageAsync(botChat.Id, "Hello DVM!");
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
-        // DVM responds with a DIFFERENT key from the same relay
+        // Inbound kind 14 signed by a DIFFERENT key — even within the heuristic's window.
+        // Strict routing creates a new chat rather than bolting the stranger onto the original.
+        // Without a NIP-89 handler advertisement or NIP-26 delegation binding the registered key
+        // to its worker keys, the system can't safely treat this as a DVM response.
         var responseKey = "bb".PadLeft(64, 'b');
         ctx.EventsSubject.OnNext(new NostrEventReceived
         {
@@ -182,63 +184,22 @@ public class HeadlessDmAndBotTests : HeadlessTestBase
             Tags = new List<List<string>> { new() { "p", ctx.User.PublicKeyHex } },
             RelayUrl = botRelayUrl
         });
-        await Task.Delay(500);
-
-        // The response must have been placed in the ORIGINAL bot chat, not a new one
-        var allChats = (await ctx.Storage.GetAllChatsAsync()).Where(c => c.Type == ChatType.Bot).ToList();
-        Assert.Single(allChats);
-        Assert.Equal(botChat.Id, allChats[0].Id);
-
-        var messages = (await ctx.Storage.GetMessagesForChatAsync(botChat.Id)).ToList();
-        Assert.Contains(messages, m => m.Content == "DVM reply here");
-
-        // The response key must now be registered in the chat so future messages go to the same place
-        Assert.Contains(responseKey, allChats[0].ParticipantPublicKeys);
-    }
-
-    [AvaloniaTheory]
-    [InlineData("rust")]
-    [InlineData("managed")]
-    public async Task BotResponse_FromDifferentKey_RoutesToExistingChatViaTimeFallback(string backend)
-    {
-        if (ShouldSkip(backend)) return;
-        var ctx = await CreateRealContext(backend);
-        await ctx.MessageService.InitializeAsync();
-
-        // User registers a bot chat with NO relay configured (time-only fallback path)
-        var registeredKey = "cc".PadLeft(64, 'c');
-        ctx.MockNostr.Setup(n => n.PublishGiftWrapAsync(
-                It.IsAny<int>(), It.IsAny<string>(), It.IsAny<List<List<string>>>(),
-                It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<List<string>?>()))
-            .ReturnsAsync("fakewrap_" + Guid.NewGuid().ToString("N"));
-        var botChat = await ctx.MessageService.GetOrCreateBotChatAsync(registeredKey);
-
-        // Simulate user sending a message
-        await ctx.MessageService.SendMessageAsync(botChat.Id, "Hello DVM no relay!");
-        await Task.Delay(100);
-
-        // DVM responds with a different key from a relay we don't recognise
-        var responseKey = "dd".PadLeft(64, 'd');
-        ctx.EventsSubject.OnNext(new NostrEventReceived
-        {
-            Kind = 14,
-            EventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"),
-            PublicKey = responseKey,
-            Content = "Time-fallback reply",
-            CreatedAt = DateTime.UtcNow,
-            Tags = new List<List<string>> { new() { "p", ctx.User.PublicKeyHex } },
-            RelayUrl = "wss://some.other.relay"
-        });
-        await Task.Delay(500);
+        await Task.Delay(500, TestContext.Current.CancellationToken);
 
         var allChats = (await ctx.Storage.GetAllChatsAsync()).Where(c => c.Type == ChatType.Bot).ToList();
-        Assert.Single(allChats);
-        Assert.Equal(botChat.Id, allChats[0].Id);
+        Assert.Equal(2, allChats.Count);
 
-        var messages = (await ctx.Storage.GetMessagesForChatAsync(botChat.Id)).ToList();
-        Assert.Contains(messages, m => m.Content == "Time-fallback reply");
+        var original = allChats.Single(c => c.Id == botChat.Id);
+        var freshChat = allChats.Single(c => c.Id != botChat.Id);
 
-        Assert.Contains(responseKey, allChats[0].ParticipantPublicKeys);
+        // Stranger's content is in the new chat, not the original.
+        var originalMessages = (await ctx.Storage.GetMessagesForChatAsync(botChat.Id)).ToList();
+        Assert.DoesNotContain(originalMessages, m => m.Content == "DVM reply here");
+        var newMessages = (await ctx.Storage.GetMessagesForChatAsync(freshChat.Id)).ToList();
+        Assert.Contains(newMessages, m => m.Content == "DVM reply here");
+
+        // Stranger pubkey is NOT bolted onto the original chat's participants.
+        Assert.DoesNotContain(responseKey, original.ParticipantPublicKeys);
     }
 
     // --- Join Group by ID ---

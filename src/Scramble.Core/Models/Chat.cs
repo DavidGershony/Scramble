@@ -115,6 +115,18 @@ public class Chat
     /// to the DeviceSync group and is waiting for another device to re-invite it.
     /// </summary>
     public bool IsResyncPending { get; set; }
+
+    /// <summary>
+    /// When true, incoming kind 14 DMs from senders not in <see cref="ParticipantPublicKeys"/>
+    /// may be routed into this chat by the relay-recency / time-window fallback rules
+    /// in <c>MessageService.FindChatForIncomingBotMessageAsync</c>. Intended for NIP-90
+    /// DVM chats where the worker that responds may sign with a different key than the
+    /// registration key the user originally messaged.
+    ///
+    /// Default <c>false</c>: only exact pubkey matches are routed into the chat, preventing
+    /// strangers' DMs from leaking into the user's most recent active conversation.
+    /// </summary>
+    public bool AcceptsCrossKeyResponses { get; set; }
 }
 
 public enum ChatType
