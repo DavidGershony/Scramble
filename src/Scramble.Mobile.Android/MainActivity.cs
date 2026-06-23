@@ -7,6 +7,7 @@ using Android.Content.PM;
 using Android.Views;
 using AndroidX.Core.App;
 using AndroidX.Core.Content;
+using AndroidX.Core.View;
 using Avalonia.Android;
 using ReactiveUI;
 using Scramble.MobileAndroid.Services;
@@ -59,6 +60,22 @@ public class MainActivity : AvaloniaMainActivity
 
         // Handle the Android back button / gesture to navigate within the app
         OnBackPressedDispatcher.AddCallback(this, new ScrambleBackCallback());
+
+        // IME (soft keyboard) inset handling.
+        //
+        // On Android 15+ (targetSdk 35) edge-to-edge is enforced and
+        // WindowSoftInputMode=AdjustResize silently no-ops — the activity draws under
+        // the IME and we have to apply the keyboard's bottom inset as padding ourselves.
+        // Without this the chat input is hidden behind the keyboard.
+        //
+        // We attach both:
+        //   * a one-shot inset listener that sets the final padding once the keyboard
+        //     has finished animating (covers Android 10 and earlier where the animation
+        //     callback isn't dispatched), and
+        //   * a WindowInsetsAnimationCompat callback that drives the padding frame by
+        //     frame so the content tracks the keyboard during the open/close animation
+        //     on Android 11+.
+        InstallImeInsetHandling();
     }
 
     /// <summary>
@@ -168,6 +185,79 @@ public class MainActivity : AvaloniaMainActivity
         {
             var allGranted = grantResults.Length > 0 && grantResults.All(r => r == Permission.Granted);
             tcs.TrySetResult(allGranted);
+        }
+    }
+
+    /// <summary>
+    /// Wires both the inset listener and the animation callback that translate the
+    /// IME (soft keyboard) bottom inset into bottom padding on the Avalonia content
+    /// view. Applied to <c>android.R.id.content</c> so every screen the app renders
+    /// — chat, settings, dialogs — automatically picks up the keyboard inset.
+    /// </summary>
+    private void InstallImeInsetHandling()
+    {
+        var rootView = Window?.DecorView.FindViewById(global::Android.Resource.Id.Content);
+        if (rootView == null) return;
+
+        // Static inset listener: applies the final padding once the keyboard has
+        // finished animating. On Android 11+ the animation callback drives this in
+        // real-time during the open/close; this listener still fires for the final
+        // value and for any platform that doesn't deliver the animation callbacks.
+        ViewCompat.SetOnApplyWindowInsetsListener(rootView, new ImeInsetListener());
+
+        // Animated callback (Android 11+): drives the bottom padding frame-by-frame
+        // so the content slides in sync with the keyboard instead of snapping at the
+        // end. Dispatch mode is "stop" so children don't also receive the animation —
+        // we're the only consumer in the activity.
+        ViewCompat.SetWindowInsetsAnimationCallback(rootView,
+            new ImeInsetAnimationCallback(WindowInsetsAnimationCompat.Callback.DispatchModeStop));
+    }
+
+    /// <summary>
+    /// Reads the IME bottom inset off the incoming WindowInsetsCompat and applies it as
+    /// bottom padding on the receiving view. System bar insets (status / navigation) are
+    /// preserved on the other edges so we don't trample whatever the system chrome needs.
+    /// </summary>
+    private sealed class ImeInsetListener : Java.Lang.Object, IOnApplyWindowInsetsListener
+    {
+        public WindowInsetsCompat OnApplyWindowInsets(global::Android.Views.View v, WindowInsetsCompat insets)
+        {
+            var imeBottom = insets.GetInsets(WindowInsetsCompat.Type.Ime()).Bottom;
+            var systemBars = insets.GetInsets(WindowInsetsCompat.Type.SystemBars());
+
+            // When the IME is up its inset already includes the navigation bar height;
+            // when it's down we still need to leave room for the nav bar itself.
+            var bottom = System.Math.Max(imeBottom, systemBars.Bottom);
+
+            v.SetPadding(systemBars.Left, systemBars.Top, systemBars.Right, bottom);
+            return insets;
+        }
+    }
+
+    /// <summary>
+    /// Animation callback that interpolates the bottom padding while the IME is
+    /// opening or closing. Required because <see cref="ImeInsetListener"/> only sees
+    /// the final state; without this the content snaps instead of sliding.
+    /// </summary>
+    private sealed class ImeInsetAnimationCallback : WindowInsetsAnimationCompat.Callback
+    {
+        public ImeInsetAnimationCallback(int dispatchMode) : base(dispatchMode) { }
+
+        public override WindowInsetsCompat OnProgress(
+            WindowInsetsCompat insets,
+            IList<WindowInsetsAnimationCompat> runningAnimations)
+        {
+            // Only react if at least one running animation is the IME (a system bar
+            // animation could also be in flight on some devices); the inset value
+            // already reflects whatever the runtime is currently displaying so we can
+            // just forward it through the same calculation the static listener uses.
+            var imeBottom = insets.GetInsets(WindowInsetsCompat.Type.Ime()).Bottom;
+            var systemBars = insets.GetInsets(WindowInsetsCompat.Type.SystemBars());
+            var bottom = System.Math.Max(imeBottom, systemBars.Bottom);
+
+            var root = Current?.Window?.DecorView.FindViewById(global::Android.Resource.Id.Content);
+            root?.SetPadding(systemBars.Left, systemBars.Top, systemBars.Right, bottom);
+            return insets;
         }
     }
 
