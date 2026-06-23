@@ -342,6 +342,10 @@ public class HeadlessDmAndBotTests : HeadlessTestBase
         await chatListVm.LookupKeyPackagesCommand.Execute();
         Dispatcher.UIThread.RunJobs();
 
-        Assert.Contains("No KeyPackage", chatListVm.KeyPackageStatus ?? "");
+        // Chat-level summary: 0 found, 1 missing.
+        Assert.Contains("Missing: 1", chatListVm.KeyPackageStatus ?? "");
+        // Per-participant detail still surfaces the human-readable miss message.
+        var participant = Assert.Single(chatListVm.NewChatParticipants);
+        Assert.Contains("No KeyPackage", participant.KeyPackageStatusText ?? "");
     }
 }
