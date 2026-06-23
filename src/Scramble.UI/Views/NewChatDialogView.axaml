@@ -81,28 +81,38 @@
                                 </Button>
                             </Grid>
 
-                            <!-- Chip row of added participants -->
+                            <!-- Chip row of added participants with per-user key status -->
                             <ItemsControl x:Name="ParticipantChips" ItemsSource="{Binding NewChatParticipants}">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <WrapPanel Orientation="Horizontal" />
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:FollowContactViewModel">
-                                        <Border Background="{DynamicResource SurfaceSecondaryBrush}"
-                                                BorderBrush="{DynamicResource NostrPurpleBrush}"
-                                                BorderThickness="1"
-                                                CornerRadius="14" Padding="10,4" Margin="0,0,6,6">
-                                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                                                <TextBlock Text="{Binding ShownName}" VerticalAlignment="Center" />
-                                                <Button Content="✕"
-                                                        Padding="4,0" FontSize="11"
-                                                        Background="Transparent" BorderThickness="0"
-                                                        Command="{Binding #ParticipantChips.DataContext.RemoveChatParticipantCommand}"
-                                                        CommandParameter="{Binding}" />
+                                        <StackPanel Spacing="2" Margin="0,0,0,6">
+                                            <Border Background="{DynamicResource SurfaceSecondaryBrush}"
+                                                    BorderBrush="{DynamicResource NostrPurpleBrush}"
+                                                    BorderThickness="1"
+                                                    CornerRadius="14" Padding="10,4">
+                                                <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding ShownName}" VerticalAlignment="Center" />
+                                                    <Button Content="✕"
+                                                            Padding="4,0" FontSize="11"
+                                                            Background="Transparent" BorderThickness="0"
+                                                            Command="{Binding #ParticipantChips.DataContext.RemoveChatParticipantCommand}"
+                                                            CommandParameter="{Binding}" />
+                                                </StackPanel>
+                                            </Border>
+                                            <!-- Per-user key lookup spinner -->
+                                            <StackPanel Orientation="Horizontal" Spacing="4" Margin="12,0,0,0"
+                                                        IsVisible="{Binding IsLookingUpKey}">
+                                                <ProgressBar IsIndeterminate="True" Width="60" Height="2"
+                                                             Foreground="{DynamicResource NostrPurpleBrush}" />
+                                                <TextBlock Text="Checking..." FontSize="10" Classes="muted" />
                                             </StackPanel>
-                                        </Border>
+                                            <!-- Per-user key status result -->
+                                            <TextBlock Text="{Binding KeyPackageStatusText}"
+                                                       FontSize="10" Margin="12,0,0,0"
+                                                       Classes="muted"
+                                                       TextWrapping="Wrap"
+                                                       IsVisible="{Binding KeyPackageStatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                        </StackPanel>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
@@ -179,18 +189,6 @@
                                              Foreground="{DynamicResource NostrPurpleBrush}" />
                             </StackPanel>
                         </StackPanel>
-
-                        <!-- KeyPackage Status -->
-                        <Border Background="{DynamicResource SurfaceSecondaryBrush}"
-                                CornerRadius="8" Padding="12"
-                                IsVisible="{Binding KeyPackageStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                            <StackPanel Spacing="4">
-                                <TextBlock Text="KeyPackage Status:" FontWeight="SemiBold" FontSize="12" />
-                                <TextBlock Text="{Binding KeyPackageStatus}"
-                                           FontSize="11" FontFamily="Consolas"
-                                           TextWrapping="Wrap" />
-                            </StackPanel>
-                        </Border>
 
                         <!-- Relay Selection (compact chips) -->
                         <StackPanel Spacing="6">

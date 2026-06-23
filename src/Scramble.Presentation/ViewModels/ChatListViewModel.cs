@@ -1051,34 +1051,47 @@ public partial class ChatListViewModel : ViewModelBase
         _logger.LogInformation("Looking up KeyPackages for chat participants");
 
         IsLookingUpKeyPackages = true;
-        KeyPackageStatus = "Looking up KeyPackages...";
+        KeyPackageStatus = null;
 
         try
         {
-            var results = new List<string>();
             var foundCount = 0;
             var notFoundCount = 0;
 
             foreach (var participant in NewChatParticipants.ToList())
             {
-                var label = participant.ShownName;
-                var keyPackages = await _nostrService.FetchKeyPackagesAsync(participant.PublicKeyHex);
-                var keyPackageList = keyPackages.ToList();
+                participant.IsLookingUpKey = true;
+                participant.KeyPackageStatusText = null;
 
-                if (keyPackageList.Count > 0)
+                try
                 {
-                    var latest = keyPackageList.OrderByDescending(k => k.CreatedAt).First();
-                    results.Add($"{label} - Found (created {latest.CreatedAt:g})");
-                    foundCount++;
+                    var keyPackages = await _nostrService.FetchKeyPackagesAsync(participant.PublicKeyHex);
+                    var keyPackageList = keyPackages.ToList();
+
+                    if (keyPackageList.Count > 0)
+                    {
+                        var latest = keyPackageList.OrderByDescending(k => k.CreatedAt).First();
+                        participant.KeyPackageStatusText = $"KeyPackage found (created {latest.CreatedAt:g})";
+                        foundCount++;
+                    }
+                    else
+                    {
+                        participant.KeyPackageStatusText = "No KeyPackage found";
+                        notFoundCount++;
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
-                    results.Add($"{label} - No KeyPackage");
+                    participant.KeyPackageStatusText = $"Lookup failed: {ex.Message}";
                     notFoundCount++;
+                }
+                finally
+                {
+                    participant.IsLookingUpKey = false;
                 }
             }
 
-            KeyPackageStatus = $"Found: {foundCount}, Missing: {notFoundCount}\n" + string.Join("\n", results);
+            KeyPackageStatus = $"Found: {foundCount}, Missing: {notFoundCount}";
             _logger.LogInformation("KeyPackage lookup complete: {Found} found, {Missing} missing", foundCount, notFoundCount);
         }
         catch (Exception ex)
@@ -1934,6 +1947,12 @@ public partial class FollowContactViewModel : ViewModelBase
     [Reactive] public partial string? Petname { get; set; }
     [Reactive] public partial string? LocalAvatarPath { get; set; }
     [Reactive] public partial bool IsVisible { get; set; } = true;
+
+    /// <summary>Per-participant key package lookup result (e.g. "KeyPackage found" or "No KeyPackage").</summary>
+    [Reactive] public partial string? KeyPackageStatusText { get; set; }
+
+    /// <summary>Whether this participant's key package lookup is currently in progress.</summary>
+    [Reactive] public partial bool IsLookingUpKey { get; set; }
 
     public string ShownName => !string.IsNullOrWhiteSpace(Petname) ? Petname!
         : !string.IsNullOrWhiteSpace(DisplayName) ? DisplayName!
