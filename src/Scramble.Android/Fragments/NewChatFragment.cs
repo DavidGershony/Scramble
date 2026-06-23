@@ -26,7 +26,11 @@ public class NewChatFragment : Fragment
     private readonly MainViewModel _mainViewModel;
     private ChatListViewModel ViewModel => _mainViewModel.ChatListViewModel;
     private CompositeDisposable _disposables = new();
-    private ChipGroup? _chipGroup;
+    // Per-participant subscriptions (IsLookingUpKey + KeyPackageStatusText) are torn down
+    // and rebuilt on every RenderChips so we don't leak observers when the user removes a
+    // participant or the list reshuffles.
+    private CompositeDisposable _participantDisposables = new();
+    private LinearLayout? _chipGroup;
     private NotifyCollectionChangedEventHandler? _participantsChangedHandler;
     private TextInputEditText? _participantInput;
     private ActivityResultLauncher? _scanQrLauncher;
@@ -67,7 +71,7 @@ public class NewChatFragment : Fragment
         var participantLayout = view.FindViewById<TextInputLayout>(Resource.Id.new_chat_participant_layout)!;
         _participantInput = participantInput;
         var addParticipantButton = view.FindViewById<MaterialButton>(Resource.Id.new_chat_add_participant_button)!;
-        _chipGroup = view.FindViewById<ChipGroup>(Resource.Id.new_chat_participant_chips)!;
+        _chipGroup = view.FindViewById<LinearLayout>(Resource.Id.new_chat_participant_chips)!;
         var contactsHeader = view.FindViewById<TextView>(Resource.Id.contacts_header)!;
         var contactsList = view.FindViewById<RecyclerView>(Resource.Id.following_list)!;
         var lookupButton = view.FindViewById<MaterialButton>(Resource.Id.lookup_keypackages_button)!;
@@ -243,20 +247,103 @@ public class NewChatFragment : Fragment
     private void RenderChips()
     {
         if (_chipGroup == null || Context == null) return;
+
+        // Wipe out the previous per-participant property subscriptions before redrawing —
+        // otherwise removing a chip leaks observers tied to a view that's about to vanish.
+        _participantDisposables.Dispose();
+        _participantDisposables = new CompositeDisposable();
+
         _chipGroup.RemoveAllViews();
+
         foreach (var p in ViewModel.NewChatParticipants.ToList())
         {
+            var captured = p;
+
+            // Outer vertical container — chip on top, status row underneath.
+            var row = new LinearLayout(Context)
+            {
+                Orientation = Orientation.Vertical
+            };
+            var rowParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MatchParent,
+                ViewGroup.LayoutParams.WrapContent);
+            rowParams.TopMargin = (int)(4 * Resources!.DisplayMetrics!.Density);
+            row.LayoutParameters = rowParams;
+
             var chip = new Chip(Context)
             {
-                Text = p.ShownName,
+                Text = captured.ShownName,
                 Checkable = false,
                 CloseIconVisible = true
             };
-            var captured = p;
             chip.SetOnCloseIconClickListener(new ActionClickListener(() =>
                 ViewModel.RemoveChatParticipantCommand.Execute(captured).Subscribe().DisposeWith(_disposables)));
-            _chipGroup.AddView(chip);
+            row.AddView(chip);
+
+            // Inline status row — spinner + text. Both default-hidden; visibility tracks the
+            // participant's reactive properties so the chip stays compact when there's nothing
+            // to report.
+            var statusRow = new LinearLayout(Context)
+            {
+                Orientation = Orientation.Horizontal,
+                Visibility = ViewStates.Gone
+            };
+            var statusRowParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MatchParent,
+                ViewGroup.LayoutParams.WrapContent);
+            statusRowParams.LeftMargin = (int)(12 * Resources.DisplayMetrics.Density);
+            statusRowParams.TopMargin = (int)(2 * Resources.DisplayMetrics.Density);
+            statusRow.LayoutParameters = statusRowParams;
+
+            var spinner = new ProgressBar(Context, null, global::Android.Resource.Attribute.ProgressBarStyleSmall)
+            {
+                Indeterminate = true,
+                Visibility = ViewStates.Gone
+            };
+            statusRow.AddView(spinner);
+
+            var statusText = new TextView(Context)
+            {
+                TextSize = 11f,
+                Visibility = ViewStates.Gone
+            };
+            statusText.SetTextColor(global::Android.Graphics.Color.Gray);
+            var statusTextParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WrapContent,
+                ViewGroup.LayoutParams.WrapContent);
+            statusTextParams.LeftMargin = (int)(8 * Resources.DisplayMetrics.Density);
+            statusText.LayoutParameters = statusTextParams;
+            statusRow.AddView(statusText);
+
+            row.AddView(statusRow);
+            _chipGroup.AddView(row);
+
+            // Reactive wiring — toggle spinner / text based on the participant's properties.
+            captured.WhenAnyValue(x => x.IsLookingUpKey)
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(looking =>
+                {
+                    spinner.Visibility = looking ? ViewStates.Visible : ViewStates.Gone;
+                    UpdateStatusRowVisibility(statusRow, spinner, statusText);
+                })
+                .DisposeWith(_participantDisposables);
+
+            captured.WhenAnyValue(x => x.KeyPackageStatusText)
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(text =>
+                {
+                    statusText.Text = text ?? "";
+                    statusText.Visibility = string.IsNullOrEmpty(text) ? ViewStates.Gone : ViewStates.Visible;
+                    UpdateStatusRowVisibility(statusRow, spinner, statusText);
+                })
+                .DisposeWith(_participantDisposables);
         }
+    }
+
+    private static void UpdateStatusRowVisibility(LinearLayout statusRow, ProgressBar spinner, TextView statusText)
+    {
+        var anyVisible = spinner.Visibility == ViewStates.Visible || statusText.Visibility == ViewStates.Visible;
+        statusRow.Visibility = anyVisible ? ViewStates.Visible : ViewStates.Gone;
     }
 
     public override void OnDestroyView()
@@ -268,6 +355,8 @@ public class NewChatFragment : Fragment
         }
         _chipGroup = null;
         _participantInput = null;
+        _participantDisposables.Dispose();
+        _participantDisposables = new CompositeDisposable();
         _disposables.Dispose();
         _disposables = new CompositeDisposable();
         base.OnDestroyView();
