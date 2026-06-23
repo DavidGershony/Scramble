@@ -28,13 +28,14 @@
         <Border Classes="card"
                 Background="{DynamicResource BackgroundCardBrush}"
                 CornerRadius="16"
-                Padding="24"
+                Padding="32"
                 Margin="20"
                 VerticalAlignment="Center"
                 HorizontalAlignment="Center"
-                MinWidth="320" MaxWidth="500">
-            <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="700">
-                <StackPanel Spacing="20">
+                MinWidth="420" MaxWidth="560">
+            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Spacing="16">
                     <!-- Header -->
                     <Grid ColumnDefinitions="*,Auto">
                         <TextBlock Text="My Profile"
@@ -111,7 +112,7 @@
                                 HorizontalAlignment="Center"
                                 IsVisible="{Binding MyNpubQrPngBytes, Converter={x:Static ObjectConverters.IsNotNull}}">
                             <Image Source="{Binding MyNpubQrPngBytes, Converter={StaticResource PngBytesToBitmapConverter}}"
-                                   Width="200" Height="200"
+                                   Width="160" Height="160"
                                    Stretch="Uniform" />
                         </Border>
                         <TextBlock Text="Your Public Key (npub)"

@@ -2,10 +2,15 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Scramble.Presentation.ViewModels"
              xmlns:views="using:Scramble.UI.Views"
+             xmlns:converters="using:Scramble.UI.Converters"
              xmlns:asyncImageLoader="using:AsyncImageLoader"
              x:Class="Scramble.MobileAndroid.Views.MobileMainView"
              x:Name="Root"
              x:DataType="vm:ShellViewModel">
+
+    <UserControl.Resources>
+        <converters:PngBytesToBitmapConverter x:Key="PngBytesToBitmapConverter" />
+    </UserControl.Resources>
 
     <!--
         Mobile shell for the Avalonia Android head.
@@ -44,12 +49,14 @@
 
             <!-- Top header bar: avatar (tap to open account switcher), display name,
                  and action icons (new chat + settings) aligned to the right.
-                 Hidden when chat is open or when settings overlay is shown so its
-                 controls don't capture focus underneath. -->
+                 Hidden when chat is open, settings overlay is shown, or new chat
+                 dialog is open so its controls don't capture focus underneath. -->
             <Panel Grid.Row="0"
                    IsVisible="{Binding CurrentView, Converter={x:Static ObjectConverters.IsNull}}">
                 <Panel IsVisible="{Binding !ChatViewModel.HasChat}">
-                    <Border Padding="12,8" Background="{DynamicResource BackgroundLightBrush}">
+                    <Panel IsVisible="{Binding !ChatListViewModel.ShowNewChatDialog}">
+                        <Panel IsVisible="{Binding !ChatListViewModel.ShowAddBotDialog}">
+                            <Border Padding="12,8" Background="{DynamicResource BackgroundLightBrush}">
                         <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">
                             <!-- Avatar (clickable - opens account switcher) -->
                             <Button x:Name="AvatarButton" Grid.Column="0" Classes="icon"
@@ -106,6 +113,8 @@
                             </Button>
                         </Grid>
                     </Border>
+                        </Panel>
+                    </Panel>
                 </Panel>
             </Panel>
 
@@ -134,12 +143,17 @@
                 </Border>
 
                 <!-- Chat list (default view).
-                     Outer Panel hides the list whenever the settings overlay is open (CurrentView != null);
-                     inner IsVisible additionally hides it when an active chat is open.
+                     Outer Panel hides the list whenever the settings overlay is open (CurrentView != null)
+                     or when any full-screen dialog is shown (new chat, link device).
+                     Inner IsVisible additionally hides it when an active chat is open.
                      This stops the list's focusable controls from cycling under TAB when the overlay is shown. -->
                 <Panel IsVisible="{Binding CurrentView, Converter={x:Static ObjectConverters.IsNull}}">
-                    <views:ChatListView DataContext="{Binding ChatListViewModel}"
-                                        IsVisible="{Binding !$parent[Grid].DataContext.ChatViewModel.HasChat}" />
+                    <Panel IsVisible="{Binding !ChatListViewModel.ShowNewChatDialog}">
+                        <Panel IsVisible="{Binding !ChatListViewModel.ShowAddBotDialog}">
+                            <views:ChatListView DataContext="{Binding ChatListViewModel}"
+                                                IsVisible="{Binding !$parent[Grid].DataContext.ChatViewModel.HasChat}" />
+                        </Panel>
+                    </Panel>
                 </Panel>
 
                 <!-- Active chat overlay -->
@@ -158,14 +172,202 @@
         <views:LoginView DataContext="{Binding LoginViewModel}"
                          IsVisible="{Binding #Root.DataContext.IsLoggedIn, Converter={x:Static BoolConverters.Not}}" />
 
-        <!-- New Chat dialog overlay. Mirrors the desktop overlay at MainWindow.axaml; both shells
-             render the same NewChatDialogView UserControl. Placed at outer Grid scope so the dim
-             backdrop covers the entire screen. -->
-        <ContentControl DataContext="{Binding #Root.DataContext.MainViewModel.ChatListViewModel}"
-                        x:DataType="vm:ChatListViewModel"
-                        IsVisible="{Binding ShowNewChatDialog, FallbackValue=False}">
-            <views:NewChatDialogView />
-        </ContentControl>
+        <!-- New Chat full-screen view (mobile). Replaces the popup card used on desktop
+             with a full-screen form that scrolls properly on small screens. -->
+        <Border DataContext="{Binding #Root.DataContext.MainViewModel.ChatListViewModel}"
+                x:DataType="vm:ChatListViewModel"
+                IsVisible="{Binding ShowNewChatDialog, FallbackValue=False}"
+                Background="{DynamicResource BackgroundDarkBrush}"
+                HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+            <Grid RowDefinitions="Auto,*,Auto">
+                <!-- Header bar -->
+                <Border Grid.Row="0" Padding="12,12" Background="{DynamicResource BackgroundLightBrush}">
+                    <Grid ColumnDefinitions="Auto,*,Auto">
+                        <Button Grid.Column="0" Classes="icon"
+                                Command="{Binding CancelNewChatCommand}"
+                                ToolTip.Tip="Back" Padding="4">
+                            <PathIcon Data="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"
+                                      Width="22" Height="22" />
+                        </Button>
+                        <TextBlock Grid.Column="1" Text="New Chat"
+                                   FontSize="18" FontWeight="Bold"
+                                   VerticalAlignment="Center" Margin="12,0,0,0" />
+                        <Button Grid.Column="2"
+                                Classes="primary"
+                                Content="Create"
+                                Command="{Binding CreateChatCommand}"
+                                Padding="16,6"
+                                FontSize="14" />
+                    </Grid>
+                </Border>
+
+                <!-- Scrollable form content (hidden during progress) -->
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              Padding="16,12"
+                              IsVisible="{Binding CreateProgress, Converter={x:Static StringConverters.IsNullOrEmpty}}">
+                    <StackPanel Spacing="16">
+                        <!-- Name (optional) -->
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="Name (optional)" Classes="secondary" FontSize="13" />
+                            <TextBox Text="{Binding NewChatName}"
+                                     PlaceholderText="Chat or group name"
+                                     AcceptsReturn="False" />
+                        </StackPanel>
+
+                        <!-- Description (optional) -->
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="Description (optional)" Classes="secondary" FontSize="13" />
+                            <TextBox Text="{Binding NewChatDescription}"
+                                     PlaceholderText="What's this chat about?"
+                                     AcceptsReturn="False" />
+                        </StackPanel>
+
+                        <!-- Participants section -->
+                        <StackPanel Spacing="6">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Grid.Column="0" Text="Participants" Classes="secondary" FontSize="13"
+                                           VerticalAlignment="Center" />
+                                <Button Grid.Column="1" Classes="icon"
+                                        Padding="4"
+                                        Command="{Binding RefreshFollowingCommand}"
+                                        ToolTip.Tip="Refresh contacts from relays">
+                                    <PathIcon Data="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"
+                                              Width="16" Height="16" />
+                                </Button>
+                            </Grid>
+
+                            <!-- Input + Add (stacked on mobile for space) -->
+                            <Grid ColumnDefinitions="*,8,Auto">
+                                <TextBox Grid.Column="0"
+                                         Text="{Binding NewChatParticipantInput}"
+                                         PlaceholderText="npub / nprofile / hex"
+                                         AcceptsReturn="False" />
+                                <Button Grid.Column="2"
+                                        Content="Add"
+                                        Classes="secondary"
+                                        Command="{Binding AddChatParticipantCommand}"
+                                        Padding="16,8" />
+                            </Grid>
+
+                            <!-- Added participants with per-user key status -->
+                            <ItemsControl x:Name="MobileParticipantChips" ItemsSource="{Binding NewChatParticipants}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:FollowContactViewModel">
+                                        <Border Background="{DynamicResource SurfaceSecondaryBrush}"
+                                                CornerRadius="8" Padding="12,8" Margin="0,4">
+                                            <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto">
+                                                <!-- Name + remove button -->
+                                                <TextBlock Grid.Row="0" Grid.Column="0"
+                                                           Text="{Binding ShownName}"
+                                                           FontSize="14" FontWeight="SemiBold"
+                                                           VerticalAlignment="Center" />
+                                                <Button Grid.Row="0" Grid.Column="1"
+                                                        Content="✕"
+                                                        Padding="6,2" FontSize="12"
+                                                        Background="Transparent" BorderThickness="0"
+                                                        Command="{Binding #MobileParticipantChips.DataContext.RemoveChatParticipantCommand}"
+                                                        CommandParameter="{Binding}"
+                                                        VerticalAlignment="Center" />
+                                                <!-- Per-user key status (shown below name) -->
+                                                <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                                                            Margin="0,4,0,0">
+                                                    <!-- Lookup in progress -->
+                                                    <StackPanel Orientation="Horizontal" Spacing="6"
+                                                                IsVisible="{Binding IsLookingUpKey}">
+                                                        <ProgressBar IsIndeterminate="True" Width="80" Height="2"
+                                                                     Foreground="{DynamicResource NostrPurpleBrush}" />
+                                                        <TextBlock Text="Checking key..." FontSize="11" Classes="muted" />
+                                                    </StackPanel>
+                                                    <!-- Result -->
+                                                    <TextBlock Text="{Binding KeyPackageStatusText}"
+                                                               FontSize="11" Classes="muted"
+                                                               TextWrapping="Wrap"
+                                                               IsVisible="{Binding KeyPackageStatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                                </StackPanel>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <!-- Following picker -->
+                            <Border IsVisible="{Binding Following.Count}"
+                                    Background="{DynamicResource SurfaceSecondaryBrush}"
+                                    CornerRadius="8"
+                                    Padding="4"
+                                    MaxHeight="200">
+                                <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                    <ItemsControl x:Name="MobileFollowingList" ItemsSource="{Binding Following}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:FollowContactViewModel">
+                                                <Button HorizontalAlignment="Stretch"
+                                                        HorizontalContentAlignment="Left"
+                                                        Background="Transparent" BorderThickness="0"
+                                                        Padding="10,8"
+                                                        IsVisible="{Binding IsVisible}"
+                                                        Command="{Binding #MobileFollowingList.((vm:ChatListViewModel)DataContext).AddContactToChatCommand}"
+                                                        CommandParameter="{Binding PublicKeyHex}">
+                                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                                        <TextBlock Text="{Binding ShownName}"
+                                                                   FontSize="14" VerticalAlignment="Center" />
+                                                        <TextBlock Text="{Binding Npub}"
+                                                                   FontSize="11" Classes="muted"
+                                                                   VerticalAlignment="Center"
+                                                                   MaxWidth="180"
+                                                                   TextTrimming="CharacterEllipsis" />
+                                                    </StackPanel>
+                                                </Button>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </Border>
+                        </StackPanel>
+
+                        <!-- Relay Selection (vertical list of checkboxes) -->
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="Relays" Classes="secondary" FontSize="13" />
+                            <ItemsControl ItemsSource="{Binding SelectableRelays}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:RelaySelectionItemViewModel">
+                                        <CheckBox IsChecked="{Binding IsSelected}"
+                                                  Margin="0,2" Padding="8,4">
+                                            <TextBlock Text="{Binding DisplayUrl}" FontSize="13"
+                                                       VerticalAlignment="Center" />
+                                        </CheckBox>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+
+                        <!-- Error Message -->
+                        <TextBlock Text="{Binding NewChatError}"
+                                   Foreground="{DynamicResource StatusErrorBrush}"
+                                   FontSize="13"
+                                   TextWrapping="Wrap"
+                                   IsVisible="{Binding NewChatError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Progress overlay (shown during creation) -->
+                <StackPanel Grid.Row="1"
+                            IsVisible="{Binding CreateProgress, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                            VerticalAlignment="Center"
+                            HorizontalAlignment="Center"
+                            Spacing="16"
+                            Margin="40">
+                    <ProgressBar IsIndeterminate="True" Width="160" Height="4"
+                                 Foreground="{DynamicResource NostrPurpleBrush}" />
+                    <TextBlock Text="{Binding CreateProgress}"
+                               FontSize="15" FontWeight="SemiBold"
+                               HorizontalAlignment="Center" />
+                    <TextBlock Text="This may take a moment"
+                               Classes="muted" FontSize="12"
+                               HorizontalAlignment="Center" />
+                </StackPanel>
+            </Grid>
+        </Border>
 
         <!-- Link Device dialog overlay. Mirrors the desktop overlay at MainWindow.axaml. -->
         <Border DataContext="{Binding #Root.DataContext.MainViewModel.ChatListViewModel}"
@@ -319,12 +521,173 @@
             <views:AccountSwitcherView />
         </ContentControl>
 
-        <!-- My Profile dialog overlay (shared with desktop MainWindow). Gated on
-             MainViewModel.ShowMyProfileDialog. -->
-        <ContentControl DataContext="{Binding #Root.DataContext.MainViewModel}"
-                        x:DataType="vm:MainViewModel"
-                        IsVisible="{Binding ShowMyProfileDialog, FallbackValue=False}">
-            <views:MyProfileDialogView />
-        </ContentControl>
+        <!-- My Profile full-screen view (mobile). Replaces the popup card used on desktop
+             with a full-screen view optimized for phone displays. -->
+        <Border DataContext="{Binding #Root.DataContext.MainViewModel}"
+                x:DataType="vm:MainViewModel"
+                IsVisible="{Binding ShowMyProfileDialog, FallbackValue=False}"
+                Background="{DynamicResource BackgroundDarkBrush}"
+                HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+            <Grid RowDefinitions="Auto,*">
+                <!-- Header bar -->
+                <Border Grid.Row="0" Padding="12,12" Background="{DynamicResource BackgroundLightBrush}">
+                    <Grid ColumnDefinitions="Auto,*">
+                        <Button Grid.Column="0" Classes="icon"
+                                Command="{Binding CloseMyProfileCommand}"
+                                ToolTip.Tip="Back" Padding="4">
+                            <PathIcon Data="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"
+                                      Width="22" Height="22" />
+                        </Button>
+                        <TextBlock Grid.Column="1" Text="My Profile"
+                                   FontSize="18" FontWeight="Bold"
+                                   VerticalAlignment="Center" Margin="12,0,0,0" />
+                    </Grid>
+                </Border>
+
+                <!-- Profile content -->
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled">
+                    <Grid Margin="20,16">
+                        <StackPanel Spacing="20">
+                        <!-- Avatar with Profile Picture -->
+                        <Panel Width="100" Height="100" HorizontalAlignment="Center">
+                            <!-- Fallback avatar -->
+                            <Border Width="100" Height="100" CornerRadius="50"
+                                    Background="{DynamicResource NostrPurpleBrush}"
+                                    IsVisible="{Binding MyPictureUrl, Converter={x:Static StringConverters.IsNullOrEmpty}}">
+                                <TextBlock Text="U" FontSize="40" FontWeight="Bold" Foreground="White"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <!-- Profile picture -->
+                            <Border Width="100" Height="100" CornerRadius="50" ClipToBounds="True"
+                                    IsVisible="{Binding MyPictureUrl, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <Image asyncImageLoader:ImageLoader.Source="{Binding MyPictureUrl}"
+                                       Stretch="UniformToFill" />
+                            </Border>
+                            <!-- Loading indicator -->
+                            <Border Width="100" Height="100" CornerRadius="50"
+                                    Background="#80000000"
+                                    IsVisible="{Binding IsLoadingProfile}">
+                                <TextBlock Text="..." FontSize="28" Foreground="White"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                        </Panel>
+
+                        <!-- Profile Name -->
+                        <StackPanel Spacing="4" HorizontalAlignment="Center"
+                                    IsVisible="{Binding MyDisplayName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                            <TextBlock Text="{Binding MyDisplayName}"
+                                       FontSize="20" FontWeight="SemiBold"
+                                       HorizontalAlignment="Center" />
+                            <TextBlock Text="{Binding MyName, StringFormat='@{0}'}"
+                                       Classes="muted" FontSize="14"
+                                       HorizontalAlignment="Center"
+                                       IsVisible="{Binding MyName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </StackPanel>
+                        <!-- Fallback to just name if no display name -->
+                        <TextBlock Text="{Binding MyName}"
+                                   FontSize="20" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center">
+                            <TextBlock.IsVisible>
+                                <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                    <Binding Path="MyDisplayName" Converter="{x:Static StringConverters.IsNullOrEmpty}" />
+                                    <Binding Path="MyName" Converter="{x:Static StringConverters.IsNotNullOrEmpty}" />
+                                </MultiBinding>
+                            </TextBlock.IsVisible>
+                        </TextBlock>
+
+                        <!-- About -->
+                        <Border Background="{DynamicResource SurfaceSecondaryBrush}"
+                                CornerRadius="8" Padding="12"
+                                IsVisible="{Binding MyAbout, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                            <TextBlock Text="{Binding MyAbout}"
+                                       Classes="secondary" FontSize="14"
+                                       TextWrapping="Wrap" />
+                        </Border>
+
+                        <!-- QR Code -->
+                        <Border Background="White" CornerRadius="12" Padding="12"
+                                HorizontalAlignment="Center"
+                                IsVisible="{Binding MyNpubQrPngBytes, Converter={x:Static ObjectConverters.IsNotNull}}">
+                            <Image Source="{Binding MyNpubQrPngBytes, Converter={StaticResource PngBytesToBitmapConverter}}"
+                                   Width="180" Height="180"
+                                   Stretch="Uniform" />
+                        </Border>
+
+                        <!-- Public Key Section -->
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="Your Public Key (npub)"
+                                       Classes="secondary" FontSize="13" FontWeight="SemiBold" />
+                            <Border Background="{DynamicResource SurfaceSecondaryBrush}"
+                                    CornerRadius="8" Padding="12">
+                                <SelectableTextBlock Text="{Binding MyNpub}"
+                                                     FontSize="12" FontFamily="Consolas, Courier New"
+                                                     TextWrapping="Wrap"
+                                                     Foreground="{DynamicResource TextSecondaryBrush}" />
+                            </Border>
+                            <TextBlock Text="Share this key with others so they can message you on Nostr."
+                                       Classes="muted" FontSize="12" TextWrapping="Wrap" />
+                        </StackPanel>
+
+                        <!-- Copy npub Button -->
+                        <Button Classes="primary"
+                                Command="{Binding CopyNpubCommand}"
+                                HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Center"
+                                Padding="12,14">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <PathIcon Data="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"
+                                          Width="18" Height="18" />
+                                <TextBlock Text="Copy npub" FontSize="15" />
+                            </StackPanel>
+                        </Button>
+
+                        <!-- Private Key (nsec) Section - only for locally created users -->
+                        <StackPanel Spacing="8"
+                                    IsVisible="{Binding MyNsec, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                            <TextBlock Text="Your Private Key (nsec)"
+                                       Classes="secondary" FontSize="13" FontWeight="SemiBold" />
+                            <Border Background="{DynamicResource SurfaceSecondaryBrush}"
+                                    CornerRadius="8" Padding="12">
+                                <SelectableTextBlock Text="{Binding MyNsec}"
+                                                     FontSize="12" FontFamily="Consolas, Courier New"
+                                                     TextWrapping="Wrap"
+                                                     Foreground="{DynamicResource TextSecondaryBrush}" />
+                            </Border>
+                            <Border Background="{DynamicResource WarningBgBrush}" CornerRadius="8" Padding="10">
+                                <Grid ColumnDefinitions="Auto,*">
+                                    <PathIcon Grid.Column="0"
+                                              Data="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"
+                                              Width="16" Height="16" Foreground="{DynamicResource StatusWarningBrush}"
+                                              VerticalAlignment="Top" Margin="0,2,8,0" />
+                                    <TextBlock Grid.Column="1"
+                                               Text="Never share your private key with anyone!"
+                                               Foreground="{DynamicResource StatusWarningBrush}" FontSize="12"
+                                               TextWrapping="Wrap" />
+                                </Grid>
+                            </Border>
+                            <Button Command="{Binding CopyNsecCommand}"
+                                    HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Center"
+                                    Padding="12,14">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <PathIcon Data="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"
+                                              Width="18" Height="18" />
+                                    <TextBlock Text="Copy nsec" FontSize="15" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+
+                        <!-- Copy Status -->
+                        <TextBlock Text="{Binding CopyStatusMessage}"
+                                   Foreground="{DynamicResource StatusOnlineBrush}"
+                                   FontSize="14"
+                                   HorizontalAlignment="Center"
+                                   IsVisible="{Binding CopyStatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    </StackPanel>
+                    </Grid>
+                </ScrollViewer>
+            </Grid>
+        </Border>
     </Grid>
 </UserControl>

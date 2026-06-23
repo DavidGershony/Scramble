@@ -73,7 +73,7 @@
                     </StackPanel>
 
                     <Button Classes="primary" Content="Save Profile" Command="{Binding SaveProfileCommand}"
-                            HorizontalAlignment="Left" />
+                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
 
                     <!-- Publish confirmation dialog -->
                     <Border Background="{DynamicResource BackgroundLightBrush}" CornerRadius="8"
@@ -134,7 +134,7 @@
                         </Grid>
                         <Button Classes="secondary" Content="Add Custom"
                                 Command="{Binding AddCustomRelayCommand}"
-                                HorizontalAlignment="Left" />
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                     </StackPanel>
 
                     <!-- Target list checkboxes -->
@@ -150,7 +150,7 @@
                     <!-- Add selected button -->
                     <Button Classes="primary" Content="Add Selected Relays"
                             Command="{Binding AddPickedRelaysCommand}"
-                            HorizontalAlignment="Left" />
+                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                 </StackPanel>
             </Border>
 
@@ -166,12 +166,12 @@
                                Classes="muted" FontSize="11" TextWrapping="Wrap" />
 
                     <!-- Column headers -->
-                    <Grid ColumnDefinitions="Auto,*,28,28,28,Auto,Auto" Margin="0,4,0,0">
-                        <TextBlock Grid.Column="2" Text="Gen" FontSize="10" Classes="muted"
+                    <Grid ColumnDefinitions="Auto,*,24,24,24,Auto,Auto" Margin="0,4,0,0">
+                        <TextBlock Grid.Column="2" Text="G" FontSize="10" Classes="muted"
                                    HorizontalAlignment="Center" />
-                        <TextBlock Grid.Column="3" Text="DM" FontSize="10" Classes="muted"
+                        <TextBlock Grid.Column="3" Text="D" FontSize="10" Classes="muted"
                                    HorizontalAlignment="Center" />
-                        <TextBlock Grid.Column="4" Text="KP" FontSize="10" Classes="muted"
+                        <TextBlock Grid.Column="4" Text="K" FontSize="10" Classes="muted"
                                    HorizontalAlignment="Center" />
                     </Grid>
 
@@ -179,8 +179,8 @@
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:UnifiedRelayViewModel">
                                 <Border Background="{DynamicResource SurfaceSecondaryBrush}"
-                                        CornerRadius="6" Padding="6,6" Margin="0,2">
-                                    <Grid ColumnDefinitions="Auto,*,28,28,28,Auto,Auto">
+                                        CornerRadius="6" Padding="4,6" Margin="0,2">
+                                    <Grid ColumnDefinitions="Auto,*,24,24,24,Auto,Auto">
                                         <!-- Connection status dot -->
                                         <Panel Grid.Column="0" Width="10" Height="10" Margin="0,0,6,0">
                                             <Ellipse Fill="{DynamicResource StatusOnlineBrush}"
@@ -247,7 +247,7 @@
                     <!-- Reconnect only offline relays -->
                     <Button Classes="secondary" Content="Reconnect offline relays"
                             Command="{Binding ReconnectDisconnectedCommand}"
-                            HorizontalAlignment="Left" />
+                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                 </StackPanel>
             </Border>
 
@@ -258,15 +258,15 @@
                     <TextBlock Text="Your relay preferences as published on the Nostr network (kind 10002)"
                                Classes="secondary" FontSize="13" TextWrapping="Wrap" />
 
-                    <WrapPanel Orientation="Horizontal">
+                    <StackPanel Spacing="8">
                         <Button Classes="secondary" Content="Fetch from Network"
                                 Command="{Binding FetchNip65Command}"
                                 IsEnabled="{Binding !IsFetchingNip65}"
-                                Margin="0,0,8,8" />
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                         <Button Classes="primary" Content="Publish Relay List"
                                 Command="{Binding PublishRelayListCommand}"
-                                Margin="0,0,0,8" />
-                    </WrapPanel>
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                    </StackPanel>
 
                     <!-- Fetch status -->
                     <TextBlock Text="{Binding Nip65Status}"
@@ -383,7 +383,7 @@
                         <Button Classes="primary" Content="Publish Key Package"
                                 Command="{Binding PublishKeyPackageCommand}"
                                 IsEnabled="{Binding !IsPublishingKeyPackage}"
-                                HorizontalAlignment="Left" />
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
 
                         <!-- Status Message -->
                         <Border IsVisible="{Binding KeyPackageStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
@@ -413,7 +413,7 @@
                         <Button Classes="secondary" Content="Audit Key Packages"
                                 Command="{Binding AuditKeyPackagesCommand}"
                                 IsEnabled="{Binding !IsAuditingKeyPackages}"
-                                HorizontalAlignment="Left" />
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
 
                         <Border IsVisible="{Binding AuditStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
                                 Background="{DynamicResource SurfaceSecondaryBrush}"
@@ -472,7 +472,7 @@
                         <Button Classes="secondary" Content="Refresh from Relays"
                                 Command="{Binding FetchDevicesCommand}"
                                 IsEnabled="{Binding !IsFetchingDevices}"
-                                HorizontalAlignment="Left" />
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
 
                         <StackPanel Orientation="Horizontal" Spacing="8"
                                     IsVisible="{Binding IsFetchingDevices}">
@@ -505,21 +505,21 @@
                                             </Panel>
 
                                             <!-- Slot ID + label badges -->
-                                            <StackPanel Grid.Column="1" Grid.Row="0" Orientation="Horizontal" Spacing="8">
+                                            <WrapPanel Grid.Column="1" Grid.Row="0" Orientation="Horizontal">
                                                 <TextBlock Text="{Binding ShortSlotId}" FontFamily="Consolas" FontSize="12"
-                                                           ToolTip.Tip="{Binding FullSlotId}" />
+                                                           ToolTip.Tip="{Binding FullSlotId}" Margin="0,0,8,2" />
                                                 <Border Background="{DynamicResource NostrPurpleBrush}"
-                                                        CornerRadius="4" Padding="6,1"
+                                                        CornerRadius="4" Padding="6,1" Margin="0,0,4,2"
                                                         IsVisible="{Binding IsThisDevice}">
                                                     <TextBlock Text="This device" FontSize="10" Foreground="White" />
                                                 </Border>
                                                 <Border Background="{DynamicResource StatusErrorBrush}"
-                                                        CornerRadius="4" Padding="6,1"
+                                                        CornerRadius="4" Padding="6,1" Margin="0,0,4,2"
                                                         IsVisible="{Binding IsLost}">
                                                     <TextBlock Text="Lost" FontSize="10" Foreground="White" />
                                                 </Border>
                                                 <Border Background="{DynamicResource TextMutedBrush}"
-                                                        CornerRadius="4" Padding="6,1">
+                                                        CornerRadius="4" Padding="6,1" Margin="0,0,4,2">
                                                     <Border.IsVisible>
                                                         <MultiBinding Converter="{x:Static BoolConverters.And}">
                                                             <Binding Path="!IsThisDevice" />
@@ -528,7 +528,7 @@
                                                     </Border.IsVisible>
                                                     <TextBlock Text="Peer" FontSize="10" Foreground="White" />
                                                 </Border>
-                                            </StackPanel>
+                                            </WrapPanel>
 
                                             <!-- Cipher suite + KP count -->
                                             <StackPanel Grid.Column="1" Grid.Row="1" Orientation="Horizontal" Spacing="8">
@@ -817,12 +817,14 @@
                                      PlaceholderText="https://ntfy.sh/your-topic" />
                         </StackPanel>
 
-                        <WrapPanel Orientation="Horizontal">
+                        <StackPanel Spacing="8">
                             <Button Classes="secondary" Content="Generate topic"
-                                    Command="{Binding GeneratePushTopicCommand}" Margin="0,0,8,8" />
+                                    Command="{Binding GeneratePushTopicCommand}"
+                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                             <Button Classes="secondary" Content="Open in ntfy"
-                                    Command="{Binding SubscribeInNtfyCommand}" Margin="0,0,0,8" />
-                        </WrapPanel>
+                                    Command="{Binding SubscribeInNtfyCommand}"
+                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
+                        </StackPanel>
 
                         <Button Classes="primary" Content="Register"
                                 Command="{Binding RegisterNotificationsCommand}"
@@ -854,7 +856,7 @@
                     <TextBlock Text="Application Logs" Classes="secondary" FontSize="13" />
                     <Button Classes="secondary" Content="View Logs"
                             Command="{Binding ViewLogsCommand}"
-                            HorizontalAlignment="Left" />
+                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
                 </StackPanel>
             </Border>
 
