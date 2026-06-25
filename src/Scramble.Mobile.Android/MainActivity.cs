@@ -220,8 +220,10 @@ public class MainActivity : AvaloniaMainActivity
     /// </summary>
     private sealed class ImeInsetListener : Java.Lang.Object, IOnApplyWindowInsetsListener
     {
-        public WindowInsetsCompat OnApplyWindowInsets(global::Android.Views.View v, WindowInsetsCompat insets)
+        public WindowInsetsCompat? OnApplyWindowInsets(global::Android.Views.View? v, WindowInsetsCompat? insets)
         {
+            if (v == null || insets == null) return insets;
+
             var imeBottom = insets.GetInsets(WindowInsetsCompat.Type.Ime()).Bottom;
             var systemBars = insets.GetInsets(WindowInsetsCompat.Type.SystemBars());
 
@@ -244,18 +246,20 @@ public class MainActivity : AvaloniaMainActivity
         public ImeInsetAnimationCallback(int dispatchMode) : base(dispatchMode) { }
 
         public override WindowInsetsCompat OnProgress(
-            WindowInsetsCompat insets,
-            IList<WindowInsetsAnimationCompat> runningAnimations)
+            WindowInsetsCompat? insets,
+            IList<WindowInsetsAnimationCompat>? runningAnimations)
         {
-            // Only react if at least one running animation is the IME (a system bar
-            // animation could also be in flight on some devices); the inset value
-            // already reflects whatever the runtime is currently displaying so we can
-            // just forward it through the same calculation the static listener uses.
+            if (insets == null) return new WindowInsetsCompat.Builder().Build();
+
+            // The inset value already reflects whatever the runtime is currently
+            // displaying so we can just forward it through the same calculation the
+            // static listener uses. runningAnimations is checked for null but its
+            // contents aren't needed — we react to whatever the current insets say.
             var imeBottom = insets.GetInsets(WindowInsetsCompat.Type.Ime()).Bottom;
             var systemBars = insets.GetInsets(WindowInsetsCompat.Type.SystemBars());
             var bottom = System.Math.Max(imeBottom, systemBars.Bottom);
 
-            var root = Current?.Window?.DecorView.FindViewById(global::Android.Resource.Id.Content);
+            var root = Current?.Window?.DecorView?.FindViewById(global::Android.Resource.Id.Content);
             root?.SetPadding(systemBars.Left, systemBars.Top, systemBars.Right, bottom);
             return insets;
         }
