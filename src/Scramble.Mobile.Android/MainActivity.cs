@@ -63,19 +63,22 @@ public class MainActivity : AvaloniaMainActivity
 
         // IME (soft keyboard) inset handling.
         //
-        // On Android 15+ (targetSdk 35) edge-to-edge is enforced and
-        // WindowSoftInputMode=AdjustResize silently no-ops — the activity draws under
-        // the IME and we have to apply the keyboard's bottom inset as padding ourselves.
-        // Without this the chat input is hidden behind the keyboard.
+        // Android 15+ (targetSdk 35) sets EDGE_TO_EDGE_ENFORCED on the window, which
+        // silently disables WindowSoftInputMode=AdjustResize — the activity stays
+        // fullscreen even when the IME opens, and the chat input is hidden behind
+        // the keyboard. WindowCompat.SetDecorFitsSystemWindows(true) does NOT
+        // override the enforcement (verified via dumpsys window — the flag stays on).
         //
-        // We attach both:
-        //   * a one-shot inset listener that sets the final padding once the keyboard
-        //     has finished animating (covers Android 10 and earlier where the animation
-        //     callback isn't dispatched), and
-        //   * a WindowInsetsAnimationCompat callback that drives the padding frame by
-        //     frame so the content tracks the keyboard during the open/close animation
-        //     on Android 11+.
+        // The working fix is to install a WindowInsetsCompat listener on the Avalonia
+        // view itself (first child of android.R.id.content) and apply the IME bottom
+        // inset as padding. Applying to android.R.id.content does not work because
+        // Avalonia draws into a SurfaceView that doesn't react to parent padding.
+        //
+        // Try to attach immediately (Avalonia.Android usually has its view mounted by
+        // the time base.OnCreate returns), and also post as a backstop in case Avalonia
+        // is still booting its view tree on a slow boot.
         InstallImeInsetHandling();
+        Window?.DecorView.Post(InstallImeInsetHandling);
     }
 
     /// <summary>
@@ -188,29 +191,35 @@ public class MainActivity : AvaloniaMainActivity
         }
     }
 
+    private bool _imeListenersAttached;
+
     /// <summary>
-    /// Wires both the inset listener and the animation callback that translate the
-    /// IME (soft keyboard) bottom inset into bottom padding on the Avalonia content
-    /// view. Applied to <c>android.R.id.content</c> so every screen the app renders
-    /// — chat, settings, dialogs — automatically picks up the keyboard inset.
+    /// Resolves the Avalonia surface view (first child of <c>android.R.id.content</c>)
+    /// and attaches the IME inset listener + animation callback that drive the
+    /// keyboard-aware padding. Idempotent: a second call is a no-op once the
+    /// listeners are bound, which lets us call this both inline from <see cref="OnCreate"/>
+    /// and as a posted message — whichever observes the Avalonia view first wins.
     /// </summary>
     private void InstallImeInsetHandling()
     {
-        var rootView = Window?.DecorView.FindViewById(global::Android.Resource.Id.Content);
-        if (rootView == null) return;
+        if (_imeListenersAttached) return;
 
-        // Static inset listener: applies the final padding once the keyboard has
-        // finished animating. On Android 11+ the animation callback drives this in
-        // real-time during the open/close; this listener still fires for the final
-        // value and for any platform that doesn't deliver the animation callbacks.
-        ViewCompat.SetOnApplyWindowInsetsListener(rootView, new ImeInsetListener());
+        if (Window?.DecorView.FindViewById(global::Android.Resource.Id.Content) is not Android.Views.ViewGroup contentGroup)
+            return;
+        if (contentGroup.ChildCount == 0)
+        {
+            contentGroup.Post(InstallImeInsetHandling);
+            return;
+        }
 
-        // Animated callback (Android 11+): drives the bottom padding frame-by-frame
-        // so the content slides in sync with the keyboard instead of snapping at the
-        // end. Dispatch mode is "stop" so children don't also receive the animation —
-        // we're the only consumer in the activity.
-        ViewCompat.SetWindowInsetsAnimationCallback(rootView,
-            new ImeInsetAnimationCallback(WindowInsetsAnimationCompat.Callback.DispatchModeStop));
+        var avaloniaView = contentGroup.GetChildAt(0);
+        if (avaloniaView == null) return;
+
+        ViewCompat.SetOnApplyWindowInsetsListener(avaloniaView, new ImeInsetListener());
+        ViewCompat.SetWindowInsetsAnimationCallback(avaloniaView,
+            new ImeInsetAnimationCallback(WindowInsetsAnimationCompat.Callback.DispatchModeStop, avaloniaView));
+        ViewCompat.RequestApplyInsets(avaloniaView);
+        _imeListenersAttached = true;
     }
 
     /// <summary>
@@ -224,13 +233,9 @@ public class MainActivity : AvaloniaMainActivity
         {
             if (v == null || insets == null) return insets;
 
-            var imeBottom = insets.GetInsets(WindowInsetsCompat.Type.Ime()).Bottom;
+            var ime = insets.GetInsets(WindowInsetsCompat.Type.Ime());
             var systemBars = insets.GetInsets(WindowInsetsCompat.Type.SystemBars());
-
-            // When the IME is up its inset already includes the navigation bar height;
-            // when it's down we still need to leave room for the nav bar itself.
-            var bottom = System.Math.Max(imeBottom, systemBars.Bottom);
-
+            var bottom = System.Math.Max(ime.Bottom, systemBars.Bottom);
             v.SetPadding(systemBars.Left, systemBars.Top, systemBars.Right, bottom);
             return insets;
         }
@@ -238,12 +243,16 @@ public class MainActivity : AvaloniaMainActivity
 
     /// <summary>
     /// Animation callback that interpolates the bottom padding while the IME is
-    /// opening or closing. Required because <see cref="ImeInsetListener"/> only sees
-    /// the final state; without this the content snaps instead of sliding.
+    /// opening or closing, so the content slides in sync with the keyboard.
     /// </summary>
     private sealed class ImeInsetAnimationCallback : WindowInsetsAnimationCompat.Callback
     {
-        public ImeInsetAnimationCallback(int dispatchMode) : base(dispatchMode) { }
+        private readonly global::Android.Views.View _target;
+
+        public ImeInsetAnimationCallback(int dispatchMode, global::Android.Views.View target) : base(dispatchMode)
+        {
+            _target = target;
+        }
 
         public override WindowInsetsCompat OnProgress(
             WindowInsetsCompat? insets,
@@ -251,16 +260,10 @@ public class MainActivity : AvaloniaMainActivity
         {
             if (insets == null) return new WindowInsetsCompat.Builder().Build();
 
-            // The inset value already reflects whatever the runtime is currently
-            // displaying so we can just forward it through the same calculation the
-            // static listener uses. runningAnimations is checked for null but its
-            // contents aren't needed — we react to whatever the current insets say.
-            var imeBottom = insets.GetInsets(WindowInsetsCompat.Type.Ime()).Bottom;
+            var ime = insets.GetInsets(WindowInsetsCompat.Type.Ime());
             var systemBars = insets.GetInsets(WindowInsetsCompat.Type.SystemBars());
-            var bottom = System.Math.Max(imeBottom, systemBars.Bottom);
-
-            var root = Current?.Window?.DecorView?.FindViewById(global::Android.Resource.Id.Content);
-            root?.SetPadding(systemBars.Left, systemBars.Top, systemBars.Right, bottom);
+            var bottom = System.Math.Max(ime.Bottom, systemBars.Bottom);
+            _target.SetPadding(systemBars.Left, systemBars.Top, systemBars.Right, bottom);
             return insets;
         }
     }
