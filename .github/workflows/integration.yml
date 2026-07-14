@@ -1,0 +1,132 @@
+name: Integration (Ubuntu, required)
+
+# S1: integration suite runs on every PR that touches MLS / Nostr / signer /
+# protocol code, or the test infra itself. See ANALYSIS.md STEP 6 and docs/ci-setup.md.
+#
+# Rationale: for the whole Feb-May 2026 development window, integration tests
+# existed in tests/Scramble.Diagnostics/ but were excluded from CI. The
+# MIP-00..04 interop tests, cross-MDK relay tests, DeviceSync E2E, and outbox
+# model tests all landed reactively (same day as the bug they proved). This
+# workflow makes them a merge gate on the paths where regressions actually happened.
+
+on:
+  push:
+    branches: [ "master" ]
+    paths:
+      - 'src/Scramble.Core/**'
+      - 'src/Scramble.Presentation/**'
+      - 'lib/marmot-cs/**'
+      - 'lib/dotnet-mls/**'
+      - 'tests/Scramble.Diagnostics/**'
+      - 'tests/Scramble.Core.Tests/**'
+      - 'tests/Scramble.UI.Tests/**'
+      - '.github/workflows/integration.yml'
+      - 'docker-compose.test.yml'
+  pull_request:
+    branches: [ "master" ]
+    paths:
+      - 'src/Scramble.Core/**'
+      - 'src/Scramble.Presentation/**'
+      - 'lib/marmot-cs/**'
+      - 'lib/dotnet-mls/**'
+      - 'tests/Scramble.Diagnostics/**'
+      - 'tests/Scramble.Core.Tests/**'
+      - 'tests/Scramble.UI.Tests/**'
+      - '.github/workflows/integration.yml'
+      - 'docker-compose.test.yml'
+
+jobs:
+
+  integration:
+    name: Integration tests (Ubuntu + Docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        submodules: recursive
+
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache Rust build
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: src/Scramble.Native
+
+    - name: Build Rust native shared object
+      run: cargo build --release --manifest-path src/Scramble.Native/Cargo.toml
+
+    - name: Copy .so to Desktop project
+      run: cp src/Scramble.Native/target/release/libscramble_native.so src/Scramble.Desktop/
+
+    - name: Install .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 10.0.x
+
+    - name: Start relay + Whitenoise containers
+      run: docker compose -f docker-compose.test.yml up -d nostr-relay
+
+    - name: Wait for relay
+      run: |
+        for i in {1..30}; do
+          if curl -s -o /dev/null -w "%{http_code}" http://localhost:7777 | grep -qE '(200|400|426)'; then
+            echo "relay up"; exit 0
+          fi
+          sleep 1
+        done
+        echo "relay never came up" >&2
+        docker compose -f docker-compose.test.yml logs nostr-relay
+        exit 1
+
+    - name: Restore dependencies
+      run: dotnet restore Scramble.Desktop.slnf -p:DesktopOnly=true
+
+    - name: Build (Release, DesktopOnly)
+      run: dotnet build Scramble.Desktop.slnf --no-restore --configuration Release -p:DesktopOnly=true
+
+    # Whitelist union — future test categories default to NOT required until
+    # explicitly opted in here. WhitenoiseInterop and WebInterop are excluded;
+    # they need external services beyond docker-compose and run nightly.
+    - name: Execute Core.Tests integration suite
+      run: >
+        dotnet test tests/Scramble.Core.Tests/Scramble.Core.Tests.csproj
+        --no-build --configuration Release -p:DesktopOnly=true
+        --filter "Category=Integration|Category=Relay|Category=Native"
+        --logger "trx;LogFileName=core-integration.trx"
+        --results-directory TestResults
+
+    - name: Execute UI.Tests integration suite
+      run: >
+        dotnet test tests/Scramble.UI.Tests/Scramble.UI.Tests.csproj
+        --no-build --configuration Release -p:DesktopOnly=true
+        --filter "Category=Integration"
+        --logger "trx;LogFileName=ui-integration.trx"
+        --results-directory TestResults
+
+    - name: Execute Diagnostics integration suite
+      run: >
+        dotnet test tests/Scramble.Diagnostics/Scramble.Diagnostics.csproj
+        --configuration Release -p:DesktopOnly=true
+        --filter "Category=Integration|Category=MIP-Compliance|Category=ProtocolCompliance|Category=FullE2E|Category=EpochSync|Category=DeviceSync|Category=OutboxModel|Category=Notifications|Category=RelayHarness|Category=ExporterSecret"
+        --logger "trx;LogFileName=diagnostics-integration.trx"
+        --results-directory TestResults
+
+    - name: Dump relay logs on failure
+      if: failure()
+      run: docker compose -f docker-compose.test.yml logs nostr-relay
+
+    - name: Stop containers
+      if: always()
+      run: docker compose -f docker-compose.test.yml down -v
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: integration-test-results
+        path: TestResults/*.trx

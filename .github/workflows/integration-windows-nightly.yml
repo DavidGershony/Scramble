@@ -1,0 +1,103 @@
+name: Integration (Windows, nightly)
+
+# S1: nightly regression run on Windows for the same integration surface.
+# Not merge-required. Catches regressions on Windows-only code paths
+# (DPAPI-backed SecureStorage, path-separator assumptions, native DLL loading)
+# without paying the windows-latest + Docker cost on every PR.
+
+on:
+  schedule:
+    - cron: '0 4 * * *'   # 04:00 UTC daily
+  workflow_dispatch: {}
+
+jobs:
+
+  integration-windows:
+    name: Integration tests (Windows + Docker)
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        submodules: recursive
+
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache Rust build
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: src/Scramble.Native
+
+    - name: Build Rust native DLL
+      run: cargo build --release --manifest-path src/Scramble.Native/Cargo.toml
+
+    - name: Copy DLL to Desktop project
+      shell: pwsh
+      run: cp src/Scramble.Native/target/release/scramble_native.dll src/Scramble.Desktop/
+
+    - name: Install .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 10.0.x
+
+    - name: Switch Docker to Linux containers
+      shell: pwsh
+      run: |
+        # windows-latest ships with Docker Desktop; ensure Linux engine mode.
+        & "$env:ProgramFiles\Docker\Docker\DockerCli.exe" -SwitchLinuxEngine
+
+    - name: Start relay
+      shell: pwsh
+      run: docker compose -f docker-compose.test.yml up -d nostr-relay
+
+    - name: Wait for relay
+      shell: pwsh
+      run: |
+        for ($i = 0; $i -lt 60; $i++) {
+          try {
+            $r = Invoke-WebRequest -UseBasicParsing -Uri http://localhost:7777 -TimeoutSec 2
+            if ($r.StatusCode -in 200,400,426) { Write-Host "relay up"; exit 0 }
+          } catch { }
+          Start-Sleep -Seconds 1
+        }
+        Write-Error "relay never came up"
+        docker compose -f docker-compose.test.yml logs nostr-relay
+        exit 1
+
+    - name: Restore dependencies
+      run: dotnet restore Scramble.Desktop.slnf -p:DesktopOnly=true
+
+    - name: Build (Release, DesktopOnly)
+      run: dotnet build Scramble.Desktop.slnf --no-restore --configuration Release -p:DesktopOnly=true
+
+    - name: Execute Core.Tests integration suite
+      run: >
+        dotnet test tests/Scramble.Core.Tests/Scramble.Core.Tests.csproj
+        --no-build --configuration Release -p:DesktopOnly=true
+        --filter "Category=Integration|Category=Relay|Category=Native"
+
+    - name: Execute UI.Tests integration suite
+      run: >
+        dotnet test tests/Scramble.UI.Tests/Scramble.UI.Tests.csproj
+        --no-build --configuration Release -p:DesktopOnly=true
+        --filter "Category=Integration"
+
+    - name: Execute Diagnostics integration suite
+      run: >
+        dotnet test tests/Scramble.Diagnostics/Scramble.Diagnostics.csproj
+        --configuration Release -p:DesktopOnly=true
+        --filter "Category=Integration|Category=MIP-Compliance|Category=ProtocolCompliance|Category=FullE2E|Category=EpochSync|Category=DeviceSync|Category=OutboxModel|Category=Notifications|Category=RelayHarness|Category=ExporterSecret"
+
+    - name: Dump relay logs on failure
+      if: failure()
+      shell: pwsh
+      run: docker compose -f docker-compose.test.yml logs nostr-relay
+
+    - name: Stop containers
+      if: always()
+      shell: pwsh
+      run: docker compose -f docker-compose.test.yml down -v
