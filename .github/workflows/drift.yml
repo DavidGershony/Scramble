@@ -1,0 +1,35 @@
+name: Anti-drift (legacy Android, Mobile-Android shell purity)
+
+# S3 (revised): block drift back into the abandoned Scramble.Android head
+# and block new UI content from creeping into the Mobile.Android shell.
+# See scripts/check-drift.ps1 for the rules and rationale.
+
+on:
+  pull_request:
+    branches: [ "master" ]
+    paths:
+      - 'src/Scramble.Android/**'
+      - 'src/Scramble.Mobile.Android/**'
+      - 'scripts/check-drift.ps1'
+      - '.github/workflows/drift.yml'
+
+jobs:
+
+  drift:
+    name: Anti-drift check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Fetch base branch
+      run: git fetch origin ${{ github.event.pull_request.base.ref }}:refs/remotes/origin/${{ github.event.pull_request.base.ref }}
+
+    - name: Run drift check
+      shell: pwsh
+      run: |
+        ./scripts/check-drift.ps1 -BaseRef "origin/${{ github.event.pull_request.base.ref }}" -HeadRef HEAD
