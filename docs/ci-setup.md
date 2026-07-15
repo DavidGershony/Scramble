@@ -1,6 +1,6 @@
 # CI setup — branch protection
 
-This project ships three GitHub Actions workflows. Two of them **must be
+This project ships several GitHub Actions workflows. Three of them **must be
 required checks** for the merge gates in `CLAUDE.md` to actually gate merges.
 
 ## Workflows
@@ -9,6 +9,7 @@ required checks** for the merge gates in `CLAUDE.md` to actually gate merges.
 |---|---|---|---|
 | `.github/workflows/dotnet-desktop.yml` | `build` | Every PR / push to master | **Yes** |
 | `.github/workflows/integration.yml` | `integration` | PR/push touching MLS/Nostr/signer paths | **Yes** (path-conditional) |
+| `.github/workflows/drift.yml` | `drift` | PR touching `src/Scramble.Android/**` or `src/Scramble.Mobile.Android/**` | **Yes** (path-conditional) |
 | `.github/workflows/integration-windows-nightly.yml` | `integration-windows` | Nightly cron 04:00 UTC | No |
 | `.github/workflows/publish.yml` | (release build) | Tag push | No |
 
@@ -23,7 +24,12 @@ Add these required status checks:
 build (Debug)
 build (Release)
 integration
+drift
 ```
+
+`integration` and `drift` are both path-conditional — on PRs that don't
+touch the relevant paths, GitHub reports the check as **skipped**, which
+counts as passing for branch protection.
 
 Enable **Require branches to be up to date before merging** so the required
 checks are computed against `master`'s current tip.
