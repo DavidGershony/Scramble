@@ -5,6 +5,13 @@ name: Integration (Windows, nightly)
 # (DPAPI-backed SecureStorage, path-separator assumptions, native DLL loading)
 # without paying the windows-latest + Docker cost on every PR.
 
+# ReactiveUI / Splat cert revocation workaround (see publish.yml f138379).
+# Windows honours nuget.config signatureValidationMode=accept, but setting
+# this env matches the Linux workflow so a future Windows CI change to Linux
+# containers doesn't silently regress.
+env:
+  DOTNET_NUGET_SIGNATURE_VERIFICATION: false
+
 on:
   schedule:
     - cron: '0 4 * * *'   # 04:00 UTC daily

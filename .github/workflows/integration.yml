@@ -9,6 +9,13 @@ name: Integration (Ubuntu, required)
 # model tests all landed reactively (same day as the bug they proved). This
 # workflow makes them a merge gate on the paths where regressions actually happened.
 
+# ReactiveUI / Splat NuGet packages have a revoked author signing certificate.
+# Linux .NET SDK does full OCSP/CRL checking via OpenSSL, which nuget.config's
+# signatureValidationMode=accept cannot suppress. Disable verification entirely
+# until the packages are re-signed. Mirrors the fix in publish.yml (f138379).
+env:
+  DOTNET_NUGET_SIGNATURE_VERIFICATION: false
+
 on:
   push:
     branches: [ "master" ]
