@@ -106,7 +106,7 @@ public class MarmotProtocolComplianceTests
     {
         var welcomeBytes = RandomNumberGenerator.GetBytes(256);
         var kpId = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
-        var relays = new[] { "wss://test.thedude.cloud" };
+        var relays = new[] { "wss://relay2.angor.io" };
 
         var (content, tags) = WelcomeEventBuilder.BuildWelcomeEvent(welcomeBytes, kpId, relays);
 
@@ -180,7 +180,7 @@ public class MarmotProtocolComplianceTests
     {
         var kpBytes = RandomNumberGenerator.GetBytes(304);
         var identityHex = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
-        var relays = new[] { "wss://test.thedude.cloud" };
+        var relays = new[] { "wss://relay2.angor.io" };
 
         // Build
         var (content, tags) = KeyPackageEventBuilder.BuildKeyPackageEvent(kpBytes, identityHex, relays);

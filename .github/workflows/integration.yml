@@ -17,7 +17,7 @@ env:
   DOTNET_NUGET_SIGNATURE_VERIFICATION: false
   # Point tests that use TestRelayConfig.RelayUrl at the docker-compose relay
   # spun up in the `Start relay` step below. Tests that hardcode
-  # wss://test.thedude.cloud (CrossMdkRelayIntegrationTests,
+  # wss://relay2.angor.io (CrossMdkRelayIntegrationTests,
   # FullStackRelayIntegrationTests, RelayIntegrationTests, RealRelayGroupChatTests)
   # are NOT covered by this override and are excluded from the whitelist below.
   # Migrating those tests to TestRelayConfig is tracked as follow-up tech debt.
@@ -107,7 +107,7 @@ jobs:
     # explicitly opted in here.
     #
     # Excluded categories and why:
-    #   - Category=Relay: current members hardcode wss://test.thedude.cloud
+    #   - Category=Relay: current members hardcode wss://relay2.angor.io
     #     (CrossMdkRelayIntegrationTests, FullStackRelayIntegrationTests,
     #     RelayIntegrationTests). Cannot run against docker-relay until they
     #     migrate to TestRelayConfig. Runs in nightly instead.

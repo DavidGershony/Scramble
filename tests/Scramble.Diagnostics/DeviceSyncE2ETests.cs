@@ -15,7 +15,7 @@ namespace Scramble.Diagnostics;
 ///   1. Both devices can create/join a shared DeviceSync group
 ///   2. Messages sent on Device A appear on Device B and vice versa
 ///
-/// Relay: wss://test.thedude.cloud (override via SCRAMBLE_TEST_RELAY env var)
+/// Relay: wss://relay2.angor.io (override via SCRAMBLE_TEST_RELAY env var)
 /// </summary>
 [Trait("Category", "Integration")]
 [Trait("Category", "DeviceSync")]

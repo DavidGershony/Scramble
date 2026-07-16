@@ -31,7 +31,7 @@ public class WelcomeRumorFormatTests : IAsyncLifetime
     private StorageService _storageB = null!;
     private readonly List<string> _dbPaths = new();
 
-    private const string RelayUrl = "wss://test.thedude.cloud";
+    private const string RelayUrl = "wss://relay2.angor.io";
 
     public WelcomeRumorFormatTests(ITestOutputHelper output)
     {

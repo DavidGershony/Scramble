@@ -12,12 +12,12 @@ namespace Scramble.Core.Tests;
 /// <summary>
 /// Integration tests that connect to a real local Nostr relay (Docker).
 /// Requires: docker compose -f docker-compose.test.yml up -d
-/// Relay: scsibug/nostr-rs-relay on wss://test.thedude.cloud
+/// Relay: scsibug/nostr-rs-relay on wss://relay2.angor.io
 /// </summary>
 [Trait("Category", "Relay")]
 public class RelayIntegrationTests : IAsyncLifetime
 {
-    private const string RelayUrl = "wss://test.thedude.cloud";
+    private const string RelayUrl = "wss://relay2.angor.io";
 
     private NostrService _nostrServiceA = null!;
     private NostrService _nostrServiceB = null!;

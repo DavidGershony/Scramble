@@ -20,12 +20,12 @@ namespace Scramble.UI.Tests;
 /// Tests are driven through MainViewModel.InitializeAfterLoginAsync() to exercise the full
 /// app lifecycle including MLS state restoration.
 ///
-/// Requires: docker compose -f docker-compose.test.yml up -d  (relay on wss://test.thedude.cloud)
+/// Requires: docker compose -f docker-compose.test.yml up -d  (relay on wss://relay2.angor.io)
 /// </summary>
 [Trait("Category", "Integration")]
 public class HeadlessRealRelayTests : IAsyncLifetime
 {
-    private const string RelayUrl = "wss://test.thedude.cloud";
+    private const string RelayUrl = "wss://relay2.angor.io";
 
     private readonly ITestOutputHelper _output;
     private readonly ILogger _logger;

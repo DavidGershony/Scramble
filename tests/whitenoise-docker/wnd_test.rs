@@ -32,7 +32,7 @@ async fn main() -> whitenoise::cli::Result<()> {
         .expect("valid relay URL");
     let host_relay = RelayUrl::parse("ws://host.docker.internal:7777")
         .expect("valid relay URL");
-    let test_relay = RelayUrl::parse("wss://test.thedude.cloud")
+    let test_relay = RelayUrl::parse("wss://relay2.angor.io")
         .expect("valid relay URL");
     wn_config = wn_config.with_discovery_relays(vec![docker_relay, host_relay, test_relay]);
 

@@ -14,7 +14,7 @@ namespace Scramble.Core.Tests;
 
 /// <summary>
 /// Real-relay integration tests that exercise group chat flows
-/// using real NostrService instances connected to a local relay (wss://test.thedude.cloud).
+/// using real NostrService instances connected to a local relay (wss://relay2.angor.io).
 ///
 /// ZERO mocks — every layer is real: NostrService, ManagedMlsService, StorageService, MessageService.
 /// Messages travel through a real Nostr relay via WebSocket.
@@ -22,12 +22,12 @@ namespace Scramble.Core.Tests;
 /// These tests use the managed (C#) MLS backend only and require a running relay.
 /// They are tagged with [Trait("Category", "Integration")] so CI can exclude them.
 ///
-/// Requires: docker compose -f docker-compose.test.yml up -d  (relay on wss://test.thedude.cloud)
+/// Requires: docker compose -f docker-compose.test.yml up -d  (relay on wss://relay2.angor.io)
 /// </summary>
 [Trait("Category", "Integration")]
 public class RealRelayGroupChatTests : IAsyncLifetime
 {
-    private const string RelayUrl = "wss://test.thedude.cloud";
+    private const string RelayUrl = "wss://relay2.angor.io";
 
     private readonly ITestOutputHelper _output;
     private readonly ILogger _logger;

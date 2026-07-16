@@ -497,7 +497,7 @@ public class ExternalSignerIntegrationTests
     #region PublishKeyPackageAsync via Signer
 
     // NOTE: the region header used to claim "no relay needed" but the test below
-    // connects to wss://test.thedude.cloud to receive an OK — so it IS a relay
+    // connects to wss://relay2.angor.io to receive an OK — so it IS a relay
     // test. Tagged Category=Integration so the required unit-tier build in
     // dotnet-desktop.yml doesn't break when the external relay is unreachable.
     // The integration workflow runs it against docker-relay via
@@ -515,7 +515,7 @@ public class ExternalSignerIntegrationTests
         _nostrService.SetExternalSigner(signer);
 
         // Connect to a relay so the publish path can send and receive OK responses
-        await _nostrService.ConnectAsync("wss://test.thedude.cloud");
+        await _nostrService.ConnectAsync("wss://relay2.angor.io");
         await Task.Delay(500);
 
         var kpData = Encoding.UTF8.GetBytes("fake-keypackage");

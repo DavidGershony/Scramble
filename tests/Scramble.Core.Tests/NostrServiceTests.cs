@@ -7,7 +7,7 @@ namespace Scramble.Core.Tests;
 
 public class NostrServiceTests
 {
-    private const string LocalRelayUrl = "wss://test.thedude.cloud";
+    private const string LocalRelayUrl = "wss://relay2.angor.io";
     private readonly NostrService _nostrService;
 
     public NostrServiceTests()
@@ -111,7 +111,7 @@ public class NostrServiceTests
     [Fact]
     public async Task ConnectAsync_ShouldUpdateConnectionStatus()
     {
-        Assert.SkipUnless(IsLocalRelayAvailable(), "Requires local relay on wss://test.thedude.cloud");
+        Assert.SkipUnless(IsLocalRelayAvailable(), "Requires local relay on wss://relay2.angor.io");
 
         // Arrange
         var statusUpdates = new List<NostrConnectionStatus>();
@@ -129,7 +129,7 @@ public class NostrServiceTests
     [Fact]
     public async Task DisconnectAsync_ShouldUpdateConnectionStatus()
     {
-        Assert.SkipUnless(IsLocalRelayAvailable(), "Requires local relay on wss://test.thedude.cloud");
+        Assert.SkipUnless(IsLocalRelayAvailable(), "Requires local relay on wss://relay2.angor.io");
 
         // Arrange
         await _nostrService.ConnectAsync(LocalRelayUrl);

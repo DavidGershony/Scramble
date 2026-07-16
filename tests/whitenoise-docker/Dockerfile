@@ -27,7 +27,7 @@ RUN echo "Building whitenoise-rs ref=${WHITENOISE_REF} cachebust=${CACHEBUST}" \
 RUN sed -i \
     -e 's|"wss://relay.damus.io"|"ws://nostr-relay:8080"|g' \
     -e 's|"wss://relay.primal.net"|"ws://host.docker.internal:7777"|g' \
-    -e 's|"wss://nos.lol"|"wss://test.thedude.cloud"|g' \
+    -e 's|"wss://nos.lol"|"wss://relay2.angor.io"|g' \
     src/whitenoise/relays.rs \
     && grep -n 'nostr-relay\|host.docker.internal\|thedude.cloud' src/whitenoise/relays.rs
 

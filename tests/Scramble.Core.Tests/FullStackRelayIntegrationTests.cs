@@ -12,7 +12,7 @@ using Scramble.Core.Tests.TestHelpers;
 namespace Scramble.Core.Tests;
 
 /// <summary>
-/// Full-stack integration tests using a real Docker relay (wss://test.thedude.cloud),
+/// Full-stack integration tests using a real Docker relay (wss://relay2.angor.io),
 /// real NostrService, real StorageService, real MlsService, and real MessageService.
 /// These tests prove the complete invite delivery pipeline works end-to-end.
 ///
@@ -21,7 +21,7 @@ namespace Scramble.Core.Tests;
 [Trait("Category", "Relay")]
 public class FullStackRelayIntegrationTests : IAsyncLifetime
 {
-    private const string RelayUrl = "wss://test.thedude.cloud";
+    private const string RelayUrl = "wss://relay2.angor.io";
 
     private readonly ITestOutputHelper _output;
 

@@ -14,12 +14,12 @@ namespace Scramble.Core.Tests;
 /// Cross-MDK integration tests proving that the Rust (native) and Managed (C#) MLS
 /// implementations can interoperate through a real Nostr relay.
 ///
-/// Requires: docker compose -f docker-compose.test.yml up -d  (relay on wss://test.thedude.cloud)
+/// Requires: docker compose -f docker-compose.test.yml up -d  (relay on wss://relay2.angor.io)
 /// </summary>
 [Trait("Category", "Relay")]
 public class CrossMdkRelayIntegrationTests : IAsyncLifetime
 {
-    private const string RelayUrl = "wss://test.thedude.cloud";
+    private const string RelayUrl = "wss://relay2.angor.io";
 
     private readonly ITestOutputHelper _output;
 

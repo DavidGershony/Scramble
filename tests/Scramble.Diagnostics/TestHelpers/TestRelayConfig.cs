@@ -2,7 +2,7 @@ namespace Scramble.Diagnostics.TestHelpers;
 
 /// <summary>
 /// Shared relay configuration for diagnostic tests.
-/// Defaults to wss://test.thedude.cloud. Override via SCRAMBLE_TEST_RELAY env var
+/// Defaults to wss://relay2.angor.io. Override via SCRAMBLE_TEST_RELAY env var
 /// (e.g. "ws://localhost:7777" when running a local Docker relay).
 /// </summary>
 public static class TestRelayConfig
@@ -12,7 +12,7 @@ public static class TestRelayConfig
     /// </summary>
     public static readonly string RelayUrl =
         Environment.GetEnvironmentVariable("SCRAMBLE_TEST_RELAY")
-        ?? "wss://test.thedude.cloud";
+        ?? "wss://relay2.angor.io";
 
     /// <summary>
     /// Test relay as a single-element array, for APIs that expect string[].
