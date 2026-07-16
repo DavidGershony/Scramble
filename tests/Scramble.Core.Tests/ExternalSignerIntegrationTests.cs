@@ -494,9 +494,17 @@ public class ExternalSignerIntegrationTests
 
     #endregion
 
-    #region PublishKeyPackageAsync via Signer (no relay needed)
+    #region PublishKeyPackageAsync via Signer
 
+    // NOTE: the region header used to claim "no relay needed" but the test below
+    // connects to wss://test.thedude.cloud to receive an OK — so it IS a relay
+    // test. Tagged Category=Integration so the required unit-tier build in
+    // dotnet-desktop.yml doesn't break when the external relay is unreachable.
+    // The integration workflow runs it against docker-relay via
+    // SCRAMBLE_TEST_RELAY — but only after the hardcoded URL below is migrated
+    // to TestRelayConfig.RelayUrl.
     [Fact]
+    [Trait("Category", "Integration")]
     public async Task PublishKeyPackageAsync_WithSigner_ProducesValidEventId()
     {
         // PublishKeyPackageAsync with null privkey should route through the signer

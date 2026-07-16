@@ -81,6 +81,11 @@ jobs:
     - name: Build (Release, DesktopOnly)
       run: dotnet build Scramble.Desktop.slnf --no-restore --configuration Release -p:DesktopOnly=true
 
+    # Same whitelist as integration.yml (see rationale there). Nightly is
+    # allowed to be red — it exists to catch Windows-specific regressions —
+    # so it includes Category=Relay and Category=FullE2E which the required
+    # workflow excludes. Once the hardcoded-URL tests migrate to
+    # TestRelayConfig they'll pass here too.
     - name: Execute Core.Tests integration suite
       run: >
         dotnet test tests/Scramble.Core.Tests/Scramble.Core.Tests.csproj

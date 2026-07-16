@@ -15,6 +15,13 @@ name: Integration (Ubuntu, required)
 # until the packages are re-signed. Mirrors the fix in publish.yml (f138379).
 env:
   DOTNET_NUGET_SIGNATURE_VERIFICATION: false
+  # Point tests that use TestRelayConfig.RelayUrl at the docker-compose relay
+  # spun up in the `Start relay` step below. Tests that hardcode
+  # wss://test.thedude.cloud (CrossMdkRelayIntegrationTests,
+  # FullStackRelayIntegrationTests, RelayIntegrationTests, RealRelayGroupChatTests)
+  # are NOT covered by this override and are excluded from the whitelist below.
+  # Migrating those tests to TestRelayConfig is tracked as follow-up tech debt.
+  SCRAMBLE_TEST_RELAY: ws://localhost:7777
 
 on:
   push:
@@ -97,13 +104,28 @@ jobs:
       run: dotnet build Scramble.Desktop.slnf --no-restore --configuration Release -p:DesktopOnly=true
 
     # Whitelist union — future test categories default to NOT required until
-    # explicitly opted in here. WhitenoiseInterop and WebInterop are excluded;
-    # they need external services beyond docker-compose and run nightly.
+    # explicitly opted in here.
+    #
+    # Excluded categories and why:
+    #   - Category=Relay: current members hardcode wss://test.thedude.cloud
+    #     (CrossMdkRelayIntegrationTests, FullStackRelayIntegrationTests,
+    #     RelayIntegrationTests). Cannot run against docker-relay until they
+    #     migrate to TestRelayConfig. Runs in nightly instead.
+    #   - Category=Integration on tests/Scramble.Core.Tests: same reason —
+    #     RealRelayGroupChatTests hardcodes the same URL.
+    #   - Category=FullE2E: uses a whitenoise container that isn't reliable
+    #     in ephemeral runners.
+    #   - Category=WhitenoiseInterop, WebInterop: need external services.
+    #
+    # What's kept: Native (in-process MDK), MIP-Compliance / ProtocolCompliance
+    # (FaultyRelay in-process), plus the shared-UI Integration category on the
+    # Diagnostics project (my S2 lifecycle tests + DeviceSync), which uses
+    # FaultyRelay and TestRelayConfig respectively.
     - name: Execute Core.Tests integration suite
       run: >
         dotnet test tests/Scramble.Core.Tests/Scramble.Core.Tests.csproj
         --no-build --configuration Release -p:DesktopOnly=true
-        --filter "Category=Integration|Category=Relay|Category=Native"
+        --filter "Category=Native"
         --logger "trx;LogFileName=core-integration.trx"
         --results-directory TestResults
 
@@ -119,7 +141,7 @@ jobs:
       run: >
         dotnet test tests/Scramble.Diagnostics/Scramble.Diagnostics.csproj
         --configuration Release -p:DesktopOnly=true
-        --filter "Category=Integration|Category=MIP-Compliance|Category=ProtocolCompliance|Category=FullE2E|Category=EpochSync|Category=DeviceSync|Category=OutboxModel|Category=Notifications|Category=RelayHarness|Category=ExporterSecret"
+        --filter "Category=Integration|Category=MIP-Compliance|Category=ProtocolCompliance|Category=EpochSync|Category=DeviceSync|Category=OutboxModel|Category=Notifications|Category=RelayHarness|Category=ExporterSecret"
         --logger "trx;LogFileName=diagnostics-integration.trx"
         --results-directory TestResults
 
