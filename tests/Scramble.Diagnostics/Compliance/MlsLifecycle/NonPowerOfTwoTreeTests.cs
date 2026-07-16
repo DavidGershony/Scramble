@@ -92,6 +92,12 @@ public class NonPowerOfTwoTreeTests : MlsLifecycleTestBase
         }
 
         // ── Every party receives every other party's message ────────────────
+        // 30s timeout: on shared Linux runners the in-process pipeline is
+        // measurably slower than on Windows dev machines (all 3/5/7 cases
+        // pass in <15s locally on Windows, but memberCount=3 timed out at
+        // 15s on GHA ubuntu-latest, run 29498185991). The message HAS
+        // been broadcast by the FaultyRelay at that point — the delay is
+        // in the receiving MessageService's decrypt-and-store pipeline.
         foreach (var receiver in parties)
         {
             foreach (var (sender, content) in parties.Zip(expectedContents))
@@ -99,7 +105,7 @@ public class NonPowerOfTwoTreeTests : MlsLifecycleTestBase
                 if (sender.PubKeyHex == receiver.PubKeyHex) continue; // skip self
                 await WaitForMessageAsync(
                     receiver, perPartyChat[receiver.PubKeyHex].Id, content,
-                    timeout: TimeSpan.FromSeconds(15));
+                    timeout: TimeSpan.FromSeconds(30));
             }
         }
 
