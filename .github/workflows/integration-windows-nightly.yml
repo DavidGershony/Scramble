@@ -1,14 +1,34 @@
 name: Integration (Windows, nightly)
 
-# S1: nightly regression run on Windows for the same integration surface.
-# Not merge-required. Catches regressions on Windows-only code paths
-# (DPAPI-backed SecureStorage, path-separator assumptions, native DLL loading)
-# without paying the windows-latest + Docker cost on every PR.
-
+# Nightly Windows regression run for tests that don't need Docker.
+#
+# Design note: an earlier version of this workflow tried to run the same
+# docker-compose relay + external-relay categories as integration.yml on
+# `windows-latest`. That failed because GitHub-hosted windows-latest no
+# longer ships Docker Desktop (run 29522490872 died at
+# `DockerCli.exe -SwitchLinuxEngine` with 'not recognized'). Rather than
+# fight Docker on Windows runners, the nightly is now narrowed to tests
+# that don't need any external services:
+#
+#   * FaultyRelay-backed compliance tests (MIP-Compliance, ProtocolCompliance,
+#     RelayHarness, ExporterSecret) — cover MLS lifecycle, protocol
+#     conformance, WebSocket wire framing on the actual Windows .NET runtime.
+#   * Native tests — exercise the Rust MDK PInvoke bindings against
+#     scramble_native.dll on Windows.
+#
+# What this covers that Ubuntu integration doesn't:
+#   * Windows native DLL loading (`scramble_native.dll` vs `.so`)
+#   * Path-separator assumptions in test fixtures
+#   * DPAPI-backed SecureStorage (SecureStorageTests, unit-tier).
+#
+# What's explicitly OUT:
+#   * Category=FullE2E — uses WhitenoiseDockerClient. Deliberately excluded
+#     to keep the nightly independent of any external Whitenoise/MDK
+#     out-of-band work in flight.
+#   * Category=Relay / DeviceSyncE2E — hardcoded external relay URL.
+#   * Category=WhitenoiseInterop / WebInterop — need external services.
+#
 # ReactiveUI / Splat cert revocation workaround (see publish.yml f138379).
-# Windows honours nuget.config signatureValidationMode=accept, but setting
-# this env matches the Linux workflow so a future Windows CI change to Linux
-# containers doesn't silently regress.
 env:
   DOTNET_NUGET_SIGNATURE_VERIFICATION: false
 
@@ -20,9 +40,9 @@ on:
 jobs:
 
   integration-windows:
-    name: Integration tests (Windows + Docker)
+    name: Integration tests (Windows, no-Docker)
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
 
     steps:
     - name: Checkout
@@ -51,65 +71,20 @@ jobs:
       with:
         dotnet-version: 10.0.x
 
-    - name: Switch Docker to Linux containers
-      shell: pwsh
-      run: |
-        # windows-latest ships with Docker Desktop; ensure Linux engine mode.
-        & "$env:ProgramFiles\Docker\Docker\DockerCli.exe" -SwitchLinuxEngine
-
-    - name: Start relay
-      shell: pwsh
-      run: docker compose -f docker-compose.test.yml up -d nostr-relay
-
-    - name: Wait for relay
-      shell: pwsh
-      run: |
-        for ($i = 0; $i -lt 60; $i++) {
-          try {
-            $r = Invoke-WebRequest -UseBasicParsing -Uri http://localhost:7777 -TimeoutSec 2
-            if ($r.StatusCode -in 200,400,426) { Write-Host "relay up"; exit 0 }
-          } catch { }
-          Start-Sleep -Seconds 1
-        }
-        Write-Error "relay never came up"
-        docker compose -f docker-compose.test.yml logs nostr-relay
-        exit 1
-
     - name: Restore dependencies
       run: dotnet restore Scramble.Desktop.slnf -p:DesktopOnly=true
 
     - name: Build (Release, DesktopOnly)
       run: dotnet build Scramble.Desktop.slnf --no-restore --configuration Release -p:DesktopOnly=true
 
-    # Same whitelist as integration.yml (see rationale there). Nightly is
-    # allowed to be red — it exists to catch Windows-specific regressions —
-    # so it includes Category=Relay and Category=FullE2E which the required
-    # workflow excludes. Once the hardcoded-URL tests migrate to
-    # TestRelayConfig they'll pass here too.
-    - name: Execute Core.Tests integration suite
+    - name: Execute Core.Tests Windows-integration surface
       run: >
         dotnet test tests/Scramble.Core.Tests/Scramble.Core.Tests.csproj
         --no-build --configuration Release -p:DesktopOnly=true
-        --filter "Category=Integration|Category=Relay|Category=Native"
+        --filter "Category=Native"
 
-    - name: Execute UI.Tests integration suite
-      run: >
-        dotnet test tests/Scramble.UI.Tests/Scramble.UI.Tests.csproj
-        --no-build --configuration Release -p:DesktopOnly=true
-        --filter "Category=Integration"
-
-    - name: Execute Diagnostics integration suite
+    - name: Execute Diagnostics FaultyRelay + compliance surface
       run: >
         dotnet test tests/Scramble.Diagnostics/Scramble.Diagnostics.csproj
         --configuration Release -p:DesktopOnly=true
-        --filter "Category=Integration|Category=MIP-Compliance|Category=ProtocolCompliance|Category=FullE2E|Category=EpochSync|Category=DeviceSync|Category=OutboxModel|Category=Notifications|Category=RelayHarness|Category=ExporterSecret"
-
-    - name: Dump relay logs on failure
-      if: failure()
-      shell: pwsh
-      run: docker compose -f docker-compose.test.yml logs nostr-relay
-
-    - name: Stop containers
-      if: always()
-      shell: pwsh
-      run: docker compose -f docker-compose.test.yml down -v
+        --filter "Category=MIP-Compliance|Category=ProtocolCompliance|Category=RelayHarness|Category=ExporterSecret"
