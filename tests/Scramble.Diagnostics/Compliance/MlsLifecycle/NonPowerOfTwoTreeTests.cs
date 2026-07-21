@@ -103,9 +103,14 @@ public class NonPowerOfTwoTreeTests : MlsLifecycleTestBase
             foreach (var (sender, content) in parties.Zip(expectedContents))
             {
                 if (sender.PubKeyHex == receiver.PubKeyHex) continue; // skip self
+                // 30s local / 90s CI — memberCount=7 does 7 senders × 6
+                // recipients = 42 delivery paths, and the last few can arrive
+                // slowly on shared Linux runners (run 29819970169 timed out
+                // at 45s on P0 not seeing P1's message, epoch parity had been
+                // reached). 90s buys headroom without hiding a real hang.
                 await WaitForMessageAsync(
                     receiver, perPartyChat[receiver.PubKeyHex].Id, content,
-                    timeout: CiScale(TimeSpan.FromSeconds(15)));
+                    timeout: CiScale(TimeSpan.FromSeconds(30)));
             }
         }
 
