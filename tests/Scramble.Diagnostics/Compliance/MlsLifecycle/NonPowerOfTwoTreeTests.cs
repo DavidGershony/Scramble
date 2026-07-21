@@ -105,7 +105,7 @@ public class NonPowerOfTwoTreeTests : MlsLifecycleTestBase
                 if (sender.PubKeyHex == receiver.PubKeyHex) continue; // skip self
                 await WaitForMessageAsync(
                     receiver, perPartyChat[receiver.PubKeyHex].Id, content,
-                    timeout: TimeSpan.FromSeconds(30));
+                    timeout: CiScale(TimeSpan.FromSeconds(15)));
             }
         }
 

@@ -301,4 +301,23 @@ public abstract class MlsLifecycleTestBase : IAsyncLifetime
         var info = await p.MlsService.GetGroupInfoAsync(mlsGroupId);
         return info?.Epoch ?? ulong.MaxValue;
     }
+
+    /// <summary>
+    /// True when the process is running on a hosted CI runner
+    /// (GITHUB_ACTIONS=true or the more generic CI=true). Used to scale
+    /// timeouts — the shared runners are measurably slower than local dev
+    /// machines for the in-process FaultyRelay pipeline
+    /// (see runs 29498185991, 29817840255).
+    /// </summary>
+    protected static bool IsCi =>
+        string.Equals(Environment.GetEnvironmentVariable("GITHUB_ACTIONS"), "true", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(Environment.GetEnvironmentVariable("CI"), "true", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Scale a locally-tuned timeout for CI. Local: identity. CI: x3.
+    /// Rule of thumb: whatever passes on a fast dev workstation, CI needs
+    /// at least 3× before the same test lands reliably.
+    /// </summary>
+    protected static TimeSpan CiScale(TimeSpan local) =>
+        IsCi ? TimeSpan.FromMilliseconds(local.TotalMilliseconds * 3) : local;
 }
