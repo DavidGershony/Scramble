@@ -110,7 +110,7 @@ public class EpochRatchetStressTests : MlsLifecycleTestBase
             foreach (var (senderPubKey, content) in sentMessages)
             {
                 if (senderPubKey == receiver.PubKeyHex) continue; // outgoing already stored locally
-                await WaitForMessageAsync(receiver, chat.Id, content, timeout: TimeSpan.FromSeconds(20));
+                await WaitForMessageAsync(receiver, chat.Id, content, timeout: CiScale(TimeSpan.FromSeconds(20)));
             }
         }
 

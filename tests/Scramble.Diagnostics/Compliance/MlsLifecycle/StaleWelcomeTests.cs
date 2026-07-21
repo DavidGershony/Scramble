@@ -127,7 +127,7 @@ public class StaleWelcomeTests : MlsLifecycleTestBase
             // must be readable end-to-end.
             await alice.MessageService.SendMessageAsync(aliceChat.Id, "post-charlie-A-0");
             await WaitForMessageAsync(charlie, charlieChat.Id, "post-charlie-A-0",
-                timeout: TimeSpan.FromSeconds(10));
+                timeout: CiScale(TimeSpan.FromSeconds(15)));
             Output.WriteLine("[stale] outcome=A2 (joined at head, live traffic decodes)");
         }
     }
