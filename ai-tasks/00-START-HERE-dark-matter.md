@@ -95,20 +95,21 @@ history only:
    membership_tag-on-Proposal spec item to confirm (MEDIUM); (d) retained
    past-epochs **ABSENT** (generic add, MEDIUM-LARGE). All gaps are generic
    RFC-9420, not Marmot — and permission-gated per the constraint above.
-2. ~~**Convergence deep-dive**~~ **✅ DONE (2026-08-04) — see
-   `convergence-deepdive-2026-07.md`.** Headline: the branch-selection algorithm
-   itself (witness quorum + rewind horizon + tip priority + digest tiebreak) is
-   small and precisely specified (spec text and Rust code agree exactly) — **not**
-   the risk driver it was assumed to be. The real risk, newly surfaced: both of
-   Dark Matter's two convergence mechanisms (fast-path same-epoch fork recovery,
-   slow-path multi-epoch candidate-graph replay) depend on a generic MLS
-   capability `dotnet-mls` does not have and that was **not** previously scoped
-   in §12 — snapshot a group's full state at an epoch, restore to it, and replay
-   a commit against a retained snapshot without mutating live state. This is now
-   the #1 timeline unknown (needs its own spike/estimate). Upstream ships a
-   genuinely portable, semantic JSON conformance-vector format (including
-   convergence-specific vectors) Scramble can mirror cheaply for testing. Overall
-   size: L trending XL.
+2. ~~**Convergence deep-dive**~~ **✅ DONE (2026-08-04), corrected and resized
+   same day — see `convergence-deepdive-2026-07.md`.** Headline: the
+   branch-selection algorithm itself (witness quorum + rewind horizon + tip
+   priority + digest tiebreak) is small and precisely specified (spec text and
+   Rust code agree exactly) — **not** the risk driver. An initial pass claimed
+   `dotnet-mls` was missing a snapshot/restore/non-mutating-replay-probe
+   capability; that was **wrong and has been retired** — `MlsGroup` already
+   exposes `Export()`/`Import()` plus a stage/merge/discard commit model,
+   which covers the need entirely inside `Scramble.Marmot` with **zero
+   `dotnet-mls` changes**. See `scramble-marmot-snapshot-restore-spec-2026-07.md`.
+   A follow-up read of `openmls_projection.rs` (§13 of the deep-dive) sized
+   `CandidateMaterializer` at **L**. **Overall convergence-subsystem estimate:
+   L** (not XL). Upstream ships a portable, semantic JSON conformance-vector
+   format (including convergence-specific vectors) Scramble can mirror cheaply
+   for testing.
 3. **Confirm the survives/rewrite split** — line-level diff of `marmot-cs`
    `Mdk.cs` (+ `CommitRaceResolver`) vs `cgka-engine`'s engine/message_processor/
    group_lifecycle/convergence/epoch_manager (read-only; don't edit marmot-cs).
@@ -116,9 +117,9 @@ history only:
 4. **Pin down account-identity-proof v2** — the kind:450 canonical-event Schnorr
    signing construction (MUST-reject on target; needed early).
 5. Then draft the `Scramble.Marmot` phased build order + a **date-with-confidence-
-   band** for WN. Given step 2's finding, this should include a dedicated
-   `dotnet-mls` snapshot/restore/non-mutating-replay-probe spike before the
-   band is finalized.
+   band** for WN. The dotnet-mls snapshot/restore spike flagged in an earlier
+   version of this step is **no longer needed** — that capability already
+   exists (see step 2's correction above).
 
 **Holding answer for WN meanwhile:** "Committed to Dark Matter. Building it as a
 fresh engine in our stack, reusing our proven codecs; sizing the convergence/engine
