@@ -158,6 +158,27 @@ than average.
 - **Don't defer regression tests.** If you're writing a `fix:`, the test
   that proves the fix is part of the fix, not a follow-up. See I3.
 
+### Dark Matter cutover rules (decided 2026-08-09)
+
+Provenance: `ai-tasks/protocol-agnostic-report-2026-08.md` — the engine stays
+Marmot-only; protocol agnosticism (Concord / NIP-29, Armada-style) lives at the
+app-layer conversation seam, deferred until after the migration ships.
+
+- **No `Scramble.Marmot` types in `Scramble.Presentation`.** ViewModels bind
+  only to protocol-neutral models (`Chat`, `Message`, `Member`, `Role`, …)
+  surfaced by `Scramble.Core` services; chat records carry a protocol
+  discriminator. Engine types (`SendIntent`, `IngestOutcome`, `GroupEvent`,
+  epoch/commit state) stop at the service layer.
+- **Generic Nostr crypto is not Marmot-namespaced.** When porting codecs into
+  the new engine, `Nip44Encryption`, `GiftWrap`, and other generic Nostr
+  primitives go in a shared namespace (e.g. `Scramble.Marmot.Wire.Nostr` →
+  keep the generic pieces under a `…Nostr.Crypto`-style namespace with no
+  Marmot semantics), so a future non-Marmot provider can reuse them without
+  referencing the engine.
+- **Do not build** `IConversationProvider`, Concord, or NIP-29 code during the
+  migration. Interface extraction happens after a second concrete provider
+  exists.
+
 ## Reproducing CI locally
 
 ```powershell

@@ -110,20 +110,38 @@ history only:
    L** (not XL). Upstream ships a portable, semantic JSON conformance-vector
    format (including convergence-specific vectors) Scramble can mirror cheaply
    for testing.
-3. **Confirm the survives/rewrite split** — line-level diff of `marmot-cs`
-   `Mdk.cs` (+ `CommitRaceResolver`) vs `cgka-engine`'s engine/message_processor/
-   group_lifecycle/convergence/epoch_manager (read-only; don't edit marmot-cs).
-   **← next.**
+3. ~~**Confirm the survives/rewrite split**~~ **✅ DONE (2026-08-09) — see
+   `survives-rewrite-diff-2026-07.md`.** Headline: `Mdk.cs` → rewrite with
+   ~15–20% line-shape reusable (revised **down** from ~30%); `CommitRaceResolver`
+   → rewrite, 0%. Two pleasant surprises survive: the storage-provider
+   **snapshot API** (same primitive DM's fork recovery uses) and the
+   staged-commit (stage→publish→merge) dotnet-mls interaction pattern. New
+   findings: DM's engine is transport-agnostic behind a `TransportPeeler` seam
+   (add a `Scramble.Marmot.Peeler` boundary); PURE_PLAINTEXT makes the
+   dotnet-mls PublicMessage-produce gap (§12c) **critical-path**; one new
+   dotnet-mls question (AppDataUpdate proposal + safe-export construction, 🔴).
+   Engine-orchestration sized **L**. Build order in the doc §4: engine v1
+   (fast-path only) is interop-testable before Convergence lands.
 4. **Pin down account-identity-proof v2** — the kind:450 canonical-event Schnorr
-   signing construction (MUST-reject on target; needed early).
+   signing construction (MUST-reject on target; needed early). **← next.**
 5. Then draft the `Scramble.Marmot` phased build order + a **date-with-confidence-
-   band** for WN. The dotnet-mls snapshot/restore spike flagged in an earlier
-   version of this step is **no longer needed** — that capability already
-   exists (see step 2's correction above).
+   band** for WN. **Steps 2+3 are both done, so step 5 is unblocked once step 4
+   confirms the AccountProof size** — the diff doc §4 already contains the
+   build-order skeleton and §6 the per-piece estimates to fold in. The
+   dotnet-mls snapshot/restore spike flagged in an earlier version of this step
+   is **no longer needed** — that capability already exists (see step 2's
+   correction above; reconfirmed by step 3 against all three probe patterns).
 
 **Holding answer for WN meanwhile:** "Committed to Dark Matter. Building it as a
 fresh engine in our stack, reusing our proven codecs; sizing the convergence/engine
 rewrite now — date in ~N weeks."
+
+**Related decision (2026-08-09):** evaluated making `Scramble.Marmot`
+protocol-agnostic (Concord / NIP-29, Armada-style) before finishing the
+migration — **decided NO**; agnosticism belongs at the app-layer conversation
+seam, not in the engine. Two zero-cost rules adopted for the cutover (no Marmot
+types in ViewModels; generic Nostr crypto in a non-Marmot namespace). See
+`protocol-agnostic-report-2026-08.md`.
 
 ## How the reference sources are reached
 
