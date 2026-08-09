@@ -122,15 +122,22 @@ history only:
    dotnet-mls question (AppDataUpdate proposal + safe-export construction, 🔴).
    Engine-orchestration sized **L**. Build order in the doc §4: engine v1
    (fast-path only) is interop-testable before Convergence lands.
-4. **Pin down account-identity-proof v2** — the kind:450 canonical-event Schnorr
-   signing construction (MUST-reject on target; needed early). **← next.**
-5. Then draft the `Scramble.Marmot` phased build order + a **date-with-confidence-
-   band** for WN. **Steps 2+3 are both done, so step 5 is unblocked once step 4
-   confirms the AccountProof size** — the diff doc §4 already contains the
-   build-order skeleton and §6 the per-piece estimates to fold in. The
-   dotnet-mls snapshot/restore spike flagged in an earlier version of this step
-   is **no longer needed** — that capability already exists (see step 2's
-   correction above; reconfirmed by step 3 against all three probe patterns).
+4. ~~**Pin down account-identity-proof v2**~~ **✅ DONE (2026-08-09) — see
+   `account-identity-proof-v2-2026-08.md`.** Headline: the construction is fully
+   pinned with an official spec test vector; size revised **M → S**; designed
+   for external signers (Amber/NIP-46 signs the kind:450 template — good news);
+   zero new dotnet-mls needs (one small read-accessor check flagged 🔴).
+   **⚠ Strategic finding: our `v0.9.4` pin is stale** — the proof format
+   hard-broke at `wn-agent-v0.9.5` (0xf2f1 ext → app-component `0x8009`, no
+   fallback); mdk's live tag series is now `wn-agent-v0.9.x` (latest 0.9.10).
+5. Draft the `Scramble.Marmot` phased build order + a **date-with-confidence-
+   band** for WN. **← next — all prerequisites (steps 1–4) done.** Inputs: the
+   diff doc §4 build-order skeleton, §6 estimates, and the proof doc §6 actions:
+   **re-pin `v0.9.4` → latest `wn-agent-v0.9.x` + drift-diff the already-analyzed
+   modules**; ask WN which tag is deployed (decides Legacy-proof support); the
+   dotnet-mls per-leaf accessor check. The dotnet-mls snapshot/restore spike
+   flagged in an earlier version of this step is **no longer needed** — that
+   capability already exists (see step 2's correction; reconfirmed by step 3).
 
 **Holding answer for WN meanwhile:** "Committed to Dark Matter. Building it as a
 fresh engine in our stack, reusing our proven codecs; sizing the convergence/engine
