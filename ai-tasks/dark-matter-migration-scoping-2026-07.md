@@ -7,6 +7,17 @@ can give Whitenoise a defensible date.
 **Confidence key:** 🟢 verified this session · 🟡 informed inference · 🔴 needs a
 deep-dive before it can carry a timeline commitment.
 
+> **⚠ ERRATUM (2026-08-09, step 5).** Two updates. **(1) The reference pin moved
+> from `v0.9.4` to `wn-agent-v0.9.10`** — every `v0.9.4` citation below is still
+> correct as of that tag; the delta is recorded in
+> `scramble-marmot-phased-plan-2026-08.md` §2. **(2) §12's gap table is
+> re-ranked:** (c) PublicMessage produce/verify and (e) `AppDataUpdate` are both
+> **hard blockers on the critical path** — `AppDataUpdate` (proposal type
+> `0x0008`) is a RequiredCapabilities entry on every Current-profile group, so
+> without it Scramble can neither create nor join one. (b) SelfRemove and
+> (d) retained past-epochs remain needed but block later phases. §9's "next
+> step" list is **superseded** by the phased plan doc.
+
 ## 1. Context (why this supersedes the earlier plan)
 
 Whitenoise — **the Marmot reference implementation** — is fully committed to the

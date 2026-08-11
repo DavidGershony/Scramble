@@ -7,6 +7,24 @@ confirm". It supersedes the 🟡 "~30% of `Mdk.cs` scaffolding reusable" estimat
 **Confidence key:** 🟢 verified against source this session · 🟡 informed
 inference · 🔴 needs more work before relying on it.
 
+> **⚠ ERRATUM (2026-08-09, step 5) — this doc is accurate as of `v0.9.4`; the
+> reference is now pinned to `wn-agent-v0.9.10`.** The step-5 drift-diff
+> (`scramble-marmot-phased-plan-2026-08.md` §2) confirms the structural
+> analysis below still holds, with four corrections: **(D1)** §2.1's
+> `StageSelfUpdateAsync` row is **wrong** — `SendIntent::SelfUpdate` exists
+> again at HEAD (new `self_update.rs`), so it is not a DROP; **(D2)** §5's
+> item (e) `AppDataUpdate` is a **hard blocker**, not just the biggest open
+> question — proposal type `0x0008` is a RequiredCapabilities entry on every
+> Current-profile group, so without it we can neither create nor join one;
+> **(D4)** three new engine subsystems exist (`disband.rs`, `maintenance.rs`,
+> `self_update.rs`) and the storage trait grew 34 → 79 methods behind new
+> sub-traits; **(D5)** `IngestOutcome` gained `Ignored`/`Rejected` variants and
+> a rejection taxonomy, so §2.1's `GroupResult` row should target the
+> five-variant shape. Also: the kind-445 tag shape is now **strictly validated**
+> upstream (exactly one `h`, at most one `expiration`, no other tags), which
+> turns §2.2's "drop the `encoding` tag" note into a correctness gate. Not
+> rewritten — the delta lives in the plan doc.
+
 ## How to use this doc (read this first if you are a fresh session)
 
 - **Context:** Scramble is migrating from the `marmot-cs` engine (0.7-era Marmot)

@@ -30,6 +30,24 @@ directly read) · 🔴 needs-more (flagged gap, do not plan a date from this).
 
 ---
 
+> **⚠ ERRATUM (2026-08-09, step 5) — analysed at `v0.9.4`; reference now pinned
+> to `wn-agent-v0.9.10`.** The step-5 drift-diff
+> (`scramble-marmot-phased-plan-2026-08.md` §2) **confirms this document in
+> full**: the v1 policy constants (§3.1) are byte-identical, the branch-selection
+> comparator (§3.5) is untouched, and `fork_recovery.rs` changed by 17 lines.
+> Three additions to fold in when building: **(a)** the v1 constants are now
+> pinned *by construction* — `ensure_pinned_v1()` rejects any non-v1 policy
+> outside a test-only feature flag, and `ensure_app_window_matches()` requires
+> `app_message_past_epoch_limit == max_past_epochs` (`DEFAULT_MAX_PAST_EPOCHS`
+> is now derived from `V1_APP_MESSAGE_PAST_EPOCH_LIMIT = 5`); our policy loader
+> must enforce both or diverge silently. **(b)** New pinned constants
+> `V1_SETTLEMENT_QUIESCENCE_MS = 1000`, `V1_MAX_CONVERGENCE_PASS_MS = 5000`,
+> plus a new `convergence_input.rs` and a `ConvergencePassStorage` trait.
+> **(c)** §4's epoch state machine gains a terminal `Disbanded` state,
+> `repair_to_stable()` as the only exit from `Unrecoverable`, `restore_pending()`
+> for crash recovery, and a fixed phantom-`committed_from` bug on rollback
+> (`owns_committed_from`) that is worth copying verbatim.
+
 ## 1. Headline finding
 
 Dark Matter's convergence subsystem is **two complementary mechanisms**, not one:

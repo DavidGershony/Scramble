@@ -19,6 +19,19 @@ on target, "a single canonical-id mismatch = 100% rejection").
 
 ---
 
+> **⚠ ERRATUM (2026-08-09, step 5) — §0's re-pin recommendation has been
+> ACTED ON: the reference is now pinned to `wn-agent-v0.9.10`** (see
+> `scramble-marmot-phased-plan-2026-08.md` §2). The drift-diff confirms this
+> document unchanged, and adds one detail §1 does not state: under the Current
+> profile a leaf **no longer advertises the `0xf2f1` extension type** at all —
+> the capability advertisement moves into app-component space
+> (`CTCapability::AppComponent(0x8009)` in the group's RequiredCapabilities;
+> `ExtensionType::LastResort` was also dropped from leaf capabilities). Note
+> also that mdk HEAD can still *create* Legacy-profile groups on request
+> (`EngineBuilder::legacy_compatibility_profile()`), so §2's accept-only
+> framing remains the right default — the build plan assumes Legacy is **not**
+> implemented pending WN's answer (plan §5 Q2).
+
 ## 0. ⚠ STRATEGIC FINDING FIRST — our v0.9.4 pin is stale on exactly this feature
 
 There are **three** proof constructions in history, and the format **hard-broke
