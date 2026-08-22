@@ -81,6 +81,35 @@ categories from the filter without adding equivalent coverage elsewhere.
 4. Update this document's [Rationale](#rationale--why-this-exists) with a
    one-line reason.
 
+## Dark Matter engine categories
+
+The `Scramble.Marmot.*` projects (the Dark Matter engine — see
+`ai-tasks/scramble-marmot-phased-plan-2026-08.md`) introduce their own
+categories.
+
+| Category | Gate | Needs |
+|---|---|---|
+| `MarmotEngine` | **Unit** (`Scramble.Desktop.slnf`) | nothing |
+| `ConformanceVector` | Unit, once vectors land | committed JSON vectors |
+| `DarkMatterInterop` | **Integration** | relay + a deployed `wn-agent` |
+
+`MarmotEngine` is deliberately **not** in `integration.yml`'s `--filter`
+union. It needs no relay and no Docker, so it runs in the fast unit gate via
+`Scramble.Desktop.slnf` — where a broken engine invariant is caught in
+seconds instead of minutes. Putting it in the integration filter would slow
+the signal down without making it stronger.
+
+What *is* wired into `integration.yml` is the **path trigger**: changes under
+`src/Scramble.Marmot.Abstractions/**`, `src/Scramble.Marmot.Storage.Sqlite/**`
+and `tests/Scramble.Marmot.Tests/**` require the integration suite, per
+invariant I2. The engine is protocol code; it must not be able to land
+without the interop suite having run.
+
+`DarkMatterInterop` is not yet in the filter union because the tests do not
+exist yet, and the `wn-agent` service it needs is not in
+`docker-compose.test.yml`. Both land together in phase P3 — add the category
+to the filter in the same PR that adds the first test, per the rules above.
+
 ## Local reproduction
 
 ```powershell
