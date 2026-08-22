@@ -4,9 +4,12 @@
     "projects": [
       "src\\Scramble.Core\\Scramble.Core.csproj",
       "src\\Scramble.Desktop\\Scramble.Desktop.csproj",
+      "src\\Scramble.Marmot.Abstractions\\Scramble.Marmot.Abstractions.csproj",
+      "src\\Scramble.Marmot.Storage.Sqlite\\Scramble.Marmot.Storage.Sqlite.csproj",
       "src\\Scramble.Presentation\\Scramble.Presentation.csproj",
       "src\\Scramble.UI\\Scramble.UI.csproj",
       "tests\\Scramble.Core.Tests\\Scramble.Core.Tests.csproj",
+      "tests\\Scramble.Marmot.Tests\\Scramble.Marmot.Tests.csproj",
       "tests\\Scramble.UI.Tests\\Scramble.UI.Tests.csproj"
     ]
   }
