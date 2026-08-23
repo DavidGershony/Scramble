@@ -8,6 +8,7 @@
       "src\\Scramble.Marmot.Engine\\Scramble.Marmot.Engine.csproj",
       "src\\Scramble.Marmot.Identity\\Scramble.Marmot.Identity.csproj",
       "src\\Scramble.Marmot.Storage.Sqlite\\Scramble.Marmot.Storage.Sqlite.csproj",
+      "src\\Scramble.Marmot.Wire.Nostr\\Scramble.Marmot.Wire.Nostr.csproj",
       "src\\Scramble.Nostr.Crypto\\Scramble.Nostr.Crypto.csproj",
       "src\\Scramble.Presentation\\Scramble.Presentation.csproj",
       "src\\Scramble.UI\\Scramble.UI.csproj",
