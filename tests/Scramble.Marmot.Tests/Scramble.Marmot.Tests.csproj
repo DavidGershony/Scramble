@@ -15,5 +15,6 @@
     <ProjectReference Include="..\..\src\Scramble.Marmot.Abstractions\Scramble.Marmot.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Scramble.Marmot.Storage.Sqlite\Scramble.Marmot.Storage.Sqlite.csproj" />
     <ProjectReference Include="..\..\src\Scramble.Marmot.Engine\Scramble.Marmot.Engine.csproj" />
+    <ProjectReference Include="..\..\src\Scramble.Marmot.Identity\Scramble.Marmot.Identity.csproj" />
   </ItemGroup>
 </Project>
