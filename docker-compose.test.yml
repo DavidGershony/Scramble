@@ -26,7 +26,43 @@ services:
     environment:
       - RUST_LOG=info,whitenoise=debug,mdk_core=debug
 
+  # The Dark Matter reference peer. Separate from the `whitenoise` service
+  # above, which is the pre-Dark-Matter daemon; both exist while the migration
+  # is in flight. Pinned to a tag, not a branch — see the Dockerfile.
+  wn-agent:
+    build:
+      context: ./tests/wn-agent-docker
+      dockerfile: Dockerfile
+      args:
+        MDK_REF: ${MDK_REF:-wn-agent-v0.9.10}
+    container_name: wn-agent-interop
+    # Host networking is required, not a shortcut. The agent accepts plaintext
+    # ws:// relays only for a literal loopback host and rejects private ranges,
+    # so it cannot reach the relay at its bridge address or by service name. On
+    # the host network the relay's published port is 127.0.0.1:7777, which the
+    # agent accepts.
+    network_mode: host
+    volumes:
+      - wn-agent-data:/data
+    depends_on:
+      nostr-relay:
+        condition: service_healthy
+    environment:
+      - RUST_LOG=info,cgka_engine=debug,agent_connector=debug
+      # Without this, `bootstrap` emits an invite nprofile pointing at the
+      # public WhiteNoise relays, which nothing in the test network can reach.
+      - MARMOT_RELAYS=ws://127.0.0.1:7777
+    healthcheck:
+      # Ready means the control socket exists, not merely that the process
+      # started: tests drive it through that socket immediately.
+      test: ["CMD-SHELL", "test -S /run/marmot-agent/wn-agent.sock"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
 volumes:
   relay-data:
   wn-data:
   wn-logs:
+  wn-agent-data:

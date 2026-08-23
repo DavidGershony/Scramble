@@ -105,10 +105,78 @@ and `tests/Scramble.Marmot.Tests/**` require the integration suite, per
 invariant I2. The engine is protocol code; it must not be able to land
 without the interop suite having run.
 
-`DarkMatterInterop` is not yet in the filter union because the tests do not
-exist yet, and the `wn-agent` service it needs is not in
-`docker-compose.test.yml`. Both land together in phase P3 — add the category
-to the filter in the same PR that adds the first test, per the rules above.
+`DarkMatterInterop` is not yet in the filter union because no tests carry the
+category yet. The peer it needs, however, now exists: `docker-compose.test.yml`
+has a `wn-agent` service. Add the category to the filter in the same PR that
+adds the first test, per the rules above.
+
+### The two interop peers
+
+There are deliberately two, because the migration runs against both protocols
+at once:
+
+| Service | Container | Peer | Used by |
+|---|---|---|---|
+| `whitenoise` | `whitenoise-interop` | pre-Dark-Matter `whitenoise-rs` daemon | the existing `FullE2E` / Whitenoise interop tests |
+| `wn-agent` | `wn-agent-interop` | Dark Matter reference agent from `mdk` | `Scramble.Marmot` interop, from P6 on |
+
+The `whitenoise` service stays until the old protocol is retired. Neither
+replaces the other.
+
+`wn-agent` is **pinned to a tag** (`wn-agent-v0.9.10`), not a branch. Upstream
+lands roughly eight commits a day, so an unpinned build would silently
+retarget every interop test between runs — including through wire-format
+changes. Bump it deliberately, together with the reference pin recorded in
+`ai-tasks/scramble-marmot-phased-plan-2026-08.md`, and re-run the drift diff:
+
+```powershell
+# Build against a different upstream ref without editing the compose file
+$env:MDK_REF = "wn-agent-v0.9.11"
+docker compose -f docker-compose.test.yml build wn-agent
+```
+
+Its control plane is a Unix socket inside the container, so tests drive it with
+`docker exec` rather than over the network — the same shape
+`WhitenoiseDockerClient` already uses. The container runs with `--debug-controls`,
+`--dev-allow-any-invites` and `--allow-loopback-relays`, none of which are safe
+outside a throwaway test container.
+
+Three configuration details are load-bearing, each found the hard way because
+the agent reports them as bare errors that name no cause:
+
+1. **`network_mode: host`, with the relay addressed as `ws://127.0.0.1:7777`.**
+   The agent accepts plaintext `ws://` endpoints only for a *literal* loopback
+   host and rejects private ranges outright, so it will not talk to the relay
+   at its bridge address or by compose service name — both resolve into
+   `172.x`. Symptom: `bootstrap` fails with `app_error: connector request
+   failed` while the agent logs nothing.
+2. **The socket's parent directory must be mode `0700`** (matching
+   `--socket-dir-mode`). A directory left at the usual `0755` makes startup
+   fail with `PermissionDenied` naming no path.
+3. **`MARMOT_RELAYS` must point at the test relay.** Otherwise `bootstrap`
+   emits an invite `nprofile` advertising the public WhiteNoise relays, which
+   nothing in the test network can reach — and unlike the two above, this one
+   fails silently and only shows up later as an invite no peer can act on.
+
+There is no `serve` subcommand: running `wn-agent` with no subcommand is what
+serves. Only `bootstrap` and `import-identity` are subcommands.
+
+Verify the service by hand with:
+
+```powershell
+docker compose -f docker-compose.test.yml up -d --build wn-agent
+docker exec wn-agent-interop wn-agent bootstrap `
+  --home /data/marmot-agent --socket /run/marmot-agent/wn-agent.sock --no-quic --json
+```
+
+A working agent reports `"key_package_published": true` and a `relays` list
+containing only the test relay. (From Git Bash, prefix with `MSYS_NO_PATHCONV=1`
+or the container paths get rewritten into Windows ones.)
+
+⚠ First build compiles a large Rust workspace from source and takes a while.
+CI should cache the image layer rather than rebuild it per run — and should
+assert the image exists afterwards, because `docker compose build` has been
+observed to exit 0 when it could not reach the daemon or the registry at all.
 
 ## Local reproduction
 
