@@ -15,12 +15,27 @@ namespace Scramble.Marmot.Wire.Nostr;
 /// what actually protects the message on a relay.
 /// </para>
 /// <para>
-/// Welcome handling (kind 444 inside a NIP-59 gift wrap) is not implemented
-/// yet; <see cref="Peel"/> rejects those envelopes rather than pretending.
+/// Also unwraps NIP-59 gift wraps carrying a kind-444 Welcome. That path needs
+/// the local account secret, so a peeler constructed without one still handles
+/// group messages but rejects Welcomes rather than silently ignoring them.
 /// </para>
 /// </remarks>
 public sealed class NostrGroupPeeler : ITransportPeeler
 {
+    private readonly byte[]? _accountSecret;
+
+    /// <param name="accountSecret">
+    /// The local account's 32-byte secret, used to open gift-wrapped Welcomes.
+    /// Omit it for a peeler that only handles group messages.
+    /// </param>
+    public NostrGroupPeeler(ReadOnlySpan<byte> accountSecret = default)
+    {
+        if (accountSecret.Length is not (0 or 32))
+            throw new ArgumentException("The account secret must be 32 bytes.", nameof(accountSecret));
+
+        _accountSecret = accountSecret.Length == 32 ? accountSecret.ToArray() : null;
+    }
+
     /// <summary>MLS exporter label the Marmot protocol derives group-event keys under.</summary>
     public const string ExporterLabel = "marmot";
 
@@ -53,6 +68,10 @@ public sealed class NostrGroupPeeler : ITransportPeeler
         {
             var root = document.RootElement;
             int kind = ReadKind(root);
+
+            if (kind == Nip59GiftWrap.WrapKind)
+                return PeelWelcome(envelope, ReadId(root));
+
             if (kind != GroupMessageEvent.Kind)
                 throw new PeelFailedException($"Unsupported event kind {kind}.");
 
@@ -88,6 +107,46 @@ public sealed class NostrGroupPeeler : ITransportPeeler
                 ReadId(root),
                 mlsBytes);
         }
+    }
+
+    /// <summary>
+    /// Opens a gift-wrapped Welcome addressed to the local account.
+    /// </summary>
+    /// <remarks>
+    /// Failures here are terminal rather than retryable. A wrap that will not
+    /// open for us is either not ours or forged, and neither improves on a
+    /// later attempt — unlike a group message, whose epoch secret may still be
+    /// on its way.
+    /// </remarks>
+    private PeeledMessage PeelWelcome(string envelope, string? transportId)
+    {
+        if (_accountSecret is null)
+        {
+            throw new PeelFailedException(
+                "This peeler has no account secret, so it cannot open gift-wrapped Welcomes.");
+        }
+
+        Rumor rumor;
+        try
+        {
+            rumor = Nip59GiftWrap.Unwrap(envelope, _accountSecret);
+        }
+        catch (GiftWrapException ex)
+        {
+            throw new PeelFailedException($"Could not open the gift-wrapped Welcome: {ex.Message}");
+        }
+
+        var welcome = WelcomeEvent.Read(rumor);
+
+        return new PeeledMessage(
+            PeeledContentKind.Welcome,
+            TransportGroupId: null,
+            transportId,
+            welcome.WelcomeBytes)
+        {
+            Welcome = new WelcomeDetails(
+                welcome.KeyPackageEventId, welcome.Relays, welcome.SenderPublicKeyHex),
+        };
     }
 
     /// <inheritdoc />

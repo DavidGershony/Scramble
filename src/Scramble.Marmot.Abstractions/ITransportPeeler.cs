@@ -24,7 +24,35 @@ public sealed record PeeledMessage(
     PeeledContentKind Kind,
     byte[]? TransportGroupId,
     string? TransportId,
-    byte[] MlsBytes);
+    byte[] MlsBytes)
+{
+    /// <summary>
+    /// Present only on a <see cref="PeeledContentKind.Welcome"/>.
+    /// </summary>
+    /// <remarks>
+    /// Joining needs more than the MLS bytes: which KeyPackage was consumed,
+    /// where the group's relays are, and who invited us. Carried here rather
+    /// than through peeler state so a peeler stays safe to use concurrently.
+    /// </remarks>
+    public WelcomeDetails? Welcome { get; init; }
+}
+
+/// <summary>
+/// The parts of a Welcome the join path needs beyond the MLS message.
+/// </summary>
+/// <param name="KeyPackageEventId">
+/// The KeyPackage event consumed by this Welcome. Its private material may be
+/// used exactly once, so the join path must be able to identify it.
+/// </param>
+/// <param name="Relays">Group relays the new member should use from now on.</param>
+/// <param name="SenderPublicKeyHex">
+/// The inviter, taken from the verified seal rather than from any unsigned
+/// field.
+/// </param>
+public sealed record WelcomeDetails(
+    byte[] KeyPackageEventId,
+    IReadOnlyList<string> Relays,
+    string SenderPublicKeyHex);
 
 /// <summary>
 /// Raised when an envelope cannot be unwrapped.
