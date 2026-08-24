@@ -83,6 +83,110 @@ public static class Bip340
         }
     }
 
+    /// <summary>
+    /// Signs a 32-byte message with a 32-byte secret, returning 64 bytes.
+    /// </summary>
+    /// <param name="auxRandom">
+    /// 32 bytes of auxiliary randomness. Defaults to fresh random bytes.
+    /// Pass zeros only to reproduce a published test vector.
+    /// </param>
+    /// <remarks>
+    /// For locally generated keys only — ephemeral transport keys and the like.
+    /// An account identity held by an external signer must be signed through
+    /// that signer, not here.
+    /// </remarks>
+    public static byte[] Sign(
+        ReadOnlySpan<byte> secret, ReadOnlySpan<byte> message, ReadOnlySpan<byte> auxRandom = default)
+    {
+        if (secret.Length != 32)
+            throw new ArgumentException("Secret must be 32 bytes.", nameof(secret));
+        if (message.Length != 32)
+            throw new ArgumentException("Message must be 32 bytes.", nameof(message));
+
+        byte[] aux = auxRandom.Length switch
+        {
+            0 => System.Security.Cryptography.RandomNumberGenerator.GetBytes(32),
+            32 => auxRandom.ToArray(),
+            _ => throw new ArgumentException("Auxiliary randomness must be 32 bytes.", nameof(auxRandom)),
+        };
+
+        var n = Curve.N;
+        var d0 = new BigInteger(1, secret.ToArray());
+        if (d0.SignValue == 0 || d0.CompareTo(n) >= 0)
+            throw new ArgumentException("Secret is out of range.", nameof(secret));
+
+        // BIP-340 keys are x-only with implicit even y, so a secret whose point
+        // has odd y is negated before use.
+        var point = Domain.G.Multiply(d0).Normalize();
+        var d = point.AffineYCoord.ToBigInteger().TestBit(0) ? n.Subtract(d0) : d0;
+        byte[] px = Pad32(Domain.G.Multiply(d).Normalize().AffineXCoord.ToBigInteger());
+
+        byte[] t = Pad32(d);
+        byte[] auxHash = TaggedHash("BIP0340/aux", aux);
+        for (int i = 0; i < 32; i++)
+            t[i] ^= auxHash[i];
+
+        var nonceInput = new byte[96];
+        t.CopyTo(nonceInput, 0);
+        px.CopyTo(nonceInput, 32);
+        message.CopyTo(nonceInput.AsSpan(64));
+        var k0 = new BigInteger(1, TaggedHash("BIP0340/nonce", nonceInput)).Mod(n);
+        if (k0.SignValue == 0)
+            throw new InvalidOperationException("Derived a zero nonce; retry with different auxiliary randomness.");
+
+        var r = Domain.G.Multiply(k0).Normalize();
+        var k = r.AffineYCoord.ToBigInteger().TestBit(0) ? n.Subtract(k0) : k0;
+        byte[] rx = Pad32(r.AffineXCoord.ToBigInteger());
+
+        var challengeInput = new byte[96];
+        rx.CopyTo(challengeInput, 0);
+        px.CopyTo(challengeInput, 32);
+        message.CopyTo(challengeInput.AsSpan(64));
+        var e = new BigInteger(1, TaggedHash("BIP0340/challenge", challengeInput)).Mod(n);
+
+        var signature = new byte[64];
+        rx.CopyTo(signature, 0);
+        Pad32(k.Add(e.Multiply(d)).Mod(n)).CopyTo(signature, 32);
+        return signature;
+    }
+
+    /// <summary>
+    /// Generates a keypair suitable for BIP-340, returning the x-only public key.
+    /// </summary>
+    /// <remarks>
+    /// The secret is normalised so it already corresponds to the even-y form of
+    /// its public key, which means callers never have to think about parity.
+    /// </remarks>
+    public static (byte[] Secret, byte[] PublicKey) GenerateKeyPair()
+    {
+        var n = Curve.N;
+        while (true)
+        {
+            byte[] candidate = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+            var d0 = new BigInteger(1, candidate);
+            if (d0.SignValue == 0 || d0.CompareTo(n) >= 0)
+                continue;
+
+            var point = Domain.G.Multiply(d0).Normalize();
+            var d = point.AffineYCoord.ToBigInteger().TestBit(0) ? n.Subtract(d0) : d0;
+            var normalized = Domain.G.Multiply(d).Normalize();
+            return (Pad32(d), Pad32(normalized.AffineXCoord.ToBigInteger()));
+        }
+    }
+
+    private static byte[] Pad32(BigInteger value)
+    {
+        byte[] raw = value.ToByteArrayUnsigned();
+        if (raw.Length == 32)
+            return raw;
+        if (raw.Length > 32)
+            throw new InvalidOperationException("Value is larger than 32 bytes.");
+
+        var padded = new byte[32];
+        raw.CopyTo(padded.AsSpan(32 - raw.Length));
+        return padded;
+    }
+
     /// <summary>Whether 32 bytes are a valid x-only secp256k1 point.</summary>
     public static bool IsValidXOnlyPublicKey(ReadOnlySpan<byte> xOnlyPublicKey)
     {
