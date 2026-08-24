@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
-**Updated:** 2026-08-24 · **Branch:** `feat/dark-matter` (pushed, in sync) ·
-**Last commit at time of writing:** `7647847`
+**Updated:** 2026-08-24 (second revision) · **Branch:** `feat/dark-matter`
+(pushed, in sync) · **Last commit at time of writing:** `30282fa`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -33,7 +33,7 @@ product. The first milestone that matters is **P6: engine v1 talking to a real
 
 Six new projects, all standalone (no reference to `marmot-cs`), all in
 `Scramble.sln` and `Scramble.Desktop.slnf`, all running in the fast unit gate.
-**363 tests in `Scramble.Marmot.Tests`, all passing.**
+**410 tests in `Scramble.Marmot.Tests`, all passing.**
 
 | Project | Phase | Contains |
 |---|---|---|
@@ -52,13 +52,41 @@ produce/verify), and a `wn-agent` interop peer in `docker-compose.test.yml`.
 
 ## 3. Do this next
 
-### 3a. First: check the crypto review
+### 3a. The crypto review is DONE and actioned — nothing to do here
 
-An independent review of the ported crypto was commissioned on 2026-08-24
-(the code and its tests share an author, so the tests are not an oracle).
-**Find its findings and act on them before building anything new** — a defect
-in BIP-340, NIP-44, the gift wrap or the proof invalidates work layered on top.
-If you cannot find the review output, say so rather than assuming it was clean.
+An independent review ran on 2026-08-24 and all five of its defects are fixed
+(`bd5d630`, `d44f254`, `30282fa`). Do not re-commission it. What it found, so
+the reasoning is not lost:
+
+1. **kind-445 events were never verified.** The id and Nostr signature are now
+   checked before any field is trusted, and the transport id is bound to the
+   verified hash — it keys deduplication, so an attacker-chosen value let a
+   legitimate message be dropped as a duplicate.
+2. **Emoji produced the wrong event id.** Every .NET JSON encoder escapes above
+   the BMP as surrogate pairs; NIP-01 requires verbatim. The serialiser is now
+   hand-written. **Do not replace it with `Utf8JsonWriter`** — no encoder
+   setting fixes this.
+3. **Malformed input escaped as the wrong exception type**, bypassing the
+   retryable/terminal classification the engine branches on. Parsing is total now.
+4. **NIP-44 lacked the 2026-06-28 extended length prefix**, so large messages
+   could be neither sent nor read. `nip44.vectors.json` has not been regenerated
+   since the amendment, so the vector file cannot catch this — the boundary
+   vectors inline in `44.md` are what pin it.
+5. **Relay URLs accepted userinfo, fragments and duplicates**, contrary to the
+   Marmot profile.
+
+It also verified as sound, against external vectors: all 15 BIP-340 cases, all
+35 NIP-44 conversation keys, the account-proof fixture byte for byte, the
+gift-wrap trust model, and the kind-445 tag shape against upstream.
+
+**Still open, deliberately:** no key-material zeroization anywhere (the reviewer
+noted rather than escalated it; it is consistent with the previous
+implementation). Worth scoping properly rather than sprinkling.
+
+**The lesson worth keeping:** one test asserted the defect *was* the behaviour,
+because the fixture it used could only ever exercise the rejection path. When
+code and tests share an author, the tests are not an oracle — pin to external
+vectors, and get fresh eyes on cryptography.
 
 ### 3b. Finish P3 — the kind-30443 KeyPackage event
 
@@ -90,7 +118,7 @@ must contain `0x8003` and `0x8009`.
 
 ### 3d. Non-code items still open (not blocking)
 
-- **Open a PR for `feat/dark-matter`.** 24 commits and growing; it is
+- **Open a PR for `feat/dark-matter`.** 29 commits and growing; it is
   reviewable now and will not be after P6. This is the repo's documented
   flag-day failure mode (I4).
 - **Merge `feat/generic-mls-additions`** into `dotnet-mls` `main`. It is pushed
@@ -166,6 +194,10 @@ registry.
 | `wn-agent serve` | `unrecognized subcommand` | There is no `serve`. Running `wn-agent` bare is what serves. |
 | Git Bash + `docker exec` | Paths rewritten to `C:/Program Files/Git/...` | Prefix with `MSYS_NO_PATHCONV=1`. |
 | Submodule left on another branch | `Scramble.Core` fails to compile with a missing symbol | `git submodule update --init --recursive` restores the recorded commit. |
+| `Utf8JsonWriter` for NIP-01 canonical form | Emoji get surrogate-escaped, so the event id differs from everyone else's | Use the hand-written serialiser in `NostrEventTemplate.Serialize`. No encoder option fixes it. |
+| Pinning only to `nip44.vectors.json` | Passes while missing the 2026-06-28 amendment the file predates | Check `44.md` prose and its inline vectors too. |
+| Literal U+2028/U+2029 in C# source | They are line terminators — the file will not compile | Build such strings at runtime from char codes. |
+| Python `open(...,"w")` then an encode error | Truncates the file to zero bytes | Write to a temp file and move, or use the Edit tool. |
 
 ---
 
