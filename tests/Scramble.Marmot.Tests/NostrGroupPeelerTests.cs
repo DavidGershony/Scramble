@@ -22,15 +22,38 @@ public class NostrGroupPeelerTests
 
     private static string RoutingIdHex => Convert.ToHexString(RoutingId).ToLowerInvariant();
 
-    private static string Envelope(string content, params string[][] tags)
+    /// <summary>
+    /// Builds a properly signed kind-445 envelope.
+    /// </summary>
+    /// <remarks>
+    /// Signed because the peeler verifies the id and signature before trusting
+    /// any field. An unsigned fixture would only ever exercise the rejection
+    /// path — which is how the earlier version of these tests came to assert
+    /// that an unauthenticated transport id was passed through unchanged.
+    /// </remarks>
+    private static string Envelope(
+        string content, string[][] tags, string? overrideId = null, string? overrideSig = null)
     {
+        var (secret, publicKey) = Bip340.GenerateKeyPair();
+        var template = new NostrEventTemplate(
+            Convert.ToHexString(publicKey).ToLowerInvariant(),
+            1700000000,
+            445,
+            tags,
+            content);
+
+        byte[] id = template.ComputeId();
+        string sig = overrideSig
+            ?? Convert.ToHexString(Bip340.Sign(secret, id)).ToLowerInvariant();
+
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
         {
             writer.WriteStartObject();
-            writer.WriteString("id", "abc123");
+            writer.WriteString("id", overrideId ?? Convert.ToHexString(id).ToLowerInvariant());
+            writer.WriteString("pubkey", template.PublicKeyHex);
+            writer.WriteNumber("created_at", template.CreatedAt);
             writer.WriteNumber("kind", 445);
-            writer.WriteString("content", content);
             writer.WritePropertyName("tags");
             writer.WriteStartArray();
             foreach (var tag in tags)
@@ -42,10 +65,18 @@ public class NostrGroupPeelerTests
             }
 
             writer.WriteEndArray();
+            writer.WriteString("content", content);
+            writer.WriteString("sig", sig);
             writer.WriteEndObject();
         }
 
         return System.Text.Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    private static string ExpectedId(string envelope)
+    {
+        using var document = JsonDocument.Parse(envelope);
+        return document.RootElement.GetProperty("id").GetString()!;
     }
 
     private static Func<byte[], byte[]?> SecretFor(byte[]? secret = null) =>
@@ -253,7 +284,7 @@ public class NostrGroupPeelerTests
     public void AnUnknownRoutingIdDefersRatherThanFailing()
     {
         var peeler = new NostrGroupPeeler();
-        string envelope = Envelope("irrelevant", new[] { "h", RoutingIdHex });
+        string envelope = Envelope("irrelevant", new[] { new[] { "h", RoutingIdHex } });
 
         var ex = Assert.Throws<PeelFailedException>(() => peeler.Peel(envelope, _ => null));
 
@@ -278,7 +309,8 @@ public class NostrGroupPeelerTests
     public void AMalformedTagShapeIsTerminalNotRetryable()
     {
         var peeler = new NostrGroupPeeler();
-        string envelope = Envelope("x", new[] { "h", RoutingIdHex }, new[] { "encoding", "base64" });
+        string envelope = Envelope("x",
+            new[] { new[] { "h", RoutingIdHex }, new[] { "encoding", "base64" } });
 
         var ex = Assert.Throws<PeelFailedException>(() => peeler.Peel(envelope, SecretFor()));
 
@@ -304,15 +336,68 @@ public class NostrGroupPeelerTests
     }
 
     [Fact]
-    public void TheTransportIdIsCarriedThroughForDedupPreFiltering()
+    public void TheTransportIdIsBoundToTheVerifiedEventHash()
     {
+        // Previously this test asserted the SELF-REPORTED id was passed through
+        // unchanged, which pinned a defect: the transport id keys deduplication,
+        // so an attacker who can post to a subscribed relay could pre-poison it
+        // and have a legitimate message dropped as a duplicate.
         var peeler = new NostrGroupPeeler();
         string content = ChaCha20Poly1305Envelope.Seal("x"u8.ToArray(), ExporterSecret, out _);
-        string envelope = Envelope(content, new[] { "h", RoutingIdHex });
+        string envelope = Envelope(content, new[] { new[] { "h", RoutingIdHex } });
 
         var peeled = peeler.Peel(envelope, SecretFor());
 
-        Assert.Equal("abc123", peeled.TransportId);
+        Assert.Equal(ExpectedId(envelope), peeled.TransportId);
+        Assert.Equal(64, peeled.TransportId!.Length);
+    }
+
+    [Fact]
+    public void AnEventWhoseIdDoesNotMatchItsContentIsRejected()
+    {
+        var peeler = new NostrGroupPeeler();
+        string content = ChaCha20Poly1305Envelope.Seal("x"u8.ToArray(), ExporterSecret, out _);
+        string envelope = Envelope(
+            content, new[] { new[] { "h", RoutingIdHex } }, overrideId: new string('a', 64));
+
+        var ex = Assert.Throws<PeelFailedException>(() => peeler.Peel(envelope, SecretFor()));
+
+        Assert.Contains("id", ex.Message);
+        Assert.False(ex.Retryable);
+    }
+
+    [Fact]
+    public void AnEventWithAnInvalidSignatureIsRejectedBeforeDecryption()
+    {
+        var peeler = new NostrGroupPeeler();
+        string content = ChaCha20Poly1305Envelope.Seal("x"u8.ToArray(), ExporterSecret, out _);
+        string envelope = Envelope(
+            content, new[] { new[] { "h", RoutingIdHex } }, overrideSig: new string('0', 128));
+
+        // The spec makes verification a MUST *before* attempting to decrypt.
+        var ex = Assert.Throws<PeelFailedException>(() => peeler.Peel(envelope, _ =>
+            throw new InvalidOperationException("must not reach the exporter lookup")));
+
+        Assert.Contains("signature", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("{\"kind\":99999999999999,\"id\":\"x\",\"pubkey\":\"x\",\"created_at\":1,\"tags\":[],\"content\":\"\",\"sig\":\"x\"}")]
+    [InlineData("{\"kind\":1.5,\"id\":\"x\",\"pubkey\":\"x\",\"created_at\":1,\"tags\":[],\"content\":\"\",\"sig\":\"x\"}")]
+    [InlineData("[]")]
+    [InlineData("\"hi\"")]
+    [InlineData("null")]
+    [InlineData("123")]
+    [InlineData("{\"kind\":445,\"id\":null,\"pubkey\":\"x\",\"created_at\":1,\"tags\":[],\"content\":\"\",\"sig\":\"x\"}")]
+    [InlineData("{\"kind\":445,\"id\":\"x\",\"pubkey\":\"x\",\"created_at\":1e400,\"tags\":[],\"content\":\"\",\"sig\":\"x\"}")]
+    [InlineData("{\"kind\":445,\"id\":\"x\",\"pubkey\":\"x\",\"created_at\":1,\"tags\":\"nope\",\"content\":\"\",\"sig\":\"x\"}")]
+    public void MalformedEnvelopesFailAsPeelFailuresNotArbitraryExceptions(string envelope)
+    {
+        // The engine branches on PeelFailedException.Retryable. Anything else
+        // escaping bypasses that classification entirely.
+        var peeler = new NostrGroupPeeler();
+
+        Assert.Throws<PeelFailedException>(() => peeler.Peel(envelope, SecretFor()));
     }
 
     // -- Envelope crypto --

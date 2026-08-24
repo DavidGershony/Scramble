@@ -66,16 +66,21 @@ public sealed class NostrGroupPeeler : ITransportPeeler
 
         using (document)
         {
-            var root = document.RootElement;
-            int kind = ReadKind(root);
+            var signed = SignedNostrEvent.Parse(document.RootElement);
 
-            if (kind == Nip59GiftWrap.WrapKind)
-                return PeelWelcome(envelope, ReadId(root));
+            if (signed.Kind == Nip59GiftWrap.WrapKind)
+                return PeelWelcome(envelope, signed);
 
-            if (kind != GroupMessageEvent.Kind)
-                throw new PeelFailedException($"Unsupported event kind {kind}.");
+            if (signed.Kind != GroupMessageEvent.Kind)
+                throw new PeelFailedException($"Unsupported event kind {signed.Kind}.");
 
-            var tags = GroupMessageEvent.ReadTags(root);
+            // The transport spec makes this a MUST, twice over: verify the id
+            // and signature BEFORE treating any field — kind, tags, content, or
+            // the id itself — as authenticated. The AEAD below protects the
+            // payload, but nothing else here is protected without this.
+            byte[] computedId = signed.VerifyAndComputeId();
+
+            var tags = GroupMessageEvent.ReadTags(document.RootElement);
             byte[] transportGroupId = GroupMessageEvent.ReadTransportGroupId(tags);
 
             byte[]? exporterSecret = exporterSecretFor(transportGroupId);
@@ -87,11 +92,10 @@ public sealed class NostrGroupPeeler : ITransportPeeler
                     "No exporter secret is available for this routing id.", retryable: true);
             }
 
-            string content = ReadContent(root);
             byte[] mlsBytes;
             try
             {
-                mlsBytes = ChaCha20Poly1305Envelope.Open(content, exporterSecret);
+                mlsBytes = ChaCha20Poly1305Envelope.Open(signed.Content, exporterSecret);
             }
             catch (CryptographicException ex)
             {
@@ -104,7 +108,11 @@ public sealed class NostrGroupPeeler : ITransportPeeler
             return new PeeledMessage(
                 PeeledContentKind.GroupMessage,
                 transportGroupId,
-                ReadId(root),
+                // Bound to the event hash rather than the self-reported id. The
+                // transport id keys deduplication, so accepting an attacker's
+                // chosen value lets them pre-poison it and have a legitimate
+                // message dropped as a duplicate.
+                Convert.ToHexString(computedId).ToLowerInvariant(),
                 mlsBytes);
         }
     }
@@ -118,7 +126,7 @@ public sealed class NostrGroupPeeler : ITransportPeeler
     /// later attempt — unlike a group message, whose epoch secret may still be
     /// on its way.
     /// </remarks>
-    private PeeledMessage PeelWelcome(string envelope, string? transportId)
+    private PeeledMessage PeelWelcome(string envelope, SignedNostrEvent wrap)
     {
         if (_accountSecret is null)
         {
@@ -141,7 +149,8 @@ public sealed class NostrGroupPeeler : ITransportPeeler
         return new PeeledMessage(
             PeeledContentKind.Welcome,
             TransportGroupId: null,
-            transportId,
+            // Bound to the verified wrap hash, not the self-reported id.
+            Convert.ToHexString(wrap.VerifyAndComputeId()).ToLowerInvariant(),
             welcome.WelcomeBytes)
         {
             Welcome = new WelcomeDetails(
@@ -165,12 +174,31 @@ public sealed class NostrGroupPeeler : ITransportPeeler
 
         var tags = GroupMessageEvent.BuildTags(transportGroupId, expiresAt);
 
+        // Signed here, with a key generated here, on purpose. The spec requires
+        // a fresh ephemeral key per event and forbids the account identity —
+        // signing a group message with it would deanonymise every message the
+        // account sends. Returning an unsigned fragment for a caller to sign
+        // would leave that choice, and that mistake, available to them.
+        var (ephemeralSecret, ephemeralPublicKey) = Bip340.GenerateKeyPair();
+
+        var template = new NostrEventTemplate(
+            Convert.ToHexString(ephemeralPublicKey).ToLowerInvariant(),
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            GroupMessageEvent.Kind,
+            tags,
+            content);
+
+        byte[] id = template.ComputeId();
+        byte[] signature = Bip340.Sign(ephemeralSecret, id);
+
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
         {
             writer.WriteStartObject();
-            writer.WriteNumber("kind", GroupMessageEvent.Kind);
-            writer.WriteString("content", content);
+            writer.WriteString("id", Convert.ToHexString(id).ToLowerInvariant());
+            writer.WriteString("pubkey", template.PublicKeyHex);
+            writer.WriteNumber("created_at", template.CreatedAt);
+            writer.WriteNumber("kind", template.Kind);
             writer.WritePropertyName("tags");
             writer.WriteStartArray();
             foreach (var tag in tags)
@@ -182,6 +210,8 @@ public sealed class NostrGroupPeeler : ITransportPeeler
             }
 
             writer.WriteEndArray();
+            writer.WriteString("content", content);
+            writer.WriteString("sig", Convert.ToHexString(signature).ToLowerInvariant());
             writer.WriteEndObject();
         }
 
@@ -217,18 +247,6 @@ public sealed class NostrGroupPeeler : ITransportPeeler
             _usedNonces.Clear();
     }
 
-    private static int ReadKind(JsonElement root) =>
-        root.TryGetProperty("kind", out var kind) && kind.ValueKind == JsonValueKind.Number
-            ? kind.GetInt32()
-            : throw new PeelFailedException("The envelope has no kind.");
 
-    private static string ReadContent(JsonElement root) =>
-        root.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String
-            ? content.GetString()!
-            : throw new PeelFailedException("The envelope has no content.");
 
-    private static string? ReadId(JsonElement root) =>
-        root.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String
-            ? id.GetString()
-            : null;
 }
