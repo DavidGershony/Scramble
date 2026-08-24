@@ -3,6 +3,10 @@
 Orientation for a clean session. Read this first; it tells you what's current,
 what's superseded, where the code stands, and what to do next.
 
+> ➡ **If you are a new session, read `ai-tasks/HANDOFF-dark-matter.md` first.**
+> It states what exists, what to do next, how to run everything, and the
+> traps already paid for. This file is background; that one is current.
+>
 > **Planning is complete (steps 1–5 all ✅).** The authoritative next-steps
 > document is **`scramble-marmot-phased-plan-2026-08.md`** — phased build order,
 > tests and CI categories per phase, the sequenced `dotnet-mls` permission asks,
@@ -65,10 +69,12 @@ history only:
 
 ## Code state (git)
 
-- **Current branch: `feat/dark-matter`** — planning only so far (steps 1–5:
-  scoping, convergence deep-dive, survives/rewrite diff, account-identity-proof,
-  phased plan). **No engine code has been written yet.** The build starts at
-  plan §3 phase **P0**.
+- **Current branch: `feat/dark-matter`** — planning (steps 1–5) plus the first
+  phases of the build. As of 2026-08-24: **P0 storage, P1 epoch state machine
+  and P2 account-identity proof are done, P3 transport is mostly done**, across
+  six new `Scramble.Marmot.*` / `Scramble.Nostr.Crypto` projects with 363
+  passing tests. **See `HANDOFF-dark-matter.md` for the current state** — this
+  section will go stale faster than that one.
 - Older branch **`feat/marmot-batch1-protocol-v3`** (parent `34c297f` → `8e21e4e`;
   submodule `lib/marmot-cs` `7be4f20` → `a55e527`). Not pushed. **Leave it as
   historical** — decision settled: start `Scramble.Marmot` fresh and port the

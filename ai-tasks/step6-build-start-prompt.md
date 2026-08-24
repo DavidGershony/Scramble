@@ -1,3 +1,8 @@
+> **SUPERSEDED (2026-08-24).** P0, P1 and P2 are done, and both approved
+> `dotnet-mls` changes are landed — the tasks below are already complete.
+> **Use `ai-tasks/HANDOFF-dark-matter.md` instead.** Kept only for the record
+> until you delete it.
+>
 > ⚠ **TEMPORARY — session handoff scratch prompt.**
 > **Delete it once P0 has landed** (storage foundation merged on
 > `feat/dark-matter`, unit tests green) and the plan doc's phase table is the
