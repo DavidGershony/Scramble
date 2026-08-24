@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
-**Updated:** 2026-08-24 (second revision) · **Branch:** `feat/dark-matter`
-(pushed, in sync) · **Last commit at time of writing:** `30282fa`
+**Updated:** 2026-08-24 (third revision) · **Branch:** `feat/dark-matter`
+(ahead of origin by two commits) · **Last commit at time of writing:** `3ed53f9`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -21,8 +21,9 @@ before P0–P2 landed.
 Scramble is replacing its Marmot engine with a standalone Dark Matter
 implementation (`Scramble.Marmot.*`), built fresh against Rust `mdk` pinned at
 **`wn-agent-v0.9.10`**. Planning is finished. Phases P0 (storage), P1 (epoch
-state machine) and P2 (account-identity proof) are done; P3 (transport) is
-mostly done. Nothing is wired into the running app yet — the new engine is
+state machine) and P2 (account-identity proof) are done, and P3's transport
+codecs are complete — what remains of P3 needs a decoded MLS KeyPackage and so
+arrives with the engine (§3b). Nothing is wired into the running app yet — the new engine is
 entirely additive and nothing depends on it, so it cannot break the shipping
 product. The first milestone that matters is **P6: engine v1 talking to a real
 `wn-agent`**.
@@ -33,16 +34,16 @@ product. The first milestone that matters is **P6: engine v1 talking to a real
 
 Six new projects, all standalone (no reference to `marmot-cs`), all in
 `Scramble.sln` and `Scramble.Desktop.slnf`, all running in the fast unit gate.
-**410 tests in `Scramble.Marmot.Tests`, all passing.**
+**495 tests in `Scramble.Marmot.Tests`, all passing.**
 
 | Project | Phase | Contains |
 |---|---|---|
-| `src/Scramble.Marmot.Abstractions` | P0/P1/P3 | Ids (`GroupId`, `EpochId`, `MessageId`, `MemberId`), storage contracts and records, `EpochState`, `ITransportPeeler` + `PeeledMessage` |
-| `src/Scramble.Marmot.Storage.Sqlite` | P0 | SQLite provider, migrations, transactions, epoch-anchored snapshots |
+| `src/Scramble.Marmot.Abstractions` | P0/P1/P3 | Ids (`GroupId`, `EpochId`, `MessageId`, `MemberId`), storage contracts and records incl. `IKeyPackageStorage`, `EpochState`, `ITransportPeeler` + `PeeledMessage` |
+| `src/Scramble.Marmot.Storage.Sqlite` | P0/P3 | SQLite provider, migrations, transactions, epoch-anchored snapshots, KeyPackage bundles + private material |
 | `src/Scramble.Marmot.Engine` | P1 | `EpochManager` |
 | `src/Scramble.Marmot.Identity` | P2 | `AccountIdentityProof` (`0x8009`), async signer seam |
 | `src/Scramble.Nostr.Crypto` | P2/P3 | BIP-340, NIP-01 event ids, NIP-44 v2, NIP-59 gift wrap, ChaCha20-Poly1305 envelope, secp256k1 |
-| `src/Scramble.Marmot.Wire.Nostr` | P3 | kind-445 codec, kind-444 Welcome, `NostrGroupPeeler` |
+| `src/Scramble.Marmot.Wire.Nostr` | P3 | kind-445 codec, kind-444 Welcome, kind-30443 KeyPackage, `NostrGroupPeeler` |
 
 Also landed: two approved `dotnet-mls` changes on branch
 `feat/generic-mls-additions` (AppDataUpdate proposal type; PublicMessage
@@ -88,22 +89,46 @@ because the fixture it used could only ever exercise the rejection path. When
 code and tests share an author, the tests are not an oracle — pin to external
 vectors, and get fresh eyes on cryptography.
 
-### 3b. Finish P3 — the kind-30443 KeyPackage event
+### 3b. P3's transport codecs are DONE — what is left of P3 needs MLS
 
-The last transport piece, and the point where P2's proof reaches the wire.
+`c72dd91` added the kind-30443 codec and `3ed53f9` the KeyPackage storage.
+Both are green in the fast unit gate. What landed:
 
-- Build and parse kind-30443 KeyPackage events.
-- **Drop the `encoding` tag.** The previous implementation emitted it on
-  30443/444/445; a current peer rejects such events at the envelope.
-- Add the `app_components` tag, and NIP-40 `expiration`.
-- Attach the `0x8009` account-identity proof (P2) to the leaf, and advertise
-  `0x8009` in the leaf's `app_components` support list.
-- Reference: `mdk@wn-agent-v0.9.10` `crates/cgka-engine/src/key_package.rs`;
-  spec `transports/nostr.md`. Prior art to port from, with the tag fixes:
-  `lib/marmot-cs/src/MarmotCs.Protocol/Mip00/KeyPackageEventBuilder.cs`.
-- ⚠ The old code discarded KeyPackage private material (`initPriv`/`hpkePriv`).
-  The new engine must persist it: a Welcome consumes it exactly once, and
-  without it a join cannot complete.
+- Build (unsigned template) and verify-then-parse kind-30443 events, with the
+  seven-tag cardinality rules, id-list spelling (`0x` + four lowercase hex
+  digits, exact-string compared), and the `app_components`-must-carry-`0x8009`
+  rule. Plus the transport candidate ranking (recency, then event id within a
+  slot, then decoded KeyPackageRef across slots).
+- No `encoding` tag in either direction. Inbound it is inert rather than
+  rejected: kind 30443's tag set is **not closed** the way kind 445's is, so an
+  unknown tag is carried past. Do not "tighten" this — rejecting unknown tags
+  here invents a rule the spec does not state.
+- `IKeyPackageStorage` + the SQLite table, keyed by KeyPackageRef with a second
+  lookup by kind-30443 event id (what a Welcome actually names). Private
+  material is persisted, and erasure is a one-way, idempotent transition; `Put`
+  inserts and never replaces, so a stale record cannot resurrect erased key
+  material.
+
+**Two P3 bullets from the previous revision are NOT done, deliberately.** Both
+need a decoded MLS KeyPackage, and no `Scramble.Marmot.*` project references
+`dotnet-mls` yet:
+
+- Attaching the `0x8009` proof to the LeafNode and advertising it in the leaf's
+  own support list. The *transport* advertisement is done; the *leaf* one is
+  KeyPackage construction.
+- The two checks the codec deliberately surfaces instead of performing:
+  KeyPackageRef equality against the decoded KeyPackage, and binding the event
+  author to the credential identity. Both are mandatory. They are on
+  `KeyPackagePublication` waiting for a caller.
+
+These belong with KeyPackage generation, which is engine work (P6) and arrives
+with the first `dotnet-mls` reference. **Do not let them fall off** — the
+codec's XML docs name them, but nothing enforces them yet.
+
+Also still open from P3's exit criterion: no `ConformanceVector` fixtures for
+30443, and no `DarkMatterInterop` test that publishes a KeyPackage a live
+`wn-agent` will fetch. The codec is pinned to the spec text and to
+`transport-nostr-adapter/src/key_package.rs`, not to a vector.
 
 ### 3c. Then P4 — AppComponents
 
@@ -187,6 +212,8 @@ registry.
 |---|---|---|
 | `NBitcoin.Secp256k1.SigVerifyBIP340` | Broken on .NET Android only | Use the BouncyCastle BIP-340 implementation in `Scramble.Nostr.Crypto`. Do not "simplify" it back to the library call. |
 | `encoding` tag on 445/444/30443 | Current peers reject the whole event before any MLS processing | Never emit it. kind-445 carries exactly one `h` tag and at most one `expiration`, nothing else. |
+| Assuming kind 30443 has a closed tag set like 445 | Rejecting an unknown tag invents a rule the spec does not state, and breaks against a peer that adds one | 445 says "no other tag"; 30443 constrains its seven tags and is silent on others. Carry unknowns past. Duplicates of the seven are still fatal. |
+| Reading only the first of a repeated tag | An attacker prepends a value another implementation ignores, so two peers disagree about one signed event | Explicitly a MUST NOT. Reject the event. |
 | Uppercase hex in tags | Decodes identically but changes the event id | Lowercase everywhere on the wire. |
 | Dedup on the Nostr event id | Same MLS message under a different envelope is processed twice | Dedup on `MessageId.FromMlsBytes`; transport ids are a pre-filter only. |
 | `wn-agent` + private-range relay | `connector request failed`, nothing in the agent log | The agent accepts plaintext `ws://` only for a *literal* loopback host, hence `network_mode: host` and `ws://127.0.0.1:7777`. |
@@ -209,6 +236,12 @@ format hard-broke between two tags. Before relying on any reading of upstream:
 ```bash
 gh api repos/marmot-protocol/mdk/tags --paginate -q '.[].name' | head
 ```
+
+**Checked 2026-08-24: upstream is at `wn-agent-v0.9.14`, four tags ahead of our
+`v0.9.10` pin.** Nothing was re-pinned — the 30443 work was read at v0.9.10 and
+against current spec text, which agree. Someone should run the drift diff over
+0.9.11–0.9.14 before P4, since the app-component work is exactly where a silent
+id change would land.
 
 If the pin needs to move, do it deliberately: bump `MDK_REF` in
 `tests/wn-agent-docker/Dockerfile`, re-run the drift diff over the modules in
