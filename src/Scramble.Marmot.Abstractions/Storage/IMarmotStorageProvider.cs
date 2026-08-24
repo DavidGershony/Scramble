@@ -14,6 +14,7 @@ public interface IMarmotStorageProvider :
     IOutboundIntentStorage,
     ILeaveRequestStorage,
     IWelcomeStorage,
+    IKeyPackageStorage,
     ISnapshotStorage
 {
     /// <summary>Opens a transaction covering every sub-store.</summary>
