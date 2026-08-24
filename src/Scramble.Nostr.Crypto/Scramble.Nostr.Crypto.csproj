@@ -6,6 +6,9 @@
     <RootNamespace>Scramble.Nostr.Crypto</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Scramble.Marmot.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.5.1" />
   </ItemGroup>
 </Project>

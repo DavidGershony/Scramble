@@ -228,6 +228,62 @@ public class WelcomeEventTests
             () => WelcomeEvent.BuildTags(new byte[31], new[] { "wss://relay.example" }));
     }
 
+    [Theory]
+    [InlineData("wss://user:pass@relay.example")]
+    [InlineData("wss://user@relay.example")]
+    public void ARelayCarryingCredentialsIsRejected(string relay)
+    {
+        // The list comes from whoever invited us, before any trust decision;
+        // embedded credentials would be handed to whatever connects.
+        var rumor = MakeRumor(new IReadOnlyList<string>[]
+        {
+            new[] { "e", KeyPackageEventIdHex },
+            new[] { "relays", relay },
+        });
+
+        Assert.Throws<PeelFailedException>(() => WelcomeEvent.Read(rumor));
+    }
+
+    [Fact]
+    public void ARelayCarryingAFragmentIsRejected()
+    {
+        // Compared as an exact string downstream, so a fragment makes a second
+        // distinct entry for the same relay.
+        var rumor = MakeRumor(new IReadOnlyList<string>[]
+        {
+            new[] { "e", KeyPackageEventIdHex },
+            new[] { "relays", "wss://relay.example/#frag" },
+        });
+
+        Assert.Throws<PeelFailedException>(() => WelcomeEvent.Read(rumor));
+    }
+
+    [Fact]
+    public void ADuplicateRelayValueIsRejected()
+    {
+        var rumor = MakeRumor(new IReadOnlyList<string>[]
+        {
+            new[] { "e", KeyPackageEventIdHex },
+            new[] { "relays", "wss://a.example", "wss://a.example" },
+        });
+
+        Assert.Throws<PeelFailedException>(() => WelcomeEvent.Read(rumor));
+    }
+
+    [Fact]
+    public void ExtraValuesOnTheKeyPackageTagAreRejected()
+    {
+        // Ignoring them would let an attacker append a value that another
+        // implementation reads instead of the first.
+        var rumor = MakeRumor(new IReadOnlyList<string>[]
+        {
+            new[] { "e", KeyPackageEventIdHex, "wss://hint.example" },
+            new[] { "relays", "wss://relay.example" },
+        });
+
+        Assert.Throws<PeelFailedException>(() => WelcomeEvent.Read(rumor));
+    }
+
     [Fact]
     public void BuildingRejectsAnInvalidRelay()
     {

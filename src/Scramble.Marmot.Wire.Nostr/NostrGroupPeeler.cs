@@ -231,10 +231,18 @@ public sealed class NostrGroupPeeler : ITransportPeeler
     /// </remarks>
     private void RequireFreshNonce(ReadOnlySpan<byte> key, ReadOnlySpan<byte> nonce)
     {
-        string composite = Convert.ToHexString(key) + ":" + Convert.ToHexString(nonce);
+        // Keyed on a hash of (key, nonce) rather than the key's own hex. The
+        // hex form put the group's exporter secret into an immutable string
+        // that cannot be zeroed and outlived the epoch it belonged to.
+        var input = new byte[key.Length + nonce.Length];
+        key.CopyTo(input);
+        nonce.CopyTo(input.AsSpan(key.Length));
+        byte[] digest = SHA256.HashData(input);
+        CryptographicOperations.ZeroMemory(input);
+
         lock (_nonceLock)
         {
-            if (!_usedNonces.Add(composite))
+            if (!_usedNonces.Add(Convert.ToHexString(digest)))
                 throw new CryptographicException(
                     "A duplicate outbound nonce was generated; the message must not be transmitted.");
         }

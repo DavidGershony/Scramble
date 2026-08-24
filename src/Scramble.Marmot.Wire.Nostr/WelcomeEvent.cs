@@ -120,30 +120,72 @@ public static class WelcomeEvent
             throw new PeelFailedException(
                 $"A Welcome rumor lists {relays.Count} relays; the limit is {MaxRelays}.");
 
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (string relay in relays)
         {
             if (System.Text.Encoding.UTF8.GetByteCount(relay) > MaxRelayUrlLength)
                 throw new PeelFailedException(
                     $"A Welcome relay URL exceeds {MaxRelayUrlLength} bytes.");
 
-            if (!IsRelayUrl(relay))
-                throw new PeelFailedException($"'{relay}' is not a valid ws or wss relay URL.");
+            RequireRelayUrl(relay);
+
+            // Relay URLs are compared as exact byte strings downstream, so a
+            // repeated entry is a list that means something different from what
+            // it appears to say. The spec calls such a list malformed.
+            if (!seen.Add(relay))
+                throw new PeelFailedException($"A Welcome rumor lists '{relay}' more than once.");
         }
 
         return relays;
     }
 
-    private static bool IsRelayUrl(string value) =>
-        Uri.TryCreate(value, UriKind.Absolute, out var uri)
-        && (uri.Scheme == "ws" || uri.Scheme == "wss")
-        && !string.IsNullOrEmpty(uri.Host);
+    /// <summary>
+    /// Applies the Marmot relay-URL profile.
+    /// </summary>
+    /// <remarks>
+    /// Beyond requiring ws or wss, the profile forbids userinfo and fragment
+    /// components. Both matter here because this list arrives from whoever
+    /// invited us, before any trust decision: credentials embedded in a URL
+    /// would be handed to whatever connects, and a fragment produces a distinct
+    /// string for what is really the same relay.
+    /// </remarks>
+    private static void RequireRelayUrl(string value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
+            throw new PeelFailedException($"'{value}' is not an absolute URL.");
 
+        if (uri.Scheme is not ("ws" or "wss"))
+            throw new PeelFailedException($"'{value}' is not a ws or wss relay URL.");
+
+        if (string.IsNullOrEmpty(uri.Host))
+            throw new PeelFailedException($"'{value}' has no host.");
+
+        if (!string.IsNullOrEmpty(uri.UserInfo))
+            throw new PeelFailedException($"'{value}' must not carry userinfo.");
+
+        if (!string.IsNullOrEmpty(uri.Fragment))
+            throw new PeelFailedException($"'{value}' must not carry a fragment.");
+    }
+
+    /// <summary>
+    /// The single value of a tag that must carry exactly one.
+    /// </summary>
+    /// <remarks>
+    /// Extra values are rejected rather than ignored: the spec says a tag with
+    /// values beyond the one it defines makes the event malformed, and silently
+    /// taking the first would let an attacker append a value that some other
+    /// implementation reads instead.
+    /// </remarks>
     private static string SingleTagValue(Rumor rumor, string name)
     {
         var values = SingleTagValues(rumor, name);
-        return values.Count > 0
-            ? values[0]
-            : throw new PeelFailedException($"The Welcome rumor's {name} tag has no value.");
+        return values.Count switch
+        {
+            1 => values[0],
+            0 => throw new PeelFailedException($"The Welcome rumor's {name} tag has no value."),
+            _ => throw new PeelFailedException(
+                $"The Welcome rumor's {name} tag must carry exactly one value."),
+        };
     }
 
     private static IReadOnlyList<string> SingleTagValues(Rumor rumor, string name)

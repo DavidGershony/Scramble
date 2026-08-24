@@ -26,6 +26,21 @@ public static class Nip44
     /// <summary>version(1) + nonce(32) + smallest ciphertext(34) + mac(32).</summary>
     public const int MinPayloadLength = 99;
 
+    /// <summary>Largest plaintext the format can carry (2^32 - 1).</summary>
+    public const uint MaxPlaintextSize = 4294967295;
+
+    /// <summary>
+    /// At or above this length the 6-byte extended prefix is used instead of
+    /// the 2-byte one (NIP-44 amendment, 2026-06-28).
+    /// </summary>
+    public const int ExtendedPrefixThreshold = 65536;
+
+    /// <summary>
+    /// Shortest base64 payload the spec accepts, checked before decoding so a
+    /// short payload cannot force base64 work.
+    /// </summary>
+    public const int MinBase64PayloadLength = 132;
+
     private static readonly byte[] HkdfSalt = "nip44-v2"u8.ToArray();
 
     /// <summary>Per-message keys expanded from the conversation key and nonce.</summary>
@@ -84,9 +99,10 @@ public static class Nip44
         ArgumentNullException.ThrowIfNull(plaintext);
 
         byte[] message = Encoding.UTF8.GetBytes(plaintext);
-        if (message.Length is 0 or > 65535)
+        if (message.Length == 0 || (uint)message.Length > MaxPlaintextSize)
             throw new ArgumentException(
-                "Plaintext must be 1 to 65535 bytes once UTF-8 encoded.", nameof(plaintext));
+                $"Plaintext must be 1 to {MaxPlaintextSize} bytes once UTF-8 encoded.",
+                nameof(plaintext));
 
         var keys = MessageKeys.Derive(conversationKey, nonce);
         byte[] ciphertext = ChaCha20(keys.ChaChaKey, keys.ChaChaNonce, Pad(message));
@@ -103,16 +119,34 @@ public static class Nip44
     /// <summary>
     /// Decrypts a payload.
     /// </summary>
+    /// <param name="maxPayloadLength">
+    /// Optional ceiling on the base64 payload, applied before decoding. Callers
+    /// fed by an untrusted transport should set one; the primitive imposes none,
+    /// because a conformant payload can legitimately be very large.
+    /// </param>
     /// <exception cref="CryptographicException">
     /// The payload is malformed, the version is unsupported, or the MAC does
     /// not verify.
     /// </exception>
-    public static string Decrypt(string payload, ReadOnlySpan<byte> conversationKey)
+    public static string Decrypt(
+        string payload, ReadOnlySpan<byte> conversationKey, int? maxPayloadLength = null)
     {
         ArgumentNullException.ThrowIfNull(payload);
 
         if (payload.Length > 0 && payload[0] == '#')
             throw new CryptographicException("Unsupported NIP-44 encoding.");
+
+        // Checked before base64 decoding, as the spec requires, so a short
+        // payload cannot force a decode.
+        if (payload.Length < MinBase64PayloadLength)
+            throw new CryptographicException("Payload is shorter than the minimum.");
+
+        // No upper bound here on purpose: since the 2026-06-28 amendment a
+        // conformant payload may be very large, and capping it in the primitive
+        // would reject valid messages. Callers reading from an untrusted
+        // transport impose their own ceiling — see Nip59GiftWrap.Unwrap.
+        if (maxPayloadLength is { } ceiling && payload.Length > ceiling)
+            throw new CryptographicException("Payload exceeds the caller's size limit.");
 
         byte[] data;
         try
@@ -169,13 +203,28 @@ public static class Nip44
 
     internal static byte[] Pad(byte[] message)
     {
-        if (message.Length is < 1 or > 65535)
-            throw new ArgumentException("Message length must be 1 to 65535.", nameof(message));
+        if (message.Length < 1 || (uint)message.Length > MaxPlaintextSize)
+            throw new ArgumentException(
+                $"Message length must be 1 to {MaxPlaintextSize}.", nameof(message));
 
-        var padded = new byte[2 + CalculatePaddedLength(message.Length)];
-        padded[0] = (byte)(message.Length >> 8);
-        padded[1] = (byte)(message.Length & 0xFF);
-        message.CopyTo(padded.AsSpan(2));
+        int prefixLength = message.Length >= ExtendedPrefixThreshold ? 6 : 2;
+        var padded = new byte[prefixLength + CalculatePaddedLength(message.Length)];
+
+        if (prefixLength == 2)
+        {
+            padded[0] = (byte)(message.Length >> 8);
+            padded[1] = (byte)(message.Length & 0xFF);
+        }
+        else
+        {
+            // Two zero bytes flag the extended form. A u16 length of zero is
+            // otherwise invalid, since plaintext is at least one byte, so the
+            // marker is unambiguous.
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(
+                padded.AsSpan(2, 4), (uint)message.Length);
+        }
+
+        message.CopyTo(padded.AsSpan(prefixLength));
         return padded;
     }
 
@@ -184,16 +233,35 @@ public static class Nip44
         if (padded.Length < 2)
             throw new CryptographicException("Padded plaintext is too short.");
 
-        int length = (padded[0] << 8) | padded[1];
-        if (length < 1 || length > padded.Length - 2)
+        int prefixLength;
+        long length = (padded[0] << 8) | padded[1];
+        if (length == 0)
+        {
+            if (padded.Length < 6)
+                throw new CryptographicException("Extended-prefix plaintext is too short.");
+
+            prefixLength = 6;
+            length = System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(padded.AsSpan(2, 4));
+
+            // An extended prefix carrying a length the short form could express
+            // is a second encoding of the same value, so it is rejected.
+            if (length < ExtendedPrefixThreshold)
+                throw new CryptographicException("Extended prefix used for a short plaintext.");
+        }
+        else
+        {
+            prefixLength = 2;
+        }
+
+        if (length < 1 || length > padded.Length - prefixLength)
             throw new CryptographicException("Declared plaintext length is out of range.");
 
         // The padded length must be exactly what the ladder prescribes;
         // accepting anything else would let a forger reshape the plaintext.
-        if (padded.Length != 2 + CalculatePaddedLength(length))
+        if (padded.Length != prefixLength + CalculatePaddedLength((int)length))
             throw new CryptographicException("Padding does not match the declared length.");
 
-        return padded.AsSpan(2, length).ToArray();
+        return padded.AsSpan(prefixLength, (int)length).ToArray();
     }
 
     private static byte[] ComputeMac(

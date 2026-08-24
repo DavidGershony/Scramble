@@ -54,7 +54,7 @@ public static class Bip340
             if (pX.CompareTo(p) >= 0)
                 return false;
 
-            var publicPoint = LiftX(pX);
+            var publicPoint = Secp256k1.LiftX(pX);
             if (publicPoint is null || publicPoint.IsInfinity)
                 return false;
 
@@ -199,7 +199,7 @@ public static class Bip340
             if (x.CompareTo(Curve.Curve.Field.Characteristic) >= 0)
                 return false;
 
-            var point = LiftX(x);
+            var point = Secp256k1.LiftX(x);
             return point is not null && !point.IsInfinity;
         }
         catch
@@ -219,27 +219,4 @@ public static class Bip340
         return System.Security.Cryptography.SHA256.HashData(buffer);
     }
 
-    /// <summary>
-    /// Lifts an x-coordinate to the secp256k1 point with even y, or null when x
-    /// is not on the curve.
-    /// </summary>
-    private static ECPoint? LiftX(BigInteger x)
-    {
-        var p = Curve.Curve.Field.Characteristic;
-        if (x.CompareTo(p) >= 0)
-            return null;
-
-        // y^2 = x^3 + 7 (mod p)
-        var y2 = x.ModPow(BigInteger.Three, p).Add(BigInteger.ValueOf(7)).Mod(p);
-
-        // p = 3 (mod 4), so the square root is y2^((p+1)/4).
-        var y = y2.ModPow(p.Add(BigInteger.One).ShiftRight(2), p);
-        if (!y.ModPow(BigInteger.Two, p).Equals(y2))
-            return null;
-
-        if (y.TestBit(0))
-            y = p.Subtract(y);
-
-        return Curve.Curve.CreatePoint(x, y);
-    }
 }

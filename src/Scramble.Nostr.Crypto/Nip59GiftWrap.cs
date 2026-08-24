@@ -37,6 +37,24 @@ public static class Nip59GiftWrap
     public const int WrapKind = 1059;
 
     /// <summary>
+    /// Ceiling on each encrypted layer, applied before base64 decoding.
+    /// </summary>
+    /// <remarks>
+    /// A policy limit, not a spec rule. Gift wraps arrive unsolicited from a
+    /// relay, so without a bound an attacker can make every inbound event cost
+    /// a full decode, HMAC and allocation. One mebibyte is far above any real
+    /// Welcome while keeping the cost of junk bounded.
+    /// </remarks>
+    public const int MaxLayerPayloadLength = 1024 * 1024;
+
+    /// <summary>Default backward jitter applied to seal and wrap timestamps.</summary>
+    /// <remarks>
+    /// NIP-59 recommends randomising up to two days. Applied by default because
+    /// a privacy control that must be opted into is one that is usually off.
+    /// </remarks>
+    public static readonly TimeSpan DefaultTimestampJitter = TimeSpan.FromDays(2);
+
+    /// <summary>
     /// Opens a gift wrap and returns the rumor inside.
     /// </summary>
     /// <param name="wrapJson">The kind-1059 event as JSON.</param>
@@ -48,7 +66,10 @@ public static class Nip59GiftWrap
     /// since only the seal is signed.
     /// </remarks>
     /// <exception cref="GiftWrapException">Malformed, undecryptable, or failing a check.</exception>
-    public static Rumor Unwrap(string wrapJson, ReadOnlySpan<byte> recipientPrivateKey)
+    public static Rumor Unwrap(
+        string wrapJson,
+        ReadOnlySpan<byte> recipientPrivateKey,
+        ReadOnlySpan<byte> recipientPublicKey = default)
     {
         ArgumentNullException.ThrowIfNull(wrapJson);
 
@@ -56,6 +77,7 @@ public static class Nip59GiftWrap
         if (wrap.Kind != WrapKind)
             throw new GiftWrapException($"Expected a kind-{WrapKind} gift wrap, got kind {wrap.Kind}.");
         RequireValidSignature(wrap, "gift wrap");
+        RequireAddressedToUs(wrap, recipientPublicKey);
 
         string sealJson = Decrypt(wrap.Content, recipientPrivateKey, wrap.PublicKeyHex, "gift wrap");
 
@@ -130,7 +152,9 @@ public static class Nip59GiftWrap
             senderPublicKeyHex, sealCreatedAt, SealKind,
             Array.Empty<IReadOnlyList<string>>(), sealContent);
         byte[] sealId = sealTemplate.ComputeId();
-        string sealJson = SerializeSignedEvent(sealTemplate, sealId, sign(senderKey, sealId));
+        byte[] sealSignature = RequireValidSignature(
+            sign(senderKey, sealId), senderPublicKey, sealId, "seal");
+        string sealJson = SerializeSignedEvent(sealTemplate, sealId, sealSignature);
 
         byte[] wrapConversationKey = Nip44.DeriveConversationKey(ephemeralKey, recipientPublicKey);
         string wrapContent = Nip44.Encrypt(sealJson, wrapConversationKey);
@@ -142,13 +166,42 @@ public static class Nip59GiftWrap
             new[] { new[] { "p", Convert.ToHexString(recipientPublicKey).ToLowerInvariant() } },
             wrapContent);
         byte[] wrapId = wrapTemplate.ComputeId();
-        return SerializeSignedEvent(wrapTemplate, wrapId, sign(ephemeralKey, wrapId));
+        byte[] wrapSignature = RequireValidSignature(
+            sign(ephemeralKey, wrapId), ephemeralPublicKey, wrapId, "gift wrap");
+        return SerializeSignedEvent(wrapTemplate, wrapId, wrapSignature);
+    }
+
+    /// <summary>
+    /// Checks a signature the caller's delegate produced before it is embedded.
+    /// </summary>
+    /// <remarks>
+    /// A delegate that returns the wrong length, garbage, or a signature under
+    /// a key that does not match the advertised one otherwise yields a
+    /// well-formed wrap that no recipient can open — discovered far from its
+    /// cause. The account-identity-proof signer already refuses to trust its
+    /// signer's response; this keeps the two consistent, because asymmetric
+    /// trust in one assembly is how the laxer one gets copied.
+    /// </remarks>
+    private static byte[] RequireValidSignature(
+        byte[] signature, ReadOnlySpan<byte> publicKey, byte[] message, string layer)
+    {
+        ArgumentNullException.ThrowIfNull(signature);
+
+        if (signature.Length != 64 || !Bip340.Verify(publicKey, message, signature))
+        {
+            throw new InvalidOperationException(
+                $"The signing delegate returned a signature for the {layer} that does not verify "
+                + "under the supplied public key.");
+        }
+
+        return signature;
     }
 
     private static long Jitter(TimeSpan? window)
     {
         long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        if (window is not { } span || span <= TimeSpan.Zero)
+        var span = window ?? DefaultTimestampJitter;
+        if (span <= TimeSpan.Zero)
             return now;
 
         // Backwards only: a future timestamp is more conspicuous than an old one.
@@ -171,12 +224,38 @@ public static class Nip59GiftWrap
         try
         {
             byte[] conversationKey = Nip44.DeriveConversationKey(recipientPrivateKey, senderPublicKey);
-            return Nip44.Decrypt(content, conversationKey);
+            return Nip44.Decrypt(content, conversationKey, MaxLayerPayloadLength);
         }
         catch (Exception ex) when (ex is CryptographicException or ArgumentException)
         {
             throw new GiftWrapException($"Could not decrypt the {layer}.", ex);
         }
+    }
+
+    /// <summary>
+    /// Checks the wrap's p tag names us, when the caller supplies its own key.
+    /// </summary>
+    /// <remarks>
+    /// Decryption is the real gate — a wrap for someone else will not open —
+    /// but the spec requires rejecting a Welcome not addressed to our account,
+    /// and failing on the tag gives a clear reason instead of a decrypt error.
+    /// </remarks>
+    private static void RequireAddressedToUs(SignedEvent wrap, ReadOnlySpan<byte> recipientPublicKey)
+    {
+        if (recipientPublicKey.IsEmpty)
+            return;
+
+        string expected = Convert.ToHexString(recipientPublicKey).ToLowerInvariant();
+        foreach (var tag in wrap.Tags)
+        {
+            if (tag.Count >= 2 && tag[0] == "p"
+                && string.Equals(tag[1], expected, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+        }
+
+        throw new GiftWrapException("The gift wrap is not addressed to this account.");
     }
 
     private static void RequireValidSignature(SignedEvent value, string layer)
