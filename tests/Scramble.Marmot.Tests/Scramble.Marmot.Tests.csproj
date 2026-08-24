@@ -21,5 +21,6 @@
     <ProjectReference Include="..\..\src\Scramble.Marmot.Engine\Scramble.Marmot.Engine.csproj" />
     <ProjectReference Include="..\..\src\Scramble.Marmot.Identity\Scramble.Marmot.Identity.csproj" />
     <ProjectReference Include="..\..\src\Scramble.Marmot.Wire.Nostr\Scramble.Marmot.Wire.Nostr.csproj" />
+    <ProjectReference Include="..\..\src\Scramble.Marmot.AppComponents\Scramble.Marmot.AppComponents.csproj" />
   </ItemGroup>
 </Project>

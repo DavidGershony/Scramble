@@ -5,6 +5,7 @@
       "src\\Scramble.Core\\Scramble.Core.csproj",
       "src\\Scramble.Desktop\\Scramble.Desktop.csproj",
       "src\\Scramble.Marmot.Abstractions\\Scramble.Marmot.Abstractions.csproj",
+      "src\\Scramble.Marmot.AppComponents\\Scramble.Marmot.AppComponents.csproj",
       "src\\Scramble.Marmot.Engine\\Scramble.Marmot.Engine.csproj",
       "src\\Scramble.Marmot.Identity\\Scramble.Marmot.Identity.csproj",
       "src\\Scramble.Marmot.Storage.Sqlite\\Scramble.Marmot.Storage.Sqlite.csproj",
