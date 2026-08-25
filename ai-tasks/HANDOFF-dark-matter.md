@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
 **Updated:** 2026-08-25 (fourth revision) · **Branch:** `feat/dark-matter`
-· **Last commit at time of writing:** `2deab4c`
+· **Last commit at time of writing:** `9e1ea21`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -35,7 +35,7 @@ product. The first milestone that matters is **P6: engine v1 talking to a real
 
 Six new projects, all standalone (no reference to `marmot-cs`), all in
 `Scramble.sln` and `Scramble.Desktop.slnf`, all running in the fast unit gate.
-**664 tests in `Scramble.Marmot.Tests`, all passing.**
+**678 tests in `Scramble.Marmot.Tests`, all passing.**
 
 | Project | Phase | Contains |
 |---|---|---|
@@ -127,10 +127,11 @@ These belong with KeyPackage generation, which is engine work (P6) and arrives
 with the first `dotnet-mls` reference. **Do not let them fall off** — the
 codec's XML docs name them, but nothing enforces them yet.
 
-Also still open from P3's exit criterion: no `ConformanceVector` fixtures for
-30443, and no `DarkMatterInterop` test that publishes a KeyPackage a live
-`wn-agent` will fetch. The codec is pinned to the spec text and to
-`transport-nostr-adapter/src/key_package.rs`, not to a vector.
+Also still open from P3's exit criterion: no `DarkMatterInterop` test that
+publishes a KeyPackage a live `wn-agent` will fetch, and upstream ships no byte
+fixture for kind 30443 — the codec is pinned to the spec text and to
+`transport-nostr-adapter/src/key_package.rs`. If one is wanted before P6, it
+needs the Amethyst-style generator (plan §3 tier 2b), not a hand-written file.
 
 ### 3c. P4 is mostly done — finish it, then P6
 
@@ -173,8 +174,23 @@ in P4 sits behind a hand-filled view type (`GroupContextView`,
 `StagedCommitView`) precisely so the rules could be written and tested before
 those types exist; extend that pattern rather than waiting.
 
-Also unbuilt from P4's exit criteria: no `ConformanceVector` fixtures. The
-schemas are pinned to mdk source and spec text, not to upstream vectors.
+**Conformance vectors are live** (`9e1ea21`). Upstream's byte fixtures are
+mirrored verbatim in `tests/Scramble.Marmot.Tests/vectors/marmot/` and run
+under `Category=ConformanceVector` in the fast unit gate. They are the only
+tests here not written by the author of the code they check. Three of them
+matter beyond decoding: our encoder must reproduce upstream's bytes exactly
+(reading them proves nothing about being read); the `component_data_hex` entry
+independently pins the dictionary framing, which has no Marmot spec prose of
+its own; and the Current-profile constants are compared against upstream's
+declared contract rather than merely hardcoded.
+
+**If a vector starts failing after a pin bump, that is the signal it exists to
+give.** Refresh the fixture from the new tag deliberately and read the diff —
+never edit one to make it pass.
+
+Only the byte fixtures are mirrored. Upstream's scenario vectors
+(`invite-member`, `convergence-*`, …) drive a whole engine through a step list
+and become runnable at P6.
 
 ### 3d. Non-code items still open (not blocking)
 
