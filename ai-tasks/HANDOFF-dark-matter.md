@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
-**Updated:** 2026-08-24 (third revision) · **Branch:** `feat/dark-matter`
-(ahead of origin by two commits) · **Last commit at time of writing:** `3ed53f9`
+**Updated:** 2026-08-25 (fourth revision) · **Branch:** `feat/dark-matter`
+· **Last commit at time of writing:** `2deab4c`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -21,9 +21,10 @@ before P0–P2 landed.
 Scramble is replacing its Marmot engine with a standalone Dark Matter
 implementation (`Scramble.Marmot.*`), built fresh against Rust `mdk` pinned at
 **`wn-agent-v0.9.10`**. Planning is finished. Phases P0 (storage), P1 (epoch
-state machine) and P2 (account-identity proof) are done, and P3's transport
-codecs are complete — what remains of P3 needs a decoded MLS KeyPackage and so
-arrives with the engine (§3b). Nothing is wired into the running app yet — the new engine is
+state machine) and P2 (account-identity proof) are done, P3's transport codecs
+are complete, and P4 is most of the way through — what remains of both needs
+real MLS types and arrives with the engine (§3b, §3c). Nothing is wired into
+the running app yet — the new engine is
 entirely additive and nothing depends on it, so it cannot break the shipping
 product. The first milestone that matters is **P6: engine v1 talking to a real
 `wn-agent`**.
@@ -34,7 +35,7 @@ product. The first milestone that matters is **P6: engine v1 talking to a real
 
 Six new projects, all standalone (no reference to `marmot-cs`), all in
 `Scramble.sln` and `Scramble.Desktop.slnf`, all running in the fast unit gate.
-**495 tests in `Scramble.Marmot.Tests`, all passing.**
+**664 tests in `Scramble.Marmot.Tests`, all passing.**
 
 | Project | Phase | Contains |
 |---|---|---|
@@ -44,6 +45,7 @@ Six new projects, all standalone (no reference to `marmot-cs`), all in
 | `src/Scramble.Marmot.Identity` | P2 | `AccountIdentityProof` (`0x8009`), async signer seam |
 | `src/Scramble.Nostr.Crypto` | P2/P3 | BIP-340, NIP-01 event ids, NIP-44 v2, NIP-59 gift wrap, ChaCha20-Poly1305 envelope, secp256k1 |
 | `src/Scramble.Marmot.Wire.Nostr` | P3 | kind-445 codec, kind-444 Welcome, kind-30443 KeyPackage, `NostrGroupPeeler` |
+| `src/Scramble.Marmot.AppComponents` | P4 | id registry, QUIC-varint codec, the four v1 schemas, app-data dictionary, Current-profile invariants, commit authorization, the shared relay-URL profile |
 
 Also landed: two approved `dotnet-mls` changes on branch
 `feat/generic-mls-additions` (AppDataUpdate proposal type; PublicMessage
@@ -130,16 +132,49 @@ Also still open from P3's exit criterion: no `ConformanceVector` fixtures for
 `wn-agent` will fetch. The codec is pinned to the spec text and to
 `transport-nostr-adapter/src/key_package.rs`, not to a vector.
 
-### 3c. Then P4 — AppComponents
+### 3c. P4 is mostly done — finish it, then P6
 
-Scope is in plan §3. Build only the v1 set: `0x8001` profile, `0x8003`
-admin-policy, `0x8004` routing, `0x8005` retention, `0x8009` proof carriage.
-Media (`0x8002`/`0x8008`/`0x800b`), QUIC (`0x8006`), avatar (`0x8007`) and
-lifecycle (`0x800c`) are deferred to P12 — do not build them.
+Landed: `6152a59` codec primitives, `c180392` the four v1 schemas, `648c751`
+the app-data dictionary and Current-profile invariants, `37b076f` the routing
+index, `d0a3f38` commit authorization, `2deab4c` the relay-URL dedupe.
 
-P4 also owns the Current-profile group invariants: `RequiredCapabilities` must
-list extension `0x0006` and proposal `0x0008`, and the required-components set
-must contain `0x8003` and `0x8009`.
+Built only the v1 set, as scoped: `0x8001` profile, `0x8003` admin-policy,
+`0x8004` routing, `0x8005` retention, `0x8009` proof carriage. Media
+(`0x8002`/`0x8008`/`0x800b`), QUIC (`0x8006`), avatar (`0x8007`) and lifecycle
+(`0x800c`) stay deferred to P12 — **do not build them**, and note that
+`CurrentProfile.KnownGroupComponents` deliberately excludes them so a group
+requiring one is rejected rather than joined-and-ignored.
+
+**Two encoding facts that will bite whoever touches this next.**
+
+1. **MLS varints are not QUIC varints.** MLS vector lengths (RFC 9420 §2.1.2)
+   use 1, 2 or 4 bytes and treat the 8-byte form as invalid, capping at
+   2^30-1; the QUIC varint the component payloads use internally allows all
+   four widths, and mdk's helper is literally called `encode_quic_varint`. They
+   agree at every realistic size, so a mix-up is invisible until it is not. The
+   dictionary goes through `AppDataDictionary.WriteMlsLength`; component
+   payloads go through `ComponentCodec.WriteVarint`. Keep them apart.
+2. **64 is where a varint widens to two bytes.** Two 32-byte admin keys are
+   exactly 64 payload bytes. A hand-built fixture using a literal `64` for the
+   length prefix decodes as the one-byte value 0 — which still throws, just for
+   the wrong reason. Build test fixtures through the codec.
+
+**The rule the whole subsystem turns on:** producers canonicalise, decoders
+reject. `Create()` sorts and deduplicates because nothing is committed yet;
+`Decode()` refuses the same input. This is signed group state, so a member that
+quietly repairs what it was given holds a canonical form nobody else has. The
+admin list is the worst case — two members would disagree about who governs the
+group while both believed their state valid.
+
+**Still open in P4**, and it needs MLS: `validate_app_component_integrity_for_staged_commit`.
+It compares the current and resulting dictionaries against a staged commit's own
+`AppDataUpdate` operations, so it needs a real `StagedCommit`. Everything else
+in P4 sits behind a hand-filled view type (`GroupContextView`,
+`StagedCommitView`) precisely so the rules could be written and tested before
+those types exist; extend that pattern rather than waiting.
+
+Also unbuilt from P4's exit criteria: no `ConformanceVector` fixtures. The
+schemas are pinned to mdk source and spec text, not to upstream vectors.
 
 ### 3d. Non-code items still open (not blocking)
 
@@ -223,6 +258,9 @@ registry.
 | Submodule left on another branch | `Scramble.Core` fails to compile with a missing symbol | `git submodule update --init --recursive` restores the recorded commit. |
 | `Utf8JsonWriter` for NIP-01 canonical form | Emoji get surrogate-escaped, so the event id differs from everyone else's | Use the hand-written serialiser in `NostrEventTemplate.Serialize`. No encoder option fixes it. |
 | Pinning only to `nip44.vectors.json` | Passes while missing the 2026-06-28 amendment the file predates | Check `44.md` prose and its inline vectors too. |
+| Using a QUIC varint for an MLS vector length | Agrees at every realistic size, then silently diverges past 2^30 | MLS allows 1/2/4 bytes only. `AppDataDictionary.WriteMlsLength` for MLS lengths, `ComponentCodec.WriteVarint` inside component payloads. |
+| A literal `64` as a varint length prefix in a test fixture | Decodes as the one-byte value 0, so the test still throws — for the wrong reason | Build fixtures through the codec, never by hand. |
+| A 500-character hostname in a URL-length test | .NET's own host-length limit trips first, so the test asserts the wrong thing | Pad the path instead; the relay profile permits one. |
 | Literal U+2028/U+2029 in C# source | They are line terminators — the file will not compile | Build such strings at runtime from char codes. |
 | Python `open(...,"w")` then an encode error | Truncates the file to zero bytes | Write to a temp file and move, or use the Edit tool. |
 
