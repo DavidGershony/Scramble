@@ -90,18 +90,32 @@ categories.
 | Category | Gate | Needs |
 |---|---|---|
 | `MarmotEngine` | **Unit** (`Scramble.Desktop.slnf`) | nothing |
-| `ConformanceVector` | Unit, once vectors land | committed JSON vectors |
+| `ConformanceVector` | **Unit** (`Scramble.Desktop.slnf`) | committed JSON fixtures (live since 2026-08-25) |
 | `DarkMatterInterop` | **Integration** | relay + a deployed `wn-agent` |
 
-`MarmotEngine` is deliberately **not** in `integration.yml`'s `--filter`
-union. It needs no relay and no Docker, so it runs in the fast unit gate via
-`Scramble.Desktop.slnf` — where a broken engine invariant is caught in
-seconds instead of minutes. Putting it in the integration filter would slow
-the signal down without making it stronger.
+`MarmotEngine` and `ConformanceVector` are deliberately **not** in
+`integration.yml`'s `--filter` union. Neither needs a relay or Docker, so both
+run in the fast unit gate via `Scramble.Desktop.slnf` — where a broken engine
+invariant is caught in seconds instead of minutes. Putting them in the
+integration filter would slow the signal down without making it stronger.
+
+`ConformanceVector` carries the fixtures copied verbatim from
+`mdk@wn-agent-v0.9.10`'s `crates/cgka-conformance-simulator/vectors/`, in
+`tests/Scramble.Marmot.Tests/vectors/marmot/`. They are the only tests in the
+repo not written by whoever wrote the code they check, which is the entire
+point: everything else can confirm only that an implementation does what its
+author expected. **A fixture that starts failing after a pin bump is the signal
+it exists to give — refresh the fixture from the new tag deliberately, never
+edit one to make it pass.** Only upstream's byte fixtures are mirrored so far;
+the scenario vectors drive a whole engine through a step list and become
+runnable at P6.
 
 What *is* wired into `integration.yml` is the **path trigger**: changes under
-`src/Scramble.Marmot.Abstractions/**`, `src/Scramble.Marmot.Storage.Sqlite/**`
-and `tests/Scramble.Marmot.Tests/**` require the integration suite, per
+`src/Scramble.Marmot.Abstractions/**`, `src/Scramble.Marmot.Storage.Sqlite/**`,
+`src/Scramble.Marmot.AppComponents/**`, `src/Scramble.Marmot.Engine/**`,
+`src/Scramble.Marmot.Identity/**`, `src/Scramble.Marmot.Wire.Nostr/**`,
+`src/Scramble.Nostr.Crypto/**` and `tests/Scramble.Marmot.Tests/**` require the
+integration suite, per
 invariant I2. The engine is protocol code; it must not be able to land
 without the interop suite having run.
 
