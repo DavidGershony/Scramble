@@ -12,6 +12,7 @@ internal static class MarmotSqliteMigrations
         (1, "Core engine tables", V001),
         (2, "Query indexes", V002),
         (3, "KeyPackage bundles", V003),
+        (4, "Routing index", V004),
     };
 
     public static void Apply(SqliteConnection connection, string tablePrefix)
@@ -157,6 +158,29 @@ internal static class MarmotSqliteMigrations
             -- private material to use a coin flip.
             CREATE UNIQUE INDEX {tp}idx_key_packages_event
                 ON {tp}key_packages (event_id) WHERE event_id IS NOT NULL;");
+    }
+
+    private static void V004(SqliteConnection connection, string tp)
+    {
+        // The routing id is the primary key, not the group: several addresses
+        // map to one group over time as rotations happen, and each must stay
+        // resolvable while an epoch that used it is still fetchable.
+        Execute(connection, $@"
+            CREATE TABLE {tp}routing_index (
+                transport_group_id BLOB    NOT NULL PRIMARY KEY,
+                group_id           BLOB    NOT NULL,
+                first_epoch        INTEGER NOT NULL,
+                last_epoch         INTEGER NULL,
+                created_at         TEXT    NOT NULL
+            );
+
+            CREATE INDEX {tp}idx_routing_group ON {tp}routing_index (group_id);
+
+            -- A group publishes to exactly one address at a time. Enforcing it
+            -- here means a missed retirement fails loudly instead of leaving
+            -- the group listening on two addresses and publishing to one.
+            CREATE UNIQUE INDEX {tp}idx_routing_current
+                ON {tp}routing_index (group_id) WHERE last_epoch IS NULL;");
     }
 
     private static void Execute(SqliteConnection connection, string sql)
