@@ -1,3 +1,4 @@
+using Scramble.Marmot.AppComponents;
 using Scramble.Nostr.Crypto;
 
 namespace Scramble.Marmot.Wire.Nostr;
@@ -40,7 +41,13 @@ public static class WelcomeEvent
     public const int MaxRelays = 16;
 
     /// <summary>Upper bound on a single relay URL, in bytes.</summary>
-    public const int MaxRelayUrlLength = 512;
+    /// <remarks>
+    /// The profile itself lives in <see cref="RelayUrl"/>. The Welcome's tag
+    /// and the group's signed routing component describe the same relays, so a
+    /// URL that one accepted and the other rejected would make a group
+    /// reachable through its invite but not through its own state.
+    /// </remarks>
+    public const int MaxRelayUrlLength = RelayUrl.MaxLength;
 
     /// <summary>
     /// Validates a rumor and extracts the Welcome.
@@ -123,10 +130,6 @@ public static class WelcomeEvent
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (string relay in relays)
         {
-            if (System.Text.Encoding.UTF8.GetByteCount(relay) > MaxRelayUrlLength)
-                throw new PeelFailedException(
-                    $"A Welcome relay URL exceeds {MaxRelayUrlLength} bytes.");
-
             RequireRelayUrl(relay);
 
             // Relay URLs are compared as exact byte strings downstream, so a
@@ -143,28 +146,14 @@ public static class WelcomeEvent
     /// Applies the Marmot relay-URL profile.
     /// </summary>
     /// <remarks>
-    /// Beyond requiring ws or wss, the profile forbids userinfo and fragment
-    /// components. Both matter here because this list arrives from whoever
-    /// invited us, before any trust decision: credentials embedded in a URL
-    /// would be handed to whatever connects, and a fragment produces a distinct
-    /// string for what is really the same relay.
+    /// Delegates so the Welcome tag and the signed routing component judge a
+    /// relay URL identically. The profile's own reasoning — why userinfo and
+    /// fragments are forbidden rather than stripped — lives with it.
     /// </remarks>
     private static void RequireRelayUrl(string value)
     {
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
-            throw new PeelFailedException($"'{value}' is not an absolute URL.");
-
-        if (uri.Scheme is not ("ws" or "wss"))
-            throw new PeelFailedException($"'{value}' is not a ws or wss relay URL.");
-
-        if (string.IsNullOrEmpty(uri.Host))
-            throw new PeelFailedException($"'{value}' has no host.");
-
-        if (!string.IsNullOrEmpty(uri.UserInfo))
-            throw new PeelFailedException($"'{value}' must not carry userinfo.");
-
-        if (!string.IsNullOrEmpty(uri.Fragment))
-            throw new PeelFailedException($"'{value}' must not carry a fragment.");
+        if (!RelayUrl.IsValid(value, out string? error))
+            throw new PeelFailedException(error!);
     }
 
     /// <summary>

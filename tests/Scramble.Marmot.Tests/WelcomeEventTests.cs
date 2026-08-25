@@ -258,6 +258,36 @@ public class WelcomeEventTests
         Assert.Throws<PeelFailedException>(() => WelcomeEvent.Read(rumor));
     }
 
+    [Theory]
+    [InlineData(512, false)]
+    [InlineData(513, true)]
+    public void TheRelayUrlLengthLimitSitsAtFiveHundredAndTwelveBytes(int length, bool rejected)
+    {
+        // Both sides of the boundary, so an off-by-one is caught. The bound is
+        // on encoded bytes and is shared with the routing component: the
+        // Welcome tag and the group's own signed relay list describe the same
+        // relays, so a URL one accepted and the other refused would make the
+        // group reachable through its invite but not through its state.
+        // Padded in the path rather than the host: a 500-character hostname
+        // trips .NET's own host-length limit first, which would make this
+        // assert something other than the byte bound it is about. A path is
+        // within the profile — only userinfo and fragments are forbidden.
+        const string prefix = "wss://relay.example/";
+        string url = prefix + new string('a', length - prefix.Length);
+        Assert.Equal(length, System.Text.Encoding.UTF8.GetByteCount(url));
+
+        var rumor = MakeRumor(new IReadOnlyList<string>[]
+        {
+            new[] { "e", KeyPackageEventIdHex },
+            new[] { "relays", url },
+        });
+
+        if (rejected)
+            Assert.Throws<PeelFailedException>(() => WelcomeEvent.Read(rumor));
+        else
+            Assert.Single(WelcomeEvent.Read(rumor).Relays);
+    }
+
     [Fact]
     public void ADuplicateRelayValueIsRejected()
     {

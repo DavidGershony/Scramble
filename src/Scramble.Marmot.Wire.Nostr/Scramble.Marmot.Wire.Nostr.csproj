@@ -8,5 +8,6 @@
   <ItemGroup>
     <ProjectReference Include="..\Scramble.Marmot.Abstractions\Scramble.Marmot.Abstractions.csproj" />
     <ProjectReference Include="..\Scramble.Nostr.Crypto\Scramble.Nostr.Crypto.csproj" />
+    <ProjectReference Include="..\Scramble.Marmot.AppComponents\Scramble.Marmot.AppComponents.csproj" />
   </ItemGroup>
 </Project>
