@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
 **Updated:** 2026-08-25 (fourth revision) · **Branch:** `feat/dark-matter`
-· **Last commit at time of writing:** `9e1ea21`
+· **Last commit at time of writing:** `52f238e`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -47,9 +47,12 @@ Six new projects, all standalone (no reference to `marmot-cs`), all in
 | `src/Scramble.Marmot.Wire.Nostr` | P3 | kind-445 codec, kind-444 Welcome, kind-30443 KeyPackage, `NostrGroupPeeler` |
 | `src/Scramble.Marmot.AppComponents` | P4 | id registry, QUIC-varint codec, the four v1 schemas, app-data dictionary, Current-profile invariants, commit authorization, the shared relay-URL profile |
 
-Also landed: two approved `dotnet-mls` changes on branch
-`feat/generic-mls-additions` (AppDataUpdate proposal type; PublicMessage
-produce/verify), and a `wn-agent` interop peer in `docker-compose.test.yml`.
+Also landed: the two approved `dotnet-mls` changes are **merged and released**
+as **`v0.1.0-beta.8`** (2026-08-25) — AppDataUpdate proposal type, PublicMessage
+produce/verify, plus a security fix where `CacheProposal` previously cached
+unauthenticated proposals that a later Commit could then reference by hash. 384
+of its tests pass, RFC 9420 vectors included. Reference a tag, never the branch.
+Also a `wn-agent` interop peer in `docker-compose.test.yml`.
 
 ---
 
@@ -167,12 +170,38 @@ quietly repairs what it was given holds a canonical form nobody else has. The
 admin list is the worst case — two members would disagree about who governs the
 group while both believed their state valid.
 
-**Still open in P4**, and it needs MLS: `validate_app_component_integrity_for_staged_commit`.
-It compares the current and resulting dictionaries against a staged commit's own
-`AppDataUpdate` operations, so it needs a real `StagedCommit`. Everything else
-in P4 sits behind a hand-filled view type (`GroupContextView`,
-`StagedCommitView`) precisely so the rules could be written and tested before
-those types exist; extend that pattern rather than waiting.
+**Still open in P4:** `validate_app_component_integrity_for_staged_commit`,
+which compares the current and resulting dictionaries against a commit's own
+`AppDataUpdate` operations. Everything else in P4 sits behind a hand-filled view
+type (`GroupContextView`, `StagedCommitView`) precisely so the rules could be
+written and tested before MLS types exist; extend that pattern rather than
+waiting.
+
+**Correction (2026-08-25): this is NOT permission-gated, as an earlier note in
+this session claimed.** The situation was checked in the source rather than
+assumed, and it is more specific than "needs staged-commit introspection":
+
+- **dotnet-mls has no *inbound* staging at all.** `ProcessCommit` applies
+  directly (`MlsGroup.cs` ~line 1193, "Apply the new state"). Staging exists
+  only for *outbound* commits (`Commit` → `MergePendingCommit` /
+  `ClearPendingCommit`), and `PendingCommitState` is `internal` besides.
+- **But rollback works, with zero library changes.** `Export()` and `Import()`
+  are public. So: snapshot, `ProcessCommit`, inspect the resulting dictionary,
+  and re-`Import` the snapshot if the commit is Marmot-invalid. This is the same
+  primitive the convergence deep-dive identified for snapshot/restore, applied
+  to a different problem.
+- **A throw inside `ProcessCommit` is already safe.** It computes into
+  `tentative*` locals and assigns only at the end, so an MLS-invalid commit
+  leaves state untouched. Rollback is needed only for commits that are
+  MLS-valid but Marmot-invalid — a much narrower path than it first looks.
+- **⚠ The round-trip is lossy in exactly two places**, and both are worth
+  confirming against Marmot's needs before relying on it: `Export()` does not
+  serialise `_resumptionPsks` (epoch → resumption PSK) or `_proposalCache`.
+  Losing the cache on rollback is minor and recoverable by re-caching; losing
+  resumption PSKs would break PSK-based rejoin for past epochs. If Marmot v1
+  uses neither, rollback is clean. **If it uses resumption PSKs, that — not
+  staged-commit introspection — is the real dotnet-mls ask, and it is a small
+  serialization addition rather than a new capability.**
 
 **Conformance vectors are live** (`9e1ea21`). Upstream's byte fixtures are
 mirrored verbatim in `tests/Scramble.Marmot.Tests/vectors/marmot/` and run
@@ -197,9 +226,8 @@ and become runnable at P6.
 - **Open a PR for `feat/dark-matter`.** 29 commits and growing; it is
   reviewable now and will not be after P6. This is the repo's documented
   flag-day failure mode (I4).
-- **Merge `feat/generic-mls-additions`** into `dotnet-mls` `main`. It is pushed
-  but unreviewed. Any NuGet tag must come after that merge, never from the
-  branch.
+- ~~**Merge `feat/generic-mls-additions`**~~ **✅ DONE (2026-08-25)** — reviewed,
+  merged fast-forward into `main`, released as `v0.1.0-beta.8`.
 - **Send Whitenoise the questions** in plan §5 (deployed tag, flip date,
   wire-stable tag, disband-for-interop). Q2 on legacy proofs is closed.
 
@@ -242,8 +270,11 @@ without the interop suite running).
 - **Generic Nostr crypto stays out of Marmot namespaces** — it lives in
   `Scramble.Nostr.Crypto` so a future non-Marmot provider can reuse it.
 - **`lib/dotnet-mls` needs explicit permission per change.** Two items are
-  approved and already done. Items (b) SelfRemove, (d) retained past-epochs and
-  (f) staged-commit introspection are **not** approved — ask separately.
+  approved, done, and released as `v0.1.0-beta.8`. Items (b) SelfRemove, (d)
+  retained past-epochs and (f) staged-commit introspection are **not** approved
+  — ask separately. Note that (f) turned out **not** to be needed for P4's
+  component-integrity check; see §3c. Re-check whether an ask is still real
+  before spending the user's permission on it.
 - **Legacy `0xf2f1` account-identity proof is out of scope** (decided
   2026-08-10). Build only Current `0x8009`. Do not re-open it.
 - **Safe-export is resolved and dropped from v1** (plan §4). Do not re-open it.
