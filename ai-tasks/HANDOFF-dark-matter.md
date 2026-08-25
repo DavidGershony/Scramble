@@ -194,14 +194,16 @@ assumed, and it is more specific than "needs staged-commit introspection":
   `tentative*` locals and assigns only at the end, so an MLS-invalid commit
   leaves state untouched. Rollback is needed only for commits that are
   MLS-valid but Marmot-invalid — a much narrower path than it first looks.
-- **⚠ The round-trip is lossy in exactly two places**, and both are worth
-  confirming against Marmot's needs before relying on it: `Export()` does not
-  serialise `_resumptionPsks` (epoch → resumption PSK) or `_proposalCache`.
-  Losing the cache on rollback is minor and recoverable by re-caching; losing
-  resumption PSKs would break PSK-based rejoin for past epochs. If Marmot v1
-  uses neither, rollback is clean. **If it uses resumption PSKs, that — not
-  staged-commit introspection — is the real dotnet-mls ask, and it is a small
-  serialization addition rather than a new capability.**
+- **The round-trip is lossy in exactly two places, and neither matters here.**
+  `Export()` omits `_proposalCache` — recoverable by re-caching, and
+  `ProcessCommit` clears it anyway — and `_resumptionPsks`, which **Marmot v1
+  does not use**. Checked, not assumed: the spec repo contains no occurrence of
+  "resumption"; PSK appears only in `group-lifecycle-v1.md` (`0x800c`, deferred
+  to P12) and the `features/multi-device.md` draft, which is marked "Status:
+  branch draft" and says its bytes MUST NOT be implemented for interop yet —
+  and which uses an **External** PSK (`MLS-Exporter("marmot", join_psk_id,
+  KDF.Nh)`), not a resumption PSK. **So the rollback route is clean and P4's
+  last item needs no library change.**
 
 **Conformance vectors are live** (`9e1ea21`). Upstream's byte fixtures are
 mirrored verbatim in `tests/Scramble.Marmot.Tests/vectors/marmot/` and run
@@ -270,11 +272,22 @@ without the interop suite running).
 - **Generic Nostr crypto stays out of Marmot namespaces** — it lives in
   `Scramble.Nostr.Crypto` so a future non-Marmot provider can reuse it.
 - **`lib/dotnet-mls` needs explicit permission per change.** Two items are
-  approved, done, and released as `v0.1.0-beta.8`. Items (b) SelfRemove, (d)
-  retained past-epochs and (f) staged-commit introspection are **not** approved
-  — ask separately. Note that (f) turned out **not** to be needed for P4's
-  component-integrity check; see §3c. Re-check whether an ask is still real
-  before spending the user's permission on it.
+  approved, done, and released as **`v0.1.0-beta.8`** — reference the tag, never
+  the branch. **The remaining ask list is now one item, not three** (plan §4
+  "Status update — 2026-08-25"):
+  - **(b) SelfRemove — real, ask at P7.** `0x000a` is not expressible; the
+    closed `ProposalType` enum stops at `AppDataUpdate = 8`. No workaround
+    exists for a proposal type that cannot be encoded.
+  - **(d) retained past-epochs — probably avoidable, do not ask yet.** A
+    per-epoch `Export()` yields the `(KeyScheduleEpoch, SecretTree)` pair it
+    asks for. One question is unsettled: ratchet advancement on decrypt from a
+    restored snapshot. Blocks P8, so there is time to settle it.
+  - **(f) staged-commit introspection — not a blocker**, as plan §4 always
+    said. `Export()`/`Import()` rollback covers it.
+  **Re-check whether an ask is still real before spending a permission on it.**
+  Two of the three dissolved on a source read costing minutes, and a permission
+  granted for something unnecessary is worse than not asking — it invites the
+  change to be made.
 - **Legacy `0xf2f1` account-identity proof is out of scope** (decided
   2026-08-10). Build only Current `0x8009`. Do not re-open it.
 - **Safe-export is resolved and dropped from v1** (plan §4). Do not re-open it.

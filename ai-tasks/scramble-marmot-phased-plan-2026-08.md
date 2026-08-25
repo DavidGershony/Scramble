@@ -228,6 +228,51 @@ user as a single permission request during P0, since both block the critical
 path and both need lead time. **Both are now fully verified** — no part of the
 ask rests on an unchecked assumption.
 
+### Status update — 2026-08-25
+
+**Items 1 and 2 are done and released.** Reviewed, merged fast-forward into
+`dotnet-mls` `main`, tagged **`v0.1.0-beta.8`**. 384 of the library's tests
+pass, RFC 9420 vectors included. Reference the tag, never the branch. The
+merge also carried a security fix that was not part of the original ask:
+`CacheProposal` previously cached unauthenticated proposals, which a later
+Commit could then reference by hash.
+
+**Items 3–5 were re-examined before asking for any of them.** The list shrinks
+to one:
+
+| Item | Verdict | Basis |
+|---|---|---|
+| **(b) SelfRemove** | **Real. Ask for it, at P7.** | `ProposalType` runs `Add=1 … GroupContextExtensions=7, AppDataUpdate=8`. SelfRemove is `0x000a` and is simply not expressible — there is no workaround for a proposal type that cannot be encoded. Blocks P7, not P6. |
+| **(d) Retained past-epochs** | **Probably avoidable. Do not ask yet.** | `Export()` serialises the key schedule *and* the SecretTree, so a per-epoch snapshot yields exactly the `(KeyScheduleEpoch, SecretTree)` pair this asks for — and P0 already built epoch-anchored snapshots. ⚠ **Unsettled:** decrypting from a restored snapshot advances SecretTree ratchet state that mdk keeps live in memory. Either persist the advance back or re-derive per message. Resolve that before deciding; it blocks P8, so there is time. |
+| **(f) Staged-commit introspection** | **Not a blocker — as this document already said.** | The `Export()`/`Import()` probe works: snapshot, `ProcessCommit`, inspect the resulting dictionary, re-`Import` if Marmot-invalid. Confirmed in source: dotnet-mls has no *inbound* staging at all (`ProcessCommit` applies directly), and `PendingCommitState` is `internal`. A throw inside `ProcessCommit` is already safe — it assigns only at the end — so rollback is needed only for commits that are MLS-valid but Marmot-invalid. |
+
+**The `Export()` round-trip is lossy in exactly two places**, and both were
+checked rather than assumed: it omits `_resumptionPsks` and `_proposalCache`.
+
+- `_proposalCache` — recoverable by re-caching, and `ProcessCommit` clears it
+  anyway. Not a concern.
+- `_resumptionPsks` — **irrelevant to Marmot v1.** The spec repo contains no
+  occurrence of "resumption" at all. PSK appears in two documents only:
+  `app-components/group-lifecycle-v1.md` (`0x800c`, deferred to P12) and
+  `features/multi-device.md`, which is marked *"Status: branch draft"* and
+  states its byte-level definitions "MUST NOT be implemented for interop yet".
+  Even that draft uses an **External** PSK — `MLS-Exporter("marmot",
+  join_psk_id, KDF.Nh)`, supplied out of band — not a resumption PSK, so the
+  key-schedule resumption secret is not involved either way. In mdk,
+  "resumption" appears only where it *deletes* OpenMLS-owned rows during
+  re-join; nothing produces or consumes one.
+
+**So the standing ask list is one item: (b) SelfRemove, when P7 approaches.**
+Frame it generically exactly as `AppDataUpdate` was — closed enum, decode
+throws on unknown — plus the store/remove/commit-to-stored-proposals mechanics
+and the cleanup hook for the stale-stored-SelfRemove-plus-Remove-for-one-leaf
+case that panics OpenMLS 0.8.1.
+
+**The lesson worth carrying:** two of the three remaining asks dissolved on a
+source read costing minutes. Re-check whether an ask is still real before
+spending a permission request on it — a granted permission for something
+unnecessary is worse than not asking, because it invites the change to be made.
+
 ---
 
 ## 5. Questions for Whitenoise — send early
