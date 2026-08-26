@@ -260,6 +260,51 @@ Only the byte fixtures are mirrored. Upstream's scenario vectors
 (`invite-member`, `convergence-*`, …) drive a whole engine through a step list
 and become runnable at P6.
 
+### 3e. P6 is blocked on two `dotnet-mls` changes — both verified 2026-08-26
+
+**Read this before starting P6.** Both were found by reading `lib/dotnet-mls`
+at `v0.1.0-beta.8`, not inferred, and neither is optional. Both need user
+permission (see §4), and the first is the unfinished half of a grant already
+given.
+
+**(1) `AppDataUpdate` is wire-format only. The group never applies it.** This
+is the interop-fatal one. `47bb6d2` added the proposal struct, its codec and
+its `ProposalType`; `MlsGroup` was not touched. In both `Commit`
+(`MlsGroup.cs` ~342) and `ProcessCommit` (~844) the proposal chain is a series
+of `else if`s over Add/Remove/Update/PSK/GroupContextExtensions/ExternalInit
+with **no arm for `AppDataUpdate` and no final `else`** — it is silently
+dropped. `tentativeExtensions` is a clone of the current extensions that only
+a `GroupContextExtensions` proposal replaces, so the resulting GroupContext
+keeps the old `app_data_dictionary`.
+
+Every conformant peer computes the new one. The confirmation tag is computed
+over the resulting GroupContext (~1183), so **any commit carrying an
+`AppDataUpdate` fails its tag check on our side** — not a lost update, a
+rejected commit.
+
+This is not a corner case. Read off `message_processor/send.rs` at
+`wn-agent-v0.9.15`: mdk couples an admin-policy `AppDataUpdate` into the same
+commit on **invite-with-admin-grant** (:237) and on **removing a member who is
+an admin** (:543). Both are P6 exit criteria. Plan §4 item (e) named
+"commit-time app-data dictionary computation" as part of the ask; the released
+half is the proposal type.
+
+**(2) A Marmot KeyPackage cannot be built from outside the library.**
+`MlsGroup.CreateKeyPackage` (:169) hardcodes `Extensions = Array.Empty<Extension>()`
+on the leaf and takes only `supportedExtensionTypes` — no leaf extensions, no
+proposal capabilities — and `SignLeafNode` (:2024) is `private`. A Marmot
+KeyPackage needs the `0x8009` proof in the leaf's own `app_data_dictionary`
+and capabilities advertising extension `0x0006` and proposal `0x0008`.
+
+The alternative is reimplementing LeafNodeTBS signing on our side, which
+duplicates security-critical serialisation the library already owns and would
+diverge silently the first time either changes. **Do not do that.** The ask is
+generic RFC 9420 — leaf extensions and capabilities are both RFC features, no
+Marmot constants cross the boundary.
+
+Both blocks are on the critical path (§3 of the plan: P0 → P1 → P2 → P4 → P6).
+Everything else P6 needs is in place.
+
 ### 3d. Non-code items still open (not blocking)
 
 - **Open a PR for `feat/dark-matter`.** **43 commits** ahead of `master` and
@@ -312,8 +357,10 @@ without the interop suite running).
   `Scramble.Nostr.Crypto` so a future non-Marmot provider can reuse it.
 - **`lib/dotnet-mls` needs explicit permission per change.** Two items are
   approved, done, and released as **`v0.1.0-beta.8`** — reference the tag, never
-  the branch. **The remaining ask list is now one item, not three** (plan §4
-  "Status update — 2026-08-25"):
+  the branch. **The list grew back to three on 2026-08-26**: the two P6
+  blockers in §3e — commit-time app-data dictionary computation, and KeyPackage
+  construction with leaf extensions — are hard prerequisites and must be asked
+  for before P6 starts. Then, unchanged from the 2026-08-25 review (plan §4):
   - **(b) SelfRemove — real, ask at P7.** `0x000a` is not expressible; the
     closed `ProposalType` enum stops at `AppDataUpdate = 8`. No workaround
     exists for a proposal type that cannot be encoded.
