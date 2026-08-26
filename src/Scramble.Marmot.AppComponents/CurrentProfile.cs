@@ -144,6 +144,18 @@ public static class CurrentProfile
             ?? throw new AppComponentException(
                 $"Invalid Current-profile {what}: no app_components requirement list.");
 
+        // Frozen, not deferred: a Current-profile group may neither require
+        // 0x8008 nor hold its state, so this is checked before anything else
+        // about the required set. Without it the id would fall through as an
+        // unknown optional component and be carried silently.
+        if (required.Contains(AppComponent.EncryptedMediaV1Frozen)
+            || context.Dictionary.Contains(AppComponent.EncryptedMediaV1Frozen))
+        {
+            throw new AppComponentException(
+                $"Invalid Current-profile {what}: the frozen encrypted-media component " +
+                $"0x{AppComponent.EncryptedMediaV1Frozen:x4} is not permitted.");
+        }
+
         foreach (ushort componentId in RequiredComponents)
         {
             if (!required.Contains(componentId))
@@ -232,9 +244,15 @@ public static class CurrentProfile
                 MessageRetention.Decode(data);
                 break;
             case AppComponent.SafeAad:
-                // Presence is the whole signal; the draft gives it no payload
-                // of ours to check.
-                break;
+                // Known, and refused. The draft gives the component no
+                // GroupContext payload, and upstream's validator answers
+                // "safe_aad group-component state is not supported yet" for
+                // exactly these bytes — so accepting them would put us in a
+                // group every current peer rejects. Known-and-refused is not
+                // the same as unknown: an unknown optional component stays
+                // opaque, this one is an error.
+                throw new AppComponentException(
+                    "safe_aad (0x0002) has no GroupContext state in this profile.");
             default:
                 throw new AppComponentException(
                     $"0x{componentId:x4} is not a component this implementation validates.");

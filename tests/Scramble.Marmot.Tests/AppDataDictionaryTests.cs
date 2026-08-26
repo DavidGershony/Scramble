@@ -328,6 +328,49 @@ public class AppDataDictionaryTests
         _ = CurrentProfile.Validate(view);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void TheFrozenEncryptedMediaComponentIsRefusedWhetherRequiredOrMerelyPresent(
+        bool required)
+    {
+        // Frozen upstream, so a group carrying 0x8008 is one every current peer
+        // already refuses. Present-but-not-required is the case that would
+        // otherwise slip through as an unknown optional component.
+        var view = Conformant(adjust: d =>
+        {
+            d.Set(AppComponent.EncryptedMediaV1Frozen, [0x00]);
+            if (required)
+            {
+                d.SetComponentList(new HashSet<ushort>
+                {
+                    AppComponent.GroupAdminPolicy,
+                    AppComponent.AccountIdentityProof,
+                    AppComponent.EncryptedMediaV1Frozen,
+                });
+            }
+        });
+
+        var ex = Assert.Throws<AppComponentException>(() => CurrentProfile.Validate(view));
+        // "frozen", not merely the id: without this rule the required case
+        // would still throw — as an unsupported required component — and the
+        // present-only case would not throw at all.
+        Assert.Contains("frozen", ex.Message);
+        Assert.Contains("0x8008", ex.Message);
+    }
+
+    [Fact]
+    public void SafeAadStateInTheGroupContextIsRefusedRatherThanCarried()
+    {
+        // Known-and-refused, which is not the same as unknown: the draft gives
+        // the component no GroupContext payload, and upstream rejects these
+        // bytes outright.
+        var view = Conformant(adjust: d => d.Set(AppComponent.SafeAad, []));
+
+        var ex = Assert.Throws<AppComponentException>(() => CurrentProfile.Validate(view));
+        Assert.Contains("safe_aad", ex.Message);
+    }
+
     [Fact]
     public void TheErrorNamesWhatWasBeingValidated()
     {

@@ -15,7 +15,9 @@ namespace Scramble.Marmot.AppComponents;
 /// Only the v1 set is defined here. Media, QUIC, avatar and lifecycle
 /// components are deliberately absent: they are deferred past cutover, and an
 /// id constant with no codec behind it is an invitation to advertise support
-/// this implementation does not have.
+/// this implementation does not have. The single exception is
+/// <see cref="EncryptedMediaV1Frozen"/>, which is named in order to be
+/// refused.
 /// </para>
 /// </remarks>
 public static class AppComponent
@@ -57,6 +59,21 @@ public static class AppComponent
 
     /// <summary><c>marmot.group.message-retention.v1</c> — disappearing messages.</summary>
     public const ushort MessageRetention = 0x8005;
+
+    /// <summary>
+    /// The frozen v1 encrypted-media component, which a Current-profile group
+    /// may neither require nor carry state for.
+    /// </summary>
+    /// <remarks>
+    /// The one id defined here without a codec behind it, and deliberately so:
+    /// it exists to be <i>refused</i>, not supported. Upstream freezes it —
+    /// <c>validate_current_profile_group_context</c> rejects a group that
+    /// requires it or holds its state — so a group carrying it is one every
+    /// current peer already refuses, and silently accepting it would leave us
+    /// alone in a group nobody else will join. The v2 media component
+    /// (<c>0x800b</c>) is merely deferred, which is a different thing.
+    /// </remarks>
+    public const ushort EncryptedMediaV1Frozen = 0x8008;
 
     /// <summary>
     /// <c>marmot.member.account-identity-proof.v2</c> — binds a Marmot account
