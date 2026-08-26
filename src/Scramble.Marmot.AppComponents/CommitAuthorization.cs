@@ -29,7 +29,20 @@ public enum CommitProposalKind
 /// The proposer's MLS-authenticated account identity, or null when it could not
 /// be resolved to a current member.
 /// </param>
-public sealed record StagedProposal(CommitProposalKind Kind, byte[]? SenderAccountKey = null);
+/// <param name="Update">
+/// The operation, for an <see cref="CommitProposalKind.AppDataUpdate"/>
+/// proposal, and null for every other kind.
+/// </param>
+/// <remarks>
+/// The operation hangs off the proposal rather than sitting in a second list
+/// beside it, so there is no way to fill one and forget the other — a commit
+/// whose component changes were read but whose proposals were not would look
+/// like a commit that changed state nobody proposed.
+/// </remarks>
+public sealed record StagedProposal(
+    CommitProposalKind Kind,
+    byte[]? SenderAccountKey = null,
+    AppDataUpdate? Update = null);
 
 /// <summary>
 /// What the engine reads off a staged commit in order to authorize it.
