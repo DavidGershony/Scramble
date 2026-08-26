@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
-**Updated:** 2026-08-26 (fifth revision) · **Branch:** `feat/dark-matter`
-(pushed, in sync) · **Last commit at time of writing:** `89d3595`
+**Updated:** 2026-08-26 (sixth revision) · **Branch:** `feat/dark-matter`
+(pushed, in sync) · **Last commit at time of writing:** `4a5a96e`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -21,9 +21,9 @@ before P0–P2 landed.
 Scramble is replacing its Marmot engine with a standalone Dark Matter
 implementation (`Scramble.Marmot.*`), built fresh against Rust `mdk` pinned at
 **`wn-agent-v0.9.10`**. Planning is finished. Phases P0 (storage), P1 (epoch
-state machine) and P2 (account-identity proof) are done, P3's transport codecs
-are complete, and P4 is most of the way through — what remains of both needs
-real MLS types and arrives with the engine (§3b, §3c). Nothing is wired into
+state machine), P2 (account-identity proof) and P4 (app components) are done,
+and P3's transport codecs are complete. What remains of P3 needs real MLS types
+and arrives with the engine (§3b). Nothing is wired into
 the running app yet: the new engine is entirely additive and nothing depends on
 it, so it cannot break the shipping product. The first milestone that matters is **P6: engine v1 talking to a real
 `wn-agent`**.
@@ -34,7 +34,7 @@ it, so it cannot break the shipping product. The first milestone that matters is
 
 Seven new projects, all standalone (no reference to `marmot-cs`), all in
 `Scramble.sln` and `Scramble.Desktop.slnf`, all running in the fast unit gate.
-**678 tests in `Scramble.Marmot.Tests`, all passing.**
+**705 tests in `Scramble.Marmot.Tests`, all passing.**
 
 | Project | Phase | Contains |
 |---|---|---|
@@ -44,7 +44,7 @@ Seven new projects, all standalone (no reference to `marmot-cs`), all in
 | `src/Scramble.Marmot.Identity` | P2 | `AccountIdentityProof` (`0x8009`), async signer seam |
 | `src/Scramble.Nostr.Crypto` | P2/P3 | BIP-340, NIP-01 event ids, NIP-44 v2, NIP-59 gift wrap, ChaCha20-Poly1305 envelope, secp256k1 |
 | `src/Scramble.Marmot.Wire.Nostr` | P3 | kind-445 codec, kind-444 Welcome, kind-30443 KeyPackage, `NostrGroupPeeler` |
-| `src/Scramble.Marmot.AppComponents` | P4 | id registry, QUIC-varint codec, the four v1 schemas, app-data dictionary, Current-profile invariants, commit authorization, the shared relay-URL profile |
+| `src/Scramble.Marmot.AppComponents` | P4 | id registry, QUIC-varint codec, the four v1 schemas, app-data dictionary, Current-profile invariants, commit authorization, staged-commit component integrity, the shared relay-URL profile |
 
 Also landed: the two approved `dotnet-mls` changes are **merged and released**
 as **`v0.1.0-beta.8`** (2026-08-25) — AppDataUpdate proposal type, PublicMessage
@@ -135,11 +135,13 @@ fixture for kind 30443 — the codec is pinned to the spec text and to
 `transport-nostr-adapter/src/key_package.rs`. If one is wanted before P6, it
 needs the Amethyst-style generator (plan §3 tier 2b), not a hand-written file.
 
-### 3c. P4 is mostly done — finish it, then P6
+### 3c. P4 is DONE — next is P6
 
 Landed: `6152a59` codec primitives, `c180392` the four v1 schemas, `648c751`
 the app-data dictionary and Current-profile invariants, `37b076f` the routing
-index, `d0a3f38` commit authorization, `2deab4c` the relay-URL dedupe.
+index, `d0a3f38` commit authorization, `2deab4c` the relay-URL dedupe,
+`240ea0d` the two GroupContext refusals below, and `4a5a96e` the staged-commit
+integrity rule that closed the phase.
 
 Built only the v1 set, as scoped: `0x8001` profile, `0x8003` admin-policy,
 `0x8004` routing, `0x8005` retention, `0x8009` proof carriage. Media
@@ -169,12 +171,46 @@ quietly repairs what it was given holds a canonical form nobody else has. The
 admin list is the worst case — two members would disagree about who governs the
 group while both believed their state valid.
 
-**Still open in P4:** `validate_app_component_integrity_for_staged_commit`,
-which compares the current and resulting dictionaries against a commit's own
-`AppDataUpdate` operations. Everything else in P4 sits behind a hand-filled view
-type (`GroupContextView`, `StagedCommitView`) precisely so the rules could be
-written and tested before MLS types exist; extend that pattern rather than
-waiting.
+**P4's last item landed in `4a5a96e`** —
+`validate_app_component_integrity_for_staged_commit`, as
+`AppComponentIntegrity`. Two rules that must be run **as a pair**, because
+either alone leaves half the door open:
+
+- `ValidateStagedCommit` takes the diff. The dictionary and the requirement
+  list may never disappear, nor may the state of anything the **resulting**
+  epoch requires — resulting, so one authorized commit can still unrequire and
+  remove an optional component atomically. Every other changed entry must be
+  accounted for by one of the commit's own `AppDataUpdate` operations, matched
+  on the **resulting value**, not merely on the component id.
+- `ValidateUpdateBatch` takes the operations: one per component, requirement
+  list resolved across the whole batch before any removal is judged against it,
+  payloads decoded under their schemas. Without it, corrupt bytes inside a
+  perfectly "update-backed" change sail through.
+
+The hole being closed is upstream's, not ours: MLS's own guard checks the
+resulting dictionary against a commit's `AppDataUpdate` proposals and **returns
+early when there are none**, so a `GroupContextExtensions`-only commit can swap
+the admin set or drop the `app_data_dictionary` outright and MLS accepts it.
+
+The operation hangs off `StagedProposal` rather than a second list beside it,
+so an engine caller cannot fill one and forget the other; a proposal staged
+without its operation is refused rather than read as a no-op. Both rules sit
+behind `StagedCommitView`, so **P6's engine has to actually call them** — they
+are pure functions with no caller yet, exactly like the two KeyPackage checks
+in §3b. Do not let them fall off either.
+
+**Two fail-open divergences found while porting and fixed** (`240ea0d`); both
+would have had us join a group every current peer refuses, then sit in it
+alone:
+
+- `safe_aad` (`0x0002`) had been treated as presence-only. Upstream refuses
+  those bytes as GroupContext state. It stays a *known* component — an unknown
+  optional component is still carried opaquely; this one is an error.
+- Encrypted-media v1 (`0x8008`) is **frozen, not deferred**: a Current-profile
+  group may neither require it nor hold its state. Required, it already failed
+  as unsupported; merely present, it fell through as an unknown optional id.
+  It is the one id named without a codec behind it, and only so it can be
+  refused.
 
 **It is NOT permission-gated on `dotnet-mls`, despite looking like it should
 be.** Checked in the source on 2026-08-25 rather than inferred, and the answer
@@ -202,7 +238,9 @@ is more specific than "needs staged-commit introspection":
   branch draft" and says its bytes MUST NOT be implemented for interop yet —
   and which uses an **External** PSK (`MLS-Exporter("marmot", join_psk_id,
   KDF.Nh)`), not a resumption PSK. **So the rollback route is clean and P4's
-  last item needs no library change.**
+  last item needed no library change** — and did not, in the end, need any MLS
+  introspection at all: the rule is a pure function of two dictionaries and a
+  proposal list, which is what the view types were for.
 
 **Conformance vectors are live** (`9e1ea21`). Upstream's byte fixtures are
 mirrored verbatim in `tests/Scramble.Marmot.Tests/vectors/marmot/` and run
@@ -327,6 +365,7 @@ without the interop suite running).
 | `Utf8JsonWriter` for NIP-01 canonical form | Emoji get surrogate-escaped, so the event id differs from everyone else's | Use the hand-written serialiser in `NostrEventTemplate.Serialize`. No encoder option fixes it. |
 | Pinning only to `nip44.vectors.json` | Passes while missing the 2026-06-28 amendment the file predates | Check `44.md` prose and its inline vectors too. |
 | Using a QUIC varint for an MLS vector length | Agrees at every realistic size, then silently diverges past 2^30 | MLS allows 1/2/4 bytes only. `AppDataDictionary.WriteMlsLength` for MLS lengths, `ComponentCodec.WriteVarint` inside component payloads. |
+| Guessing a component id from its name | `0x8002` is the Blossom *image* component; encrypted-media v1 is `0x8008`. Freezing the wrong id would refuse a legal group and admit a frozen one | Read the constant out of `crates/traits/src/app_components/mod.rs`. Every id in `AppComponent` traces to a line there. |
 | A literal `64` as a varint length prefix in a test fixture | Decodes as the one-byte value 0, so the test still throws — for the wrong reason | Build fixtures through the codec, never by hand. |
 | A 500-character hostname in a URL-length test | .NET's own host-length limit trips first, so the test asserts the wrong thing | Pad the path instead; the relay profile permits one. |
 | Literal U+2028/U+2029 in C# source | They are line terminators — the file will not compile | Build such strings at runtime from char codes. |
@@ -343,11 +382,18 @@ format hard-broke between two tags. Before relying on any reading of upstream:
 gh api repos/marmot-protocol/mdk/tags --paginate -q '.[].name' | head
 ```
 
-**Checked 2026-08-24: upstream is at `wn-agent-v0.9.14`, four tags ahead of our
-`v0.9.10` pin.** Nothing was re-pinned — the 30443 work was read at v0.9.10 and
-against current spec text, which agree. Someone should run the drift diff over
-0.9.11–0.9.14 before P4, since the app-component work is exactly where a silent
-id change would land.
+**Checked 2026-08-26: upstream is at `wn-agent-v0.9.15`, five tags ahead of our
+`v0.9.10` pin, and the app-component drift diff over 0.9.11–0.9.15 has now been
+run** — `crates/cgka-engine/src/app_components.rs` at both tags, whole-file.
+Nothing was re-pinned, and nothing needs to be:
+
+- **No component id, rule or encoding changed.** The diff is error *typing* —
+  an orphaned-admin refusal moved from the unclassified `Other` bucket to
+  `UnknownMember`, naming the key at fault — plus a new `admin_policy_is_empty`
+  helper backing an `AdminDepletion` refusal we already have (`AdminPolicy`
+  rejects an empty set on both encode and decode).
+- The P4 work was therefore read at **0.9.15** and matches 0.9.10 line for line
+  in every rule it ports.
 
 If the pin needs to move, do it deliberately: bump `MDK_REF` in
 `tests/wn-agent-docker/Dockerfile`, re-run the drift diff over the modules in
