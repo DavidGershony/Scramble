@@ -260,12 +260,18 @@ Only the byte fixtures are mirrored. Upstream's scenario vectors
 (`invite-member`, `convergence-*`, …) drive a whole engine through a step list
 and become runnable at P6.
 
-### 3e. P6 is blocked on two `dotnet-mls` changes — both verified 2026-08-26
+### 3e. The two `dotnet-mls` blockers are FIXED — the change is unreleased
 
-**Read this before starting P6.** Both were found by reading `lib/dotnet-mls`
-at `v0.1.0-beta.8`, not inferred, and neither is optional. Both need user
-permission (see §4), and the first is the unfinished half of a grant already
-given.
+**Status (2026-08-26):** permission granted for both, both implemented, and
+they sit on the local branch `feat/app-data-dictionary-commits` in
+`lib/dotnet-mls` as commit `abb7f3b`. **400 tests pass** (336 + 64 crypto), 16
+of them new. **Not merged to `main`, not tagged, not pushed** — the release
+decision (a `v0.1.0-beta.9` tag) is the user's, and until it happens the
+Scramble side builds against it only because `UseLocalDotnetMls` is `true`.
+The repo rule is to reference a tag, so this must be released before anything
+depends on it in CI.
+
+What was wrong, kept here because the reasoning is worth more than the fix:
 
 **(1) `AppDataUpdate` is wire-format only. The group never applies it.** This
 is the interop-fatal one. `47bb6d2` added the proposal struct, its codec and
@@ -302,7 +308,40 @@ diverge silently the first time either changes. **Do not do that.** The ask is
 generic RFC 9420 — leaf extensions and capabilities are both RFC features, no
 Marmot constants cross the boundary.
 
-Both blocks are on the critical path (§3 of the plan: P0 → P1 → P2 → P4 → P6).
+**How they were fixed.** The dictionary is now a first-class `AppDataDictionary`
+type in `DotnetMls.Types` — a vector of `{uint16 component_id, opaque data<V>}`,
+ordered by id, one entry per id, both enforced on decode — and both commit paths
+apply the proposals to it. The application rule follows OpenMLS's
+`extensions-draft` behaviour exactly, because that is what `wn-agent` runs: the
+dictionary comes from the **current** GroupContext, is updated, and is written
+into the resulting extension set, so a commit carrying both a
+`GroupContextExtensions` proposal and `AppDataUpdate`s takes its extensions from
+the former and its dictionary from the latter. `CreateKeyPackage` and
+`CreateGroup` both take `leafExtensions` and `supportedProposalTypes` now, and
+union a leaf's carried extension types into its advertised capabilities.
+
+**One honest note on that work.** The sort into component-id order survived
+mutation: operations on distinct ids commute and the sort is stable, so it
+cannot change the result. It is kept for legibility against the reference
+implementations and the XML doc says so rather than letting it take credit.
+
+**What P6's first slice needs, read off `wn-agent-v0.9.15`** (`key_package.rs`,
+`capabilities.rs`) so it does not have to be rediscovered:
+
+- Current-profile leaf capabilities are extensions `{0x0003 required_capabilities,
+  0x0006 app_data_dictionary}` and proposals `{0x0008 app_data_update}`, plus
+  whatever the feature registry adds. `0x8009` is **not** an extension capability
+  in Current — that was the Legacy profile's shape.
+- The leaf's own `app_data_dictionary` carries the `0x8009` proof, and the
+  proof is validated against the KeyPackage's **own** ciphersuite, not a
+  default (mdk#747).
+- KeyPackageRef is `hash_ref` over the KeyPackage struct, while the published
+  bytes are an `MLSMessage` wrapping it (`WireFormat.MlsKeyPackage`). Do not
+  hash the envelope.
+- mdk marks generated KeyPackages **last-resort**. We have no last-resort
+  extension yet; decide deliberately whether P6 needs one rather than
+  discovering it at interop.
+
 Everything else P6 needs is in place.
 
 ### 3d. Non-code items still open (not blocking)
@@ -357,10 +396,9 @@ without the interop suite running).
   `Scramble.Nostr.Crypto` so a future non-Marmot provider can reuse it.
 - **`lib/dotnet-mls` needs explicit permission per change.** Two items are
   approved, done, and released as **`v0.1.0-beta.8`** — reference the tag, never
-  the branch. **The list grew back to three on 2026-08-26**: the two P6
-  blockers in §3e — commit-time app-data dictionary computation, and KeyPackage
-  construction with leaf extensions — are hard prerequisites and must be asked
-  for before P6 starts. Then, unchanged from the 2026-08-25 review (plan §4):
+  the branch. **The two P6 blockers in §3e were granted and implemented on
+  2026-08-26** and await a release. Still open, unchanged from the 2026-08-25
+  review (plan §4):
   - **(b) SelfRemove — real, ask at P7.** `0x000a` is not expressible; the
     closed `ProposalType` enum stops at `AppDataUpdate = 8`. No workaround
     exists for a proposal type that cannot be encoded.
