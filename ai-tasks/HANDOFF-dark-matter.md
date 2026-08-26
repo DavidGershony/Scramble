@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
-**Updated:** 2026-08-25 (fourth revision) · **Branch:** `feat/dark-matter`
-· **Last commit at time of writing:** `52f238e`
+**Updated:** 2026-08-26 (fifth revision) · **Branch:** `feat/dark-matter`
+(pushed, in sync) · **Last commit at time of writing:** `89d3595`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -24,16 +24,15 @@ implementation (`Scramble.Marmot.*`), built fresh against Rust `mdk` pinned at
 state machine) and P2 (account-identity proof) are done, P3's transport codecs
 are complete, and P4 is most of the way through — what remains of both needs
 real MLS types and arrives with the engine (§3b, §3c). Nothing is wired into
-the running app yet — the new engine is
-entirely additive and nothing depends on it, so it cannot break the shipping
-product. The first milestone that matters is **P6: engine v1 talking to a real
+the running app yet: the new engine is entirely additive and nothing depends on
+it, so it cannot break the shipping product. The first milestone that matters is **P6: engine v1 talking to a real
 `wn-agent`**.
 
 ---
 
 ## 2. What exists now
 
-Six new projects, all standalone (no reference to `marmot-cs`), all in
+Seven new projects, all standalone (no reference to `marmot-cs`), all in
 `Scramble.sln` and `Scramble.Desktop.slnf`, all running in the fast unit gate.
 **678 tests in `Scramble.Marmot.Tests`, all passing.**
 
@@ -96,7 +95,7 @@ vectors, and get fresh eyes on cryptography.
 
 ### 3b. P3's transport codecs are DONE — what is left of P3 needs MLS
 
-`c72dd91` added the kind-30443 codec and `3ed53f9` the KeyPackage storage.
+`c72dd91` added the kind-30443 codec and `f2143ee` the KeyPackage storage.
 Both are green in the fast unit gate. What landed:
 
 - Build (unsigned template) and verify-then-parse kind-30443 events, with the
@@ -177,9 +176,9 @@ type (`GroupContextView`, `StagedCommitView`) precisely so the rules could be
 written and tested before MLS types exist; extend that pattern rather than
 waiting.
 
-**Correction (2026-08-25): this is NOT permission-gated, as an earlier note in
-this session claimed.** The situation was checked in the source rather than
-assumed, and it is more specific than "needs staged-commit introspection":
+**It is NOT permission-gated on `dotnet-mls`, despite looking like it should
+be.** Checked in the source on 2026-08-25 rather than inferred, and the answer
+is more specific than "needs staged-commit introspection":
 
 - **dotnet-mls has no *inbound* staging at all.** `ProcessCommit` applies
   directly (`MlsGroup.cs` ~line 1193, "Apply the new state"). Staging exists
@@ -225,9 +224,11 @@ and become runnable at P6.
 
 ### 3d. Non-code items still open (not blocking)
 
-- **Open a PR for `feat/dark-matter`.** 29 commits and growing; it is
-  reviewable now and will not be after P6. This is the repo's documented
-  flag-day failure mode (I4).
+- **Open a PR for `feat/dark-matter`.** **43 commits** ahead of `master` and
+  growing; it is reviewable now and will not be after P6. This is the repo's
+  documented flag-day failure mode (I4). *(The user has said a PR is not wanted
+  — the plan is to keep going and merge at the end. Recorded here because I4
+  names exactly this shape as the risk, not to re-litigate the decision.)*
 - ~~**Merge `feat/generic-mls-additions`**~~ **✅ DONE (2026-08-25)** — reviewed,
   merged fast-forward into `main`, released as `v0.1.0-beta.8`.
 - **Send Whitenoise the questions** in plan §5 (deployed tag, flip date,
@@ -293,11 +294,18 @@ without the interop suite running).
 - **Safe-export is resolved and dropped from v1** (plan §4). Do not re-open it.
 - **Small commits** (I4) and **tests land with their code** (I3).
 
-**Verify, do not assume.** Two habits earned their keep this session and are
-worth keeping: mutation-check a regression test by breaking the fix and
-confirming the test fails; and never trust an exit code alone — `docker compose
-build` was observed exiting 0 having reached neither the daemon nor the
-registry.
+**Verify, do not assume.** Three habits have repeatedly earned their keep here:
+
+- **Mutation-check a regression test** by breaking the fix and confirming the
+  test fails. It has caught weak tests several times — including one that
+  asserted a limit existed without pinning where it was, and one whose fixture
+  could only ever reach the rejection path.
+- **A guard that survives mutation is not automatically the guard doing the
+  work.** `last_epoch IS NOT NULL` in the routing prune looked load-bearing and
+  is not — SQL's three-valued logic already excludes the row. Say so in the
+  comment rather than letting it take credit.
+- **Never trust an exit code alone.** `docker compose build` was observed
+  exiting 0 having reached neither the daemon nor the registry.
 
 ---
 
