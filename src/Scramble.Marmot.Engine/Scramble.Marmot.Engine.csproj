@@ -7,5 +7,17 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Scramble.Marmot.Abstractions\Scramble.Marmot.Abstractions.csproj" />
+    <ProjectReference Include="..\Scramble.Marmot.AppComponents\Scramble.Marmot.AppComponents.csproj" />
+    <ProjectReference Include="..\Scramble.Marmot.Identity\Scramble.Marmot.Identity.csproj" />
+    <ProjectReference Include="..\Scramble.Marmot.Wire.Nostr\Scramble.Marmot.Wire.Nostr.csproj" />
+    <ProjectReference Include="..\Scramble.Nostr.Crypto\Scramble.Nostr.Crypto.csproj" />
+    <!--
+      The first dotnet-mls reference from a Scramble.Marmot.* project. Nothing
+      below the engine needs MLS types: the codecs, storage and app-component
+      rules are all expressible without them, which is why they were built
+      first. KeyPackage construction is where that stops.
+    -->
+    <ProjectReference Include="..\..\lib\dotnet-mls\src\DotnetMls\DotnetMls.csproj" />
+    <ProjectReference Include="..\..\lib\dotnet-mls\src\DotnetMls.Crypto\DotnetMls.Crypto.csproj" />
   </ItemGroup>
 </Project>
