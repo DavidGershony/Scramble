@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
-**Updated:** 2026-08-26 (sixth revision) · **Branch:** `feat/dark-matter`
-(pushed, in sync) · **Last commit at time of writing:** `4a5a96e`
+**Updated:** 2026-08-31 (seventh revision) · **Branch:** `feat/dark-matter`
+· **Last commit at time of writing:** `c36e7da`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -22,11 +22,12 @@ Scramble is replacing its Marmot engine with a standalone Dark Matter
 implementation (`Scramble.Marmot.*`), built fresh against Rust `mdk` pinned at
 **`wn-agent-v0.9.10`**. Planning is finished. Phases P0 (storage), P1 (epoch
 state machine), P2 (account-identity proof) and P4 (app components) are done,
-and P3's transport codecs are complete. What remains of P3 needs real MLS types
-and arrives with the engine (§3b). Nothing is wired into
-the running app yet: the new engine is entirely additive and nothing depends on
-it, so it cannot break the shipping product. The first milestone that matters is **P6: engine v1 talking to a real
-`wn-agent`**.
+P3's transport codecs are complete, and **P6 has started**: KeyPackage
+generation landed on 2026-08-31 (§3f), which is the first `dotnet-mls`
+reference from a `Scramble.Marmot.*` project. Nothing is wired into the running
+app yet: the new engine is entirely additive and nothing depends on it, so it
+cannot break the shipping product. The milestone that matters is still **P6:
+engine v1 talking to a real `wn-agent`**.
 
 ---
 
@@ -34,24 +35,22 @@ it, so it cannot break the shipping product. The first milestone that matters is
 
 Seven new projects, all standalone (no reference to `marmot-cs`), all in
 `Scramble.sln` and `Scramble.Desktop.slnf`, all running in the fast unit gate.
-**705 tests in `Scramble.Marmot.Tests`, all passing.**
+**727 tests in `Scramble.Marmot.Tests`, all passing.**
 
 | Project | Phase | Contains |
 |---|---|---|
 | `src/Scramble.Marmot.Abstractions` | P0/P1/P3 | Ids (`GroupId`, `EpochId`, `MessageId`, `MemberId`), storage contracts and records incl. `IKeyPackageStorage`, `EpochState`, `ITransportPeeler` + `PeeledMessage` |
 | `src/Scramble.Marmot.Storage.Sqlite` | P0/P3 | SQLite provider, migrations, transactions, epoch-anchored snapshots, KeyPackage bundles + private material |
-| `src/Scramble.Marmot.Engine` | P1 | `EpochManager` |
+| `src/Scramble.Marmot.Engine` | P1/P6 | `EpochManager`; `KeyPackages/` — leaf shape, lifetime policy, the builder, the publication validator. **The only project referencing `dotnet-mls`.** |
 | `src/Scramble.Marmot.Identity` | P2 | `AccountIdentityProof` (`0x8009`), async signer seam |
 | `src/Scramble.Nostr.Crypto` | P2/P3 | BIP-340, NIP-01 event ids, NIP-44 v2, NIP-59 gift wrap, ChaCha20-Poly1305 envelope, secp256k1 |
 | `src/Scramble.Marmot.Wire.Nostr` | P3 | kind-445 codec, kind-444 Welcome, kind-30443 KeyPackage, `NostrGroupPeeler` |
 | `src/Scramble.Marmot.AppComponents` | P4 | id registry, QUIC-varint codec, the four v1 schemas, app-data dictionary, Current-profile invariants, commit authorization, staged-commit component integrity, the shared relay-URL profile |
 
-Also landed: the two approved `dotnet-mls` changes are **merged and released**
-as **`v0.1.0-beta.8`** (2026-08-25) — AppDataUpdate proposal type, PublicMessage
-produce/verify, plus a security fix where `CacheProposal` previously cached
-unauthenticated proposals that a later Commit could then reference by hash. 384
-of its tests pass, RFC 9420 vectors included. Reference a tag, never the branch.
-Also a `wn-agent` interop peer in `docker-compose.test.yml`.
+Also landed: `dotnet-mls` is **released and pinned at `v0.1.0-beta.9`**
+(2026-08-31), which carries everything P6 needs — see §3e. **407 of its tests
+pass**, RFC 9420 vectors included. The submodule sits exactly on the tag; keep
+it that way. Also a `wn-agent` interop peer in `docker-compose.test.yml`.
 
 ---
 
@@ -113,27 +112,24 @@ Both are green in the fast unit gate. What landed:
   inserts and never replaces, so a stale record cannot resurrect erased key
   material.
 
-**Two P3 bullets from the previous revision are NOT done, deliberately.** Both
-need a decoded MLS KeyPackage, and no `Scramble.Marmot.*` project references
-`dotnet-mls` yet:
+**The two P3 bullets that needed a decoded MLS KeyPackage are now DONE** — they
+landed with P6's first slice (§3f), which is where the first `dotnet-mls`
+reference arrived:
 
 - Attaching the `0x8009` proof to the LeafNode and advertising it in the leaf's
-  own support list. The *transport* advertisement is done; the *leaf* one is
-  KeyPackage construction.
-- The two checks the codec deliberately surfaces instead of performing:
+  own support list — `MarmotLeaf`.
+- The two checks the codec deliberately surfaced instead of performing:
   KeyPackageRef equality against the decoded KeyPackage, and binding the event
-  author to the credential identity. Both are mandatory. They are on
-  `KeyPackagePublication` waiting for a caller.
+  author to the credential identity — `KeyPackagePublicationValidator`. They
+  have a caller now.
 
-These belong with KeyPackage generation, which is engine work (P6) and arrives
-with the first `dotnet-mls` reference. **Do not let them fall off** — the
-codec's XML docs name them, but nothing enforces them yet.
-
-Also still open from P3's exit criterion: no `DarkMatterInterop` test that
-publishes a KeyPackage a live `wn-agent` will fetch, and upstream ships no byte
+Still open from P3's exit criterion: **no `DarkMatterInterop` test that
+publishes a KeyPackage a live `wn-agent` will fetch.** Upstream ships no byte
 fixture for kind 30443 — the codec is pinned to the spec text and to
-`transport-nostr-adapter/src/key_package.rs`. If one is wanted before P6, it
-needs the Amethyst-style generator (plan §3 tier 2b), not a hand-written file.
+`transport-nostr-adapter/src/key_package.rs` — so the live fetch is the only
+thing that will tell us whether the leaf shape in §3f is right. A hand-written
+fixture would not; it would need the Amethyst-style generator (plan §3
+tier 2b).
 
 ### 3c. P4 is DONE — next is P6
 
@@ -260,99 +256,185 @@ Only the byte fixtures are mirrored. Upstream's scenario vectors
 (`invite-member`, `convergence-*`, …) drive a whole engine through a step list
 and become runnable at P6.
 
-### 3e. The two `dotnet-mls` blockers are FIXED — the change is unreleased
+### 3e. `dotnet-mls` is released at `v0.1.0-beta.9` — nothing is blocked
 
-**Status (2026-08-26):** permission granted for both, both implemented, and
-they sit on the local branch `feat/app-data-dictionary-commits` in
-`lib/dotnet-mls` as commit `abb7f3b`. **400 tests pass** (336 + 64 crypto), 16
-of them new. **Not merged to `main`, not tagged, not pushed** — the release
-decision (a `v0.1.0-beta.9` tag) is the user's, and until it happens the
-Scramble side builds against it only because `UseLocalDotnetMls` is `true`.
-The repo rule is to reference a tag, so this must be released before anything
-depends on it in CI.
+**Status (2026-08-31):** merged to `main`, tagged, pushed, and the Scramble
+submodule is pinned exactly on the tag (`ccb9720`). Three changes, all generic
+RFC 9420 — no Marmot constant crosses the boundary. **407 tests pass** (341 +
+66 crypto).
 
-What was wrong, kept here because the reasoning is worth more than the fix:
+The two that were already implemented and awaiting release:
 
-**(1) `AppDataUpdate` is wire-format only. The group never applies it.** This
-is the interop-fatal one. `47bb6d2` added the proposal struct, its codec and
-its `ProposalType`; `MlsGroup` was not touched. In both `Commit`
-(`MlsGroup.cs` ~342) and `ProcessCommit` (~844) the proposal chain is a series
-of `else if`s over Add/Remove/Update/PSK/GroupContextExtensions/ExternalInit
-with **no arm for `AppDataUpdate` and no final `else`** — it is silently
-dropped. `tentativeExtensions` is a clone of the current extensions that only
-a `GroupContextExtensions` proposal replaces, so the resulting GroupContext
-keeps the old `app_data_dictionary`.
+**(1) `AppDataUpdate` was wire-format only; the group never applied it.** The
+interop-fatal one. `47bb6d2` added the proposal struct, its codec and its
+`ProposalType`; `MlsGroup` was not touched, so in both `Commit` and
+`ProcessCommit` the proposal chain had no arm for it and no final `else`, and
+it was silently dropped. The confirmation tag is computed over the resulting
+GroupContext, so **any commit carrying an `AppDataUpdate` failed its tag check
+on our side** — a rejected commit, not a lost update. Not a corner case: read
+off `message_processor/send.rs` at `wn-agent-v0.9.15`, mdk couples an
+admin-policy `AppDataUpdate` into the same commit on invite-with-admin-grant
+(:237) and on removing a member who is an admin (:543). Both are P6 exit
+criteria.
 
-Every conformant peer computes the new one. The confirmation tag is computed
-over the resulting GroupContext (~1183), so **any commit carrying an
-`AppDataUpdate` fails its tag check on our side** — not a lost update, a
-rejected commit.
+**(2) A Marmot KeyPackage could not be built from outside the library.**
+`CreateKeyPackage` hardcoded empty leaf extensions and took no proposal
+capabilities, and `SignLeafNode` is private. Reimplementing LeafNodeTBS signing
+on our side would have duplicated security-critical serialisation the library
+owns and diverged silently the first time either changed.
 
-This is not a corner case. Read off `message_processor/send.rs` at
-`wn-agent-v0.9.15`: mdk couples an admin-policy `AppDataUpdate` into the same
-commit on **invite-with-admin-grant** (:237) and on **removing a member who is
-an admin** (:543). Both are P6 exit criteria. Plan §4 item (e) named
-"commit-time app-data dictionary computation" as part of the ask; the released
-half is the proposal type.
+**How (1) and (2) were fixed.** The dictionary is now a first-class
+`AppDataDictionary` type in `DotnetMls.Types` — a vector of
+`{uint16 component_id, opaque data<V>}`, ordered by id, one entry per id, both
+enforced on decode — and both commit paths apply the proposals to it. The
+application rule follows OpenMLS's `extensions-draft` behaviour exactly,
+because that is what `wn-agent` runs: the dictionary comes from the **current**
+GroupContext, is updated, and is written into the resulting extension set, so a
+commit carrying both a `GroupContextExtensions` proposal and `AppDataUpdate`s
+takes its extensions from the former and its dictionary from the latter.
+`CreateKeyPackage` and `CreateGroup` both take `leafExtensions` and
+`supportedProposalTypes` now, and union a leaf's carried extension types into
+its advertised capabilities.
 
-**(2) A Marmot KeyPackage cannot be built from outside the library.**
-`MlsGroup.CreateKeyPackage` (:169) hardcodes `Extensions = Array.Empty<Extension>()`
-on the leaf and takes only `supportedExtensionTypes` — no leaf extensions, no
-proposal capabilities — and `SignLeafNode` (:2024) is `private`. A Marmot
-KeyPackage needs the `0x8009` proof in the leaf's own `app_data_dictionary`
-and capabilities advertising extension `0x0006` and proposal `0x0008`.
+**(3) The lifetime blocker, found on 2026-08-31 and not previously recorded.**
+`CreateKeyPackage` hardcoded `Lifetime(0, ulong.MaxValue)` with no override.
+`wn-agent` runs `validate_key_package_lifetime_policy` -> OpenMLS
+`has_acceptable_range()`, which caps `not_after - not_before` at
+`MAX_LEAF_NODE_LIFETIME_RANGE_SECONDS` — **7,261,200s**, read off
+`openmls/src/key_packages/lifetime.rs` at `erskingardner/openmls@59e7d3b2`, the
+exact revision mdk pins. So **every KeyPackage we published would have been
+rejected before anything else about it was looked at**. No workaround existed:
+the window is signed inside LeafNodeTBS and `SignLeafNode` is private.
+`CreateKeyPackage` now takes an optional `Lifetime`, defaulting to the old
+unbounded value so existing callers are unaffected, and refusing an empty or
+inverted window up front. `CreateGroup` needed nothing — its leaf is
+`LeafNodeSource.Commit`, which carries a parent hash rather than a lifetime.
 
-The alternative is reimplementing LeafNodeTBS signing on our side, which
-duplicates security-critical serialisation the library already owns and would
-diverge silently the first time either changes. **Do not do that.** The ask is
-generic RFC 9420 — leaf extensions and capabilities are both RFC features, no
-Marmot constants cross the boundary.
-
-**How they were fixed.** The dictionary is now a first-class `AppDataDictionary`
-type in `DotnetMls.Types` — a vector of `{uint16 component_id, opaque data<V>}`,
-ordered by id, one entry per id, both enforced on decode — and both commit paths
-apply the proposals to it. The application rule follows OpenMLS's
-`extensions-draft` behaviour exactly, because that is what `wn-agent` runs: the
-dictionary comes from the **current** GroupContext, is updated, and is written
-into the resulting extension set, so a commit carrying both a
-`GroupContextExtensions` proposal and `AppDataUpdate`s takes its extensions from
-the former and its dictionary from the latter. `CreateKeyPackage` and
-`CreateGroup` both take `leafExtensions` and `supportedProposalTypes` now, and
-union a leaf's carried extension types into its advertised capabilities.
-
-**One honest note on that work.** The sort into component-id order survived
-mutation: operations on distinct ids commute and the sort is stable, so it
-cannot change the result. It is kept for legibility against the reference
+**One honest note on the earlier work.** The sort into component-id order
+survived mutation: operations on distinct ids commute and the sort is stable,
+so it cannot change the result. It is kept for legibility against the reference
 implementations and the XML doc says so rather than letting it take credit.
 
-**What P6's first slice needs, read off `wn-agent-v0.9.15`** (`key_package.rs`,
-`capabilities.rs`) so it does not have to be rediscovered:
+**The asks still open, unchanged** (plan §4):
 
-- Current-profile leaf capabilities are extensions `{0x0003 required_capabilities,
-  0x0006 app_data_dictionary}` and proposals `{0x0008 app_data_update}`, plus
-  whatever the feature registry adds. `0x8009` is **not** an extension capability
-  in Current — that was the Legacy profile's shape.
-- The leaf's own `app_data_dictionary` carries the `0x8009` proof, and the
-  proof is validated against the KeyPackage's **own** ciphersuite, not a
+- **(b) SelfRemove — real, ask at P7.** `0x000a` is not expressible; the closed
+  `ProposalType` enum stops at `AppDataUpdate = 8`. No workaround exists for a
+  proposal type that cannot be encoded.
+- **(d) retained past-epochs — probably avoidable, do not ask yet.** A
+  per-epoch `Export()` yields the `(KeyScheduleEpoch, SecretTree)` pair it asks
+  for. One question is unsettled: ratchet advancement on decrypt from a restored
+  snapshot. Blocks P8, so there is time to settle it.
+- **(f) staged-commit introspection — not a blocker**, as plan §4 always said.
+  `Export()`/`Import()` rollback covers it. `ProcessCommit` computes into
+  `tentative*` locals and assigns only at the end, so an MLS-invalid commit
+  already leaves state untouched; rollback is needed only for commits that are
+  MLS-valid but Marmot-invalid. The round-trip is lossy in exactly two places
+  and neither matters: `Export()` omits `_proposalCache` (recoverable, and
+  `ProcessCommit` clears it anyway) and `_resumptionPsks`, which **Marmot v1
+  does not use** — checked, not assumed.
+
+**A new ask is coming at the invite path, and it is real.** `dotnet-mls`
+**signs** a KeyPackage and a LeafNode and exposes **no way to verify either** —
+there is no KeyPackageTBS verification anywhere in the library. The
+account-identity proof binds the account key to the leaf *signature* key, and
+we verify that, so identity binding is covered. What is not covered is
+**possession of the leaf private key**: a party who copies a valid leaf and its
+proof and substitutes their own `init_key` would receive the Welcome. See §3f.
+
+**Re-check whether an ask is still real before spending a permission on it.**
+Two of the earlier three dissolved on a source read costing minutes, and a
+permission granted for something unnecessary is worse than not asking — it
+invites the change to be made.
+
+### 3f. P6 has started — KeyPackage generation is DONE
+
+`c36e7da` landed the first P6 slice in `src/Scramble.Marmot.Engine/KeyPackages/`
+(22 tests, mutation-checked). It is also the first `dotnet-mls` reference from a
+`Scramble.Marmot.*` project — everything below the engine was buildable without
+MLS types, which is why it came first.
+
+What landed:
+
+- **`MarmotLeaf`** — the leaf capability set and the leaf `app_data_dictionary`.
+- **`KeyPackageLifetimePolicy`** — the window, and the bound applied to inbound
+  KeyPackages too.
+- **`MarmotKeyPackageBuilder`** — mints a fresh leaf signature key, signs the
+  `0x8009` proof through the async signer seam, builds the KeyPackage, computes
+  the ref, frames the published bytes, and hands back a `KeyPackageRecord`.
+- **`KeyPackagePublicationValidator`** — the two checks §3b said must not fall
+  off. They now have a caller.
+- **`KeyPackagePrivateMaterial`** — init + leaf HPKE + signature private keys,
+  versioned and length-prefixed. All three, because `ProcessWelcome` takes all
+  three.
+
+**Facts worth not rediscovering, all read off `wn-agent-v0.9.15` rather than
+spec prose:**
+
+- Current-profile **leaf capabilities** are extensions `{0x0003, 0x0006}` and
+  proposals `{0x0008}`. **`0x8009` is NOT an advertised extension capability in
+  Current** — that was Legacy's shape, and advertising it is a Legacy tell.
+- The **leaf's `app_data_dictionary` has three entries**, not one: `0x0001`
+  (the advertised component list, with `0x0001` and `0x8009` unioned in),
+  `0x0002` `safe_aad` **with an empty component list**, and `0x8009` (the
+  proof). The middle one surprises people: an empty `safe_aad` entry in a
+  *leaf* is what upstream emits, and it is **not** the same thing as `safe_aad`
+  appearing in a *GroupContext* dictionary, which `240ea0d` made an error.
+- **The leaf signature key is fresh and is not the Nostr account key.** The
+  credential identity is the account key; the proof is what binds the two. They
+  could not be the same key — different signature schemes.
+- The proof is validated against the KeyPackage's **own** ciphersuite, never a
   default (mdk#747).
-- KeyPackageRef is `hash_ref` over the KeyPackage struct, while the published
-  bytes are an `MLSMessage` wrapping it (`WireFormat.MlsKeyPackage`). Do not
-  hash the envelope.
-- mdk marks generated KeyPackages **last-resort**. We have no last-resort
-  extension yet; decide deliberately whether P6 needs one rather than
-  discovering it at interop.
+- **KeyPackageRef is `hash_ref` over the KeyPackage struct**, while the
+  published bytes are an `MLSMessage` wrapping it. Hashing the envelope yields a
+  reference nobody else computes.
 
-Everything else P6 needs is in place.
+**Two deliberate divergences from upstream. Do not "fix" either without reading
+this:**
+
+- **Nothing is marked last-resort.** mdk calls `mark_as_last_resort()` on every
+  KeyPackage it generates, because OpenMLS otherwise deletes the private bundle
+  the first time a Welcome consumes it. We own our storage and delete nothing
+  implicitly, and `dotnet-mls` cannot set KeyPackage-level extensions at all.
+  **The consequence is real:** kind 30443 is a replaceable event, so two people
+  can invite us off one publication and only the first Welcome will open. That
+  is a republish-cadence question for KeyPackage maintenance, not a reason to
+  advertise an extension we do not honour — but decide it deliberately before
+  interop rather than discovering it at interop.
+- **The validator does not verify the KeyPackage or LeafNode signatures**,
+  because `dotnet-mls` offers no way to. See §3e. **This must close before the
+  invite path treats a fetched KeyPackage as trustworthy** — it is the one hole
+  left in the fetch path. It is documented in the validator's own XML docs so
+  whoever writes that path cannot miss it.
+
+**What P6 needs next**, roughly in order:
+
+1. **Publish the KeyPackage.** Slot-id persistence, `MarkPublishedAsync` on the
+   relay's OK, and deleting the orphan when a publish ultimately fails — the
+   record exists from before the publish precisely so material is never lost
+   for a KeyPackage others can already fetch.
+2. **A `DarkMatterInterop` test that a live `wn-agent` fetches.** This is P3's
+   still-open exit criterion and the first thing that will say whether the leaf
+   shape above is right. Upstream ships no byte fixture for kind 30443, so
+   there is no cheaper way to find out.
+3. **Create group / join.** `AppComponentIntegrity.ValidateStagedCommit` and
+   `ValidateUpdateBatch` are still pure functions with no caller (§3c) —
+   **P6's engine has to actually call them, as a pair.**
+4. **KeyPackage-signature verification in `dotnet-mls`**, before the invite path
+   trusts a fetched package.
 
 ### 3d. Non-code items still open (not blocking)
 
-- **Open a PR for `feat/dark-matter`.** **43 commits** ahead of `master` and
+- **Open a PR for `feat/dark-matter`.** **51 commits** ahead of `master` and
   growing; it is reviewable now and will not be after P6. This is the repo's
   documented flag-day failure mode (I4). *(The user has said a PR is not wanted
   — the plan is to keep going and merge at the end. Recorded here because I4
   names exactly this shape as the risk, not to re-litigate the decision.)*
 - ~~**Merge `feat/generic-mls-additions`**~~ **✅ DONE (2026-08-25)** — reviewed,
   merged fast-forward into `main`, released as `v0.1.0-beta.8`.
+- ~~**Release the `dotnet-mls` P6 blockers**~~ **✅ DONE (2026-08-31)** — merged
+  fast-forward into `main`, released as `v0.1.0-beta.9`, submodule pinned on the
+  tag.
+- **Decide the last-resort question** before interop, not at it. See §3f.
 - **Send Whitenoise the questions** in plan §5 (deployed tag, flip date,
   wire-stable tag, disband-for-interop). Q2 on legacy proofs is closed.
 
@@ -394,24 +476,16 @@ without the interop suite running).
   service layer.
 - **Generic Nostr crypto stays out of Marmot namespaces** — it lives in
   `Scramble.Nostr.Crypto` so a future non-Marmot provider can reuse it.
-- **`lib/dotnet-mls` needs explicit permission per change.** Two items are
-  approved, done, and released as **`v0.1.0-beta.8`** — reference the tag, never
-  the branch. **The two P6 blockers in §3e were granted and implemented on
-  2026-08-26** and await a release. Still open, unchanged from the 2026-08-25
-  review (plan §4):
-  - **(b) SelfRemove — real, ask at P7.** `0x000a` is not expressible; the
-    closed `ProposalType` enum stops at `AppDataUpdate = 8`. No workaround
-    exists for a proposal type that cannot be encoded.
-  - **(d) retained past-epochs — probably avoidable, do not ask yet.** A
-    per-epoch `Export()` yields the `(KeyScheduleEpoch, SecretTree)` pair it
-    asks for. One question is unsettled: ratchet advancement on decrypt from a
-    restored snapshot. Blocks P8, so there is time to settle it.
-  - **(f) staged-commit introspection — not a blocker**, as plan §4 always
-    said. `Export()`/`Import()` rollback covers it.
+- **`lib/dotnet-mls` needs explicit permission per change.** Everything P6 needs
+  is granted, done, and released as **`v0.1.0-beta.9`** (§3e) — **reference the
+  tag, never the branch**, and keep the submodule pinned exactly on it. What is
+  still open, and the one ask that is coming, are in §3e.
   **Re-check whether an ask is still real before spending a permission on it.**
-  Two of the three dissolved on a source read costing minutes, and a permission
-  granted for something unnecessary is worse than not asking — it invites the
-  change to be made.
+  Two of the earlier asks dissolved on a source read costing minutes, and a
+  permission granted for something unnecessary is worse than not asking — it
+  invites the change to be made. Equally: **read the peer's validation path, not
+  only the spec.** The lifetime blocker was invisible from the Marmot documents
+  and obvious from twenty lines of OpenMLS.
 - **Legacy `0xf2f1` account-identity proof is out of scope** (decided
   2026-08-10). Build only Current `0x8009`. Do not re-open it.
 - **Safe-export is resolved and dropped from v1** (plan §4). Do not re-open it.
@@ -452,6 +526,11 @@ without the interop suite running).
 | Using a QUIC varint for an MLS vector length | Agrees at every realistic size, then silently diverges past 2^30 | MLS allows 1/2/4 bytes only. `AppDataDictionary.WriteMlsLength` for MLS lengths, `ComponentCodec.WriteVarint` inside component payloads. |
 | Guessing a component id from its name | `0x8002` is the Blossom *image* component; encrypted-media v1 is `0x8008`. Freezing the wrong id would refuse a legal group and admit a frozen one | Read the constant out of `crates/traits/src/app_components/mod.rs`. Every id in `AppComponent` traces to a line there. |
 | A literal `64` as a varint length prefix in a test fixture | Decodes as the one-byte value 0, so the test still throws — for the wrong reason | Build fixtures through the codec, never by hand. |
+| Letting `CreateKeyPackage` pick the lifetime | `dotnet-mls` defaults to `(0, ulong.MaxValue)`; `wn-agent` refuses it before reading anything else | Always pass a window from `KeyPackageLifetimePolicy`. The bound is OpenMLS's `MAX_LEAF_NODE_LIFETIME_RANGE_SECONDS`, not a Marmot rule, and no Marmot document restates it. |
+| Adding headroom to the KeyPackage validity | The default already sits exactly on the acceptable range; anything above it is refused | The window is `margin + validity` and the peer's check is `<=`. There is no room above. |
+| Hashing the published bytes to get a KeyPackageRef | The `MLSMessage` framing adds a version and wire format, so the ref matches nobody | `hash_ref` over the inner `KeyPackage` struct only. |
+| Advertising `0x8009` as a leaf extension capability | It is the Legacy profile's shape; a Current peer reads it as a Legacy leaf | Current leaf capabilities are extensions `{0x0003, 0x0006}`, proposals `{0x0008}`. |
+| Omitting `safe_aad` from a *leaf* dictionary because it is refused in a GroupContext | Two different surfaces with opposite rules; the leaf must carry it, empty | `0x0002` with an empty component list in the leaf; an error as GroupContext state. |
 | A 500-character hostname in a URL-length test | .NET's own host-length limit trips first, so the test asserts the wrong thing | Pad the path instead; the relay profile permits one. |
 | Literal U+2028/U+2029 in C# source | They are line terminators — the file will not compile | Build such strings at runtime from char codes. |
 | Python `open(...,"w")` then an encode error | Truncates the file to zero bytes | Write to a temp file and move, or use the Edit tool. |
@@ -479,6 +558,13 @@ Nothing was re-pinned, and nothing needs to be:
   rejects an empty set on both encode and decode).
 - The P4 work was therefore read at **0.9.15** and matches 0.9.10 line for line
   in every rule it ports.
+
+**Re-checked 2026-08-31: still `wn-agent-v0.9.15`, no new tags.** P6's
+KeyPackage work was read at that tag — `cgka-engine/src/{capabilities,
+key_package,identity,app_components}.rs` and, through mdk's `Cargo.toml`,
+`openmls/src/key_packages/lifetime.rs` at `erskingardner/openmls@59e7d3b2`. The
+OpenMLS revision matters as much as the mdk tag: the lifetime bound lives there
+and nowhere in the Marmot documents, so a peer bump can move it invisibly.
 
 If the pin needs to move, do it deliberately: bump `MDK_REF` in
 `tests/wn-agent-docker/Dockerfile`, re-run the drift diff over the modules in
