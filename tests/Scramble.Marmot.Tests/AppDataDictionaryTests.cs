@@ -276,7 +276,7 @@ public class AppDataDictionaryTests
             {
                 AppComponent.GroupAdminPolicy,
                 AppComponent.AccountIdentityProof,
-                0x800c, // lifecycle, deferred past cutover
+                0x8006, // agent text stream over QUIC, deferred to P12
             });
         });
 

@@ -190,6 +190,42 @@ public class KeyPackageInteropTests
     }
 
     [Fact]
+    public async Task OurLeafAdvertisesEveryComponentAnInviterTreatsAsMandatory()
+    {
+        var fetched = await FetchAgentKeyPackageAsync();
+        Assert.SkipWhen(fetched is null, "The wn-agent interop peer is not running.");
+
+        var (_, theirs) = fetched!.Value;
+
+        // do_create_group computes mandatory_components as
+        // default_group_components() plus the account proof, and refuses ANY
+        // invitee whose leaf omits one of them. It is not a profile rule — the
+        // Current profile requires only 0x8003 and 0x8009 — which is exactly why
+        // it was missed: 0x800c looked deferrable and is not. While it was
+        // absent from our advertised set, no wn-agent could have invited us into
+        // any group at all.
+        ushort[] mandatory =
+        [
+            AppComponent.GroupProfile,          // 0x8001
+            AppComponent.GroupAdminPolicy,      // 0x8003
+            AppComponent.GroupLifecycle,        // 0x800c
+            AccountIdentityProof.ComponentId,   // 0x8009
+        ];
+
+        var ours = await MarmotKeyPackageBuilder.CreateAsync(
+            _cs, new EphemeralSigner(), (ulong)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+
+        Assert.All(mandatory, id => Assert.Contains(id, ours.AppComponents));
+
+        // And the peer really does advertise them, so the set above is read off
+        // the running implementation rather than trusted from a source file.
+        IReadOnlySet<ushort> advertised =
+            MarmotLeaf.ReadDictionary(theirs.LeafNode)!.ComponentList()!;
+
+        Assert.All(mandatory, id => Assert.Contains(id, advertised));
+    }
+
+    [Fact]
     public async Task TheReferenceMarksItsKeyPackageLastResortAndWeDoNot()
     {
         var fetched = await FetchAgentKeyPackageAsync();

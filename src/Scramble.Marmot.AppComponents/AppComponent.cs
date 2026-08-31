@@ -86,11 +86,23 @@ public static class AppComponent
     /// </remarks>
     public const ushort AccountIdentityProof = 0x8009;
 
+    /// <summary>
+    /// <c>marmot.group.lifecycle.v1</c> — whether the group is active or
+    /// disbanded, in one byte.
+    /// </summary>
+    /// <remarks>
+    /// Deferred at P4 and un-deferred once interop showed why: every group the
+    /// reference implementation creates requires it, and it refuses any invitee
+    /// whose leaf does not advertise it. See <see cref="GroupLifecycle"/>.
+    /// </remarks>
+    public const ushort GroupLifecycle = 0x800c;
+
     public const string GroupProfileSchema = "marmot.group.profile.v1";
     public const string GroupAdminPolicySchema = "marmot.group.admin-policy.v1";
     public const string NostrRoutingSchema = "marmot.transport.nostr.routing.v1";
     public const string MessageRetentionSchema = "marmot.group.message-retention.v1";
     public const string AccountIdentityProofSchema = "marmot.member.account-identity-proof.v2";
+    public const string GroupLifecycleSchema = "marmot.group.lifecycle.v1";
 
     /// <summary>Whether an id falls in the private-use range.</summary>
     public static bool IsPrivateUse(ushort id) => id >= PrivateUseStart;
@@ -110,6 +122,7 @@ public static class AppComponent
         NostrRouting => NostrRoutingSchema,
         MessageRetention => MessageRetentionSchema,
         AccountIdentityProof => AccountIdentityProofSchema,
+        GroupLifecycle => GroupLifecycleSchema,
         _ => null,
     };
 }

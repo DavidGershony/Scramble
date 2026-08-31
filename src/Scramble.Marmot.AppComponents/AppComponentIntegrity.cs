@@ -81,7 +81,6 @@ public static class AppComponentIntegrity
     /// join for requiring 0x800c is a separate matter from a commit that strips
     /// it out from under members who do support it.
     /// </remarks>
-    private const ushort GroupLifecycle = 0x800c;
 
     /// <summary>
     /// Checks a staged commit's resulting component state against the current
@@ -255,9 +254,9 @@ public static class AppComponentIntegrity
             case AppComponent.SafeAad:
                 throw new AppComponentException(
                     "safe_aad (0x0002) has no GroupContext state in this profile.");
-            case GroupLifecycle:
+            case AppComponent.GroupLifecycle:
                 throw new AppComponentException(
-                    $"The group-lifecycle component 0x{GroupLifecycle:x4} cannot be removed.");
+                    $"The group-lifecycle component 0x{AppComponent.GroupLifecycle:x4} cannot be removed.");
         }
 
         if (resultingRequired.Contains(componentId))

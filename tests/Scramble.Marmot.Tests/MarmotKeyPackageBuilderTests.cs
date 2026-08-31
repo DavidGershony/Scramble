@@ -107,8 +107,19 @@ public class MarmotKeyPackageBuilderTests
     {
         var bundle = await BuildAsync();
 
-        foreach (ushort deferred in new ushort[] { 0x8002, 0x8006, 0x8007, 0x8008, 0x800b, 0x800c })
+        foreach (ushort deferred in new ushort[] { 0x8002, 0x8006, 0x8007, 0x8008, 0x800b })
             Assert.DoesNotContain(deferred, bundle.AppComponents);
+    }
+
+    [Fact]
+    public async Task TheLeafAdvertisesGroupLifecycleBecauseAnInviterDemandsIt()
+    {
+        var bundle = await BuildAsync();
+
+        // 0x800c is in the reference implementation's default_group_components(),
+        // and do_create_group refuses any invitee whose leaf omits it. While it
+        // was deferred, no wn-agent could have invited us into any group.
+        Assert.Contains(AppComponent.GroupLifecycle, bundle.AppComponents);
     }
 
     // ---- The proof ----
