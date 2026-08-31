@@ -191,31 +191,7 @@ public sealed class NostrGroupPeeler : ITransportPeeler
         byte[] id = template.ComputeId();
         byte[] signature = Bip340.Sign(ephemeralSecret, id);
 
-        using var stream = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(stream))
-        {
-            writer.WriteStartObject();
-            writer.WriteString("id", Convert.ToHexString(id).ToLowerInvariant());
-            writer.WriteString("pubkey", template.PublicKeyHex);
-            writer.WriteNumber("created_at", template.CreatedAt);
-            writer.WriteNumber("kind", template.Kind);
-            writer.WritePropertyName("tags");
-            writer.WriteStartArray();
-            foreach (var tag in tags)
-            {
-                writer.WriteStartArray();
-                foreach (string value in tag)
-                    writer.WriteStringValue(value);
-                writer.WriteEndArray();
-            }
-
-            writer.WriteEndArray();
-            writer.WriteString("content", content);
-            writer.WriteString("sig", Convert.ToHexString(signature).ToLowerInvariant());
-            writer.WriteEndObject();
-        }
-
-        return System.Text.Encoding.UTF8.GetString(stream.ToArray());
+        return NostrEnvelope.Write(template, id, signature);
     }
 
     /// <summary>
