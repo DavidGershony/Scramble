@@ -22,6 +22,15 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Scramble.Core\Scramble.Core.csproj" />
     <ProjectReference Include="..\..\src\Scramble.Presentation\Scramble.Presentation.csproj" />
+    <!--
+      The Dark Matter engine, for the DarkMatterInterop suite. These sit
+      alongside Scramble.Core rather than replacing it: the new engine is
+      additive until cutover, and both are exercised here.
+    -->
+    <ProjectReference Include="..\..\src\Scramble.Marmot.Engine\Scramble.Marmot.Engine.csproj" />
+    <ProjectReference Include="..\..\src\Scramble.Marmot.AppComponents\Scramble.Marmot.AppComponents.csproj" />
+    <ProjectReference Include="..\..\src\Scramble.Marmot.Identity\Scramble.Marmot.Identity.csproj" />
+    <ProjectReference Include="..\..\src\Scramble.Marmot.Wire.Nostr\Scramble.Marmot.Wire.Nostr.csproj" />
   </ItemGroup>
 
   <!-- Copy native DLL to test output so diagnostic tests can exercise the real native lib -->

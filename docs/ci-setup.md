@@ -91,7 +91,7 @@ categories.
 |---|---|---|
 | `MarmotEngine` | **Unit** (`Scramble.Desktop.slnf`) | nothing |
 | `ConformanceVector` | **Unit** (`Scramble.Desktop.slnf`) | committed JSON fixtures (live since 2026-08-25) |
-| `DarkMatterInterop` | **Integration** | relay + a deployed `wn-agent` |
+| `DarkMatterInterop` | **Integration** (live since 2026-08-31) | relay + the `wn-agent` container |
 
 `MarmotEngine` and `ConformanceVector` are deliberately **not** in
 `integration.yml`'s `--filter` union. Neither needs a relay or Docker, so both
@@ -109,6 +109,22 @@ it exists to give — refresh the fixture from the new tag deliberately, never
 edit one to make it pass.** Only upstream's byte fixtures are mirrored so far;
 the scenario vectors drive a whole engine through a step list and become
 runnable at P6.
+
+`DarkMatterInterop` joined `integration.yml`'s filter on 2026-08-31, together
+with a step that builds and starts the `wn-agent` container. It runs our
+KeyPackage stack against a KeyPackage the reference implementation actually
+published — upstream ships no byte fixture for kind 30443, so this is the only
+oracle for that codec.
+
+Two things about it are worth knowing before touching either:
+
+- **The suite skips when the container is absent**, so a build failure would
+  otherwise turn it green-but-empty. The workflow's explicit readiness check is
+  what prevents that, and it must not be removed as redundant.
+- **It is the slowest step in the workflow**, because the peer is built from a
+  pinned mdk ref with a cargo release build. If that becomes the reason PRs are
+  slow, move the suite to a nightly *Ubuntu* workflow rather than dropping it —
+  the existing nightly is Windows and cannot run the container at all.
 
 What *is* wired into `integration.yml` is the **path trigger**: changes under
 `src/Scramble.Marmot.Abstractions/**`, `src/Scramble.Marmot.Storage.Sqlite/**`,

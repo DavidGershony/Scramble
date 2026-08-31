@@ -101,6 +101,30 @@ jobs:
     - name: Start relay + Whitenoise containers
       run: docker compose -f docker-compose.test.yml up -d nostr-relay
 
+    # The Dark Matter interop peer. Built from a pinned mdk ref rather than
+    # pulled, because upstream publishes no image — which makes this the
+    # slowest step in the workflow by a wide margin: a cold cargo release build
+    # of the mdk workspace. Docker layer caching is what keeps it off the
+    # critical path on repeat runs; if this becomes the reason PRs are slow,
+    # move the whole DarkMatterInterop suite to a nightly Ubuntu workflow
+    # rather than dropping it, and say so here.
+    #
+    # The interop tests SKIP when this container is absent, so a failure to
+    # build here turns the suite green-but-empty. The explicit readiness check
+    # below is what stops that from passing silently.
+    - name: Build and start the wn-agent interop peer
+      run: |
+        docker compose -f docker-compose.test.yml up -d --build wn-agent
+        for i in {1..40}; do
+          if docker exec wn-agent-interop test -S /run/marmot-agent/wn-agent.sock 2>/dev/null; then
+            echo "wn-agent ready"; exit 0
+          fi
+          sleep 3
+        done
+        echo "wn-agent never came up" >&2
+        docker compose -f docker-compose.test.yml logs wn-agent
+        exit 1
+
     - name: Wait for relay
       run: |
         for i in {1..30}; do
@@ -157,13 +181,17 @@ jobs:
       run: >
         dotnet test tests/Scramble.Diagnostics/Scramble.Diagnostics.csproj
         --configuration Release -p:DesktopOnly=true
-        --filter "Category=Integration|Category=MIP-Compliance|Category=ProtocolCompliance|Category=EpochSync|Category=DeviceSync|Category=OutboxModel|Category=Notifications|Category=RelayHarness|Category=ExporterSecret"
+        --filter "Category=Integration|Category=MIP-Compliance|Category=ProtocolCompliance|Category=EpochSync|Category=DeviceSync|Category=OutboxModel|Category=Notifications|Category=RelayHarness|Category=ExporterSecret|Category=DarkMatterInterop"
         --logger "trx;LogFileName=diagnostics-integration.trx"
         --results-directory TestResults
 
     - name: Dump relay logs on failure
       if: failure()
       run: docker compose -f docker-compose.test.yml logs nostr-relay
+
+    - name: Dump wn-agent logs on failure
+      if: failure()
+      run: docker compose -f docker-compose.test.yml logs wn-agent
 
     - name: Stop containers
       if: always()

@@ -61,7 +61,7 @@ jobs:
     # require Docker or external services). Whitelist by exclusion — the
     # integration suite is the venue for Integration/MIP-Compliance/etc.
     - name: Execute Diagnostics unit-tier tests
-      run: dotnet test tests/Scramble.Diagnostics/Scramble.Diagnostics.csproj --configuration ${{ matrix.configuration }} --filter "Category!=Integration&Category!=Relay&Category!=MIP-Compliance&Category!=ProtocolCompliance&Category!=FullE2E&Category!=EpochSync&Category!=DeviceSync&Category!=OutboxModel&Category!=Notifications&Category!=RelayHarness&Category!=ExporterSecret&Category!=WhitenoiseInterop&Category!=WebInterop" -p:DesktopOnly=true
+      run: dotnet test tests/Scramble.Diagnostics/Scramble.Diagnostics.csproj --configuration ${{ matrix.configuration }} --filter "Category!=Integration&Category!=Relay&Category!=MIP-Compliance&Category!=ProtocolCompliance&Category!=FullE2E&Category!=EpochSync&Category!=DeviceSync&Category!=OutboxModel&Category!=Notifications&Category!=RelayHarness&Category!=ExporterSecret&Category!=WhitenoiseInterop&Category!=WebInterop&Category!=DarkMatterInterop" -p:DesktopOnly=true
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
