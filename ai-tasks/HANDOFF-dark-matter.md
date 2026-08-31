@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
-**Updated:** 2026-08-31 (ninth revision) · **Branch:** `feat/dark-matter`
-· **Last commit at time of writing:** `918f82d`
+**Updated:** 2026-08-31 (tenth revision) · **Branch:** `feat/dark-matter`
+· **Last commit at time of writing:** `737031c`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -27,7 +27,8 @@ and the first live interop suite all landed on 2026-08-31 (§3f, §3g). Our stac
 now validates a KeyPackage the reference implementation actually published, and
 reproduces its bytes exactly. Nothing is wired into the running app yet: the new
 engine is entirely additive and nothing depends on it, so it cannot break the
-shipping product. What remains of **P6** is create-group, join and invite.
+shipping product. Create-group landed on 2026-08-31 (§3i); what remains of
+**P6** is invite and join, both gated on two small `dotnet-mls` additions.
 
 ---
 
@@ -35,7 +36,7 @@ shipping product. What remains of **P6** is create-group, join and invite.
 
 Seven new projects, all standalone (no reference to `marmot-cs`), all in
 `Scramble.sln` and `Scramble.Desktop.slnf`, all running in the fast unit gate.
-**748 tests in `Scramble.Marmot.Tests`**, plus **7 in the live
+**769 tests in `Scramble.Marmot.Tests`**, plus **7 in the live
 `DarkMatterInterop` suite** (`tests/Scramble.Diagnostics/DarkMatterInterop/`),
 all passing.
 
@@ -43,7 +44,7 @@ all passing.
 |---|---|---|
 | `src/Scramble.Marmot.Abstractions` | P0/P1/P3 | Ids (`GroupId`, `EpochId`, `MessageId`, `MemberId`), storage contracts and records incl. `IKeyPackageStorage`, `EpochState`, `ITransportPeeler` + `PeeledMessage` |
 | `src/Scramble.Marmot.Storage.Sqlite` | P0/P3 | SQLite provider, migrations, transactions, epoch-anchored snapshots, KeyPackage bundles + private material |
-| `src/Scramble.Marmot.Engine` | P1/P6 | `EpochManager`; `KeyPackages/` — leaf shape, lifetime policy, the builder, the publisher, the publication validator. **The only project referencing `dotnet-mls`.** |
+| `src/Scramble.Marmot.Engine` | P1/P6 | `EpochManager`; `KeyPackages/` — leaf shape, lifetime policy, builder, publisher, publication validator; `Groups/` — `required_capabilities` codec, component negotiation, group creation. **The only project referencing `dotnet-mls`.** |
 | `src/Scramble.Marmot.Identity` | P2 | `AccountIdentityProof` (`0x8009`), async signer seam |
 | `src/Scramble.Nostr.Crypto` | P2/P3 | BIP-340, NIP-01 event ids and envelope serialisation, NIP-44 v2, NIP-59 gift wrap, ChaCha20-Poly1305 envelope, secp256k1 |
 | `src/Scramble.Marmot.Wire.Nostr` | P3 | kind-445 codec, kind-444 Welcome, kind-30443 KeyPackage, `NostrGroupPeeler` |
@@ -130,7 +131,7 @@ against a live `wn-agent` — landed in `909a9d9`. See §3g for what the peer
 confirmed and what it corrected. The remaining direction, an agent *validating*
 a KeyPackage we published, needs the invite path and arrives with create-group.
 
-### 3c. P4 is DONE — next is P6
+### 3c. P4 is DONE — the app-component rules
 
 Landed: `6152a59` codec primitives, `c180392` the four v1 schemas, `648c751`
 the app-data dictionary and Current-profile invariants, `37b076f` the routing
@@ -422,23 +423,7 @@ did reach a relay is unrecoverable; accumulating a few dead records is not.
 The slot is derived from the newest existing record, so a republish supersedes
 rather than accumulates.
 
-**What P6 needs next**, roughly in order:
-
-1. **Create group / join.** The big one, and the next real milestone. It is
-   **unblocked now** — `0x800c` was the thing standing in front of it (§3h).
-   `AppComponentIntegrity.ValidateStagedCommit` and `ValidateUpdateBatch` are
-   still pure functions with no caller (§3c) — **P6's engine has to actually
-   call them, as a pair.** The initial GroupContext is
-   `required_capabilities` + an `app_data_dictionary` holding the requirement
-   list, the group profile, the admin policy and the lifecycle state; read
-   `app_data_dictionary_extension_for_group` and `do_create_group` before
-   writing it, exactly as §3h did.
-2. **Invite, which needs two `dotnet-mls` additions** (§3e, §3g): KeyPackage
-   and LeafNode signature verification before a fetched package is trusted, and
-   KeyPackage-level extensions so we can mark last-resort. Neither is large.
-3. **The outbound interop direction** — a live `wn-agent` validating a
-   KeyPackage *we* published, which the invite path unlocks. §3g covers the
-   inbound direction only.
+**What P6 needs next is in §3i**, which supersedes the list that stood here.
 
 ### 3g. Interop is LIVE — what the reference peer confirmed and corrected
 
@@ -565,9 +550,75 @@ failure. They were re-pointed at components that are still genuinely deferred
 rather than weakened. If a future scope change makes one of them fail again,
 re-point it the same way; do not delete the assertion.
 
+### 3i. Create-group is DONE (creator-only) — invite is what remains
+
+`737031c` creates a Current-profile group containing its creator, in
+`src/Scramble.Marmot.Engine/Groups/`. **21 tests, mutation-checked.**
+
+**Epoch 0 is the only chance to get the GroupContext right.** Nothing in it can
+be repaired without an authorised commit, and an empty admin set cannot be
+repaired at all — the commit that would fix it is the one nobody is authorised
+to make. Three things go in and all three must be right:
+
+- **`required_capabilities`** — extension `0x0006`, proposal `0x0008`, and
+  nothing else. **No component ids appear here.** That is the part that trips
+  people: `required_capabilities` is MLS's vocabulary; the required components
+  live in the dictionary's own requirement list.
+- **The `app_data_dictionary` requirement list** — the negotiated set.
+- **State for every component that list names**, except the account-identity
+  proof: it is LeafNode-only, and its presence in a GroupContext dictionary is
+  an error rather than harmless duplication.
+
+**`RequiredCapabilities` (RFC 9420 §11.1) is implemented on our side.**
+`dotnet-mls` references the extension *type* when validating a GroupContext but
+never parses its body, so there was nothing to extend. It is generic MLS and a
+fair candidate to upstream later; it needs no library change and therefore cost
+no permission. It follows producers-canonicalise like the app components, but
+for a different reason worth keeping straight: **RFC 9420 states no ordering
+requirement**, so rejecting an unsorted list would invent a rule and refuse a
+conformant peer — while repairing one would be worse, since a member that
+rewrites signed group state holds a canonical form nobody else has.
+
+**Negotiation is built and tested although only the creator is a member.** The
+mandatory-component guard is what catches a client whose support set is too
+narrow to create a usable group, and finding that at creation beats finding it
+when nobody can join. `MandatoryComponents` cannot be negotiated away by an
+under-advertising member — such a member is refused instead (mdk#746), because
+a group without admin-policy bytes has an empty admin set and frozen
+membership, permanently.
+
+**A mutation-testing correction worth reading, because it is the second time
+this exact trap has appeared here.** The per-member guard in `Negotiate`
+originally *survived* its mutation: the post-condition below it refused the
+same inputs, so the guard was doing no work any test could see. It now names
+the member at fault — which is the thing a caller can act on, drop that invitee
+and retry — and a message naming only the component cannot. Both halves are now
+independently load-bearing, each verified by mutating the other away. **The
+general rule, already in §4: a guard that survives mutation is not automatically
+the guard doing the work.**
+
+**What is NOT here, deliberately: invitees.** Adding one means trusting a
+fetched KeyPackage, and `dotnet-mls` exposes no way to verify a KeyPackage or
+LeafNode signature (§3e, §3g). The negotiation and admin-coupling rules take
+member component sets and are ready for the caller that will supply real
+invitees.
+
+**What P6 needs next**, in order:
+
+1. **KeyPackage + LeafNode signature verification in `dotnet-mls`.** The
+   blocker for invite, and the one thing standing between create-group and a
+   two-party group. Generic RFC 9420; the library already signs both.
+2. **KeyPackage-level extensions in `dotnet-mls`**, so we can mark last-resort
+   (§3g). Smaller, and independent of (1).
+3. **Invite / add-members**, once (1) lands — and with it the outbound interop
+   direction, a live `wn-agent` joining a group we created.
+4. **Join from a Welcome.** `AppComponentIntegrity.ValidateStagedCommit` and
+   `ValidateUpdateBatch` still have no caller (§3c) — **they must be called as a
+   pair.**
+
 ### 3d. Non-code items still open (not blocking)
 
-- **Open a PR for `feat/dark-matter`.** **54 commits** ahead of `master` and
+- **Open a PR for `feat/dark-matter`.** **59 commits** ahead of `master` (58 before this doc commit) and
   growing; it is reviewable now and will not be after P6. This is the repo's
   documented flag-day failure mode (I4). *(The user has said a PR is not wanted
   — the plan is to keep going and merge at the end. Recorded here because I4
@@ -676,6 +727,7 @@ without the interop suite running).
 | Pinning only to `nip44.vectors.json` | Passes while missing the 2026-06-28 amendment the file predates | Check `44.md` prose and its inline vectors too. |
 | Using a QUIC varint for an MLS vector length | Agrees at every realistic size, then silently diverges past 2^30 | MLS allows 1/2/4 bytes only. `AppDataDictionary.WriteMlsLength` for MLS lengths, `ComponentCodec.WriteVarint` inside component payloads. |
 | Guessing a component id from its name | `0x8002` is the Blossom *image* component; encrypted-media v1 is `0x8008`. Freezing the wrong id would refuse a legal group and admit a frozen one | Read the constant out of `crates/traits/src/app_components/mod.rs`. Every id in `AppComponent` traces to a line there. |
+| Putting component ids in `required_capabilities` | It is MLS's vocabulary — extension and proposal types only. Components live in the dictionary's own requirement list | Two different registries, two different places. |
 | Deferring a component because its protocol looks heavy | `0x800c`'s state is one byte, but it is in `default_group_components()` — so deferring it blocked create, join and invite in both directions | Check `default_group_components()` before calling anything optional. "Deferred" is only safe for what nothing else makes mandatory. |
 | Assuming last-resort is an MLS extension | It is component `0x0004` with EMPTY data in the KEYPACKAGE-level `app_data_dictionary`; `0x000a` is the obsolete form, and non-empty data is malformed | Read `KeyPackage::last_resort` in the OpenMLS revision mdk pins, not the extension registry. |
 | Treating a skipped interop suite as a passing one | The tests skip when the container is absent, so a failed image build reads as green | `integration.yml` has an explicit readiness check after the build. Do not remove it as redundant. |
