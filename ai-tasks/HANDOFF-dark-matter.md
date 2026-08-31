@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
-**Updated:** 2026-08-31 (eighth revision) · **Branch:** `feat/dark-matter`
-· **Last commit at time of writing:** `909a9d9`
+**Updated:** 2026-08-31 (ninth revision) · **Branch:** `feat/dark-matter`
+· **Last commit at time of writing:** `918f82d`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -35,7 +35,7 @@ shipping product. What remains of **P6** is create-group, join and invite.
 
 Seven new projects, all standalone (no reference to `marmot-cs`), all in
 `Scramble.sln` and `Scramble.Desktop.slnf`, all running in the fast unit gate.
-**737 tests in `Scramble.Marmot.Tests`**, plus **6 in the live
+**748 tests in `Scramble.Marmot.Tests`**, plus **7 in the live
 `DarkMatterInterop` suite** (`tests/Scramble.Diagnostics/DarkMatterInterop/`),
 all passing.
 
@@ -138,12 +138,20 @@ index, `d0a3f38` commit authorization, `2deab4c` the relay-URL dedupe,
 `240ea0d` the two GroupContext refusals below, and `4a5a96e` the staged-commit
 integrity rule that closed the phase.
 
-Built only the v1 set, as scoped: `0x8001` profile, `0x8003` admin-policy,
-`0x8004` routing, `0x8005` retention, `0x8009` proof carriage. Media
-(`0x8002`/`0x8008`/`0x800b`), QUIC (`0x8006`), avatar (`0x8007`) and lifecycle
-(`0x800c`) stay deferred to P12 — **do not build them**, and note that
+Built the v1 set: `0x8001` profile, `0x8003` admin-policy, `0x8004` routing,
+`0x8005` retention, `0x8009` proof carriage — and, since `918f82d`, `0x800c`
+group-lifecycle. Media (`0x8002`/`0x8008`/`0x800b`), QUIC (`0x8006`) and avatar
+(`0x8007`) stay deferred to P12 — **do not build them**, and note that
 `CurrentProfile.KnownGroupComponents` deliberately excludes them so a group
 requiring one is rejected rather than joined-and-ignored.
+
+> **`0x800c` was deferred here and that was wrong — see §3h.** It is in
+> upstream's `default_group_components()`, so every group a `wn-agent` creates
+> requires it and every invitee must advertise it. Deferring it blocked create,
+> join and invite in both directions. The lesson generalises: **"deferred" is
+> only safe for a component nothing else makes mandatory, and
+> `default_group_components()` is where to check.** The three still-deferred ids
+> above were re-checked against it and are genuinely optional.
 
 **Two encoding facts that will bite whoever touches this next.**
 
@@ -228,8 +236,8 @@ is more specific than "needs staged-commit introspection":
   `Export()` omits `_proposalCache` — recoverable by re-caching, and
   `ProcessCommit` clears it anyway — and `_resumptionPsks`, which **Marmot v1
   does not use**. Checked, not assumed: the spec repo contains no occurrence of
-  "resumption"; PSK appears only in `group-lifecycle-v1.md` (`0x800c`, deferred
-  to P12) and the `features/multi-device.md` draft, which is marked "Status:
+  "resumption"; PSK appears only in `group-lifecycle-v1.md` (`0x800c` — its
+  one-byte *state* is now implemented, §3h; the disband protocol is still P12) and the `features/multi-device.md` draft, which is marked "Status:
   branch draft" and says its bytes MUST NOT be implemented for interop yet —
   and which uses an **External** PSK (`MLS-Exporter("marmot", join_psk_id,
   KDF.Nh)`), not a resumption PSK. **So the rollback route is clean and P4's
@@ -416,10 +424,15 @@ rather than accumulates.
 
 **What P6 needs next**, roughly in order:
 
-1. **Create group / join.** The big one, and the next real milestone.
+1. **Create group / join.** The big one, and the next real milestone. It is
+   **unblocked now** — `0x800c` was the thing standing in front of it (§3h).
    `AppComponentIntegrity.ValidateStagedCommit` and `ValidateUpdateBatch` are
    still pure functions with no caller (§3c) — **P6's engine has to actually
-   call them, as a pair.**
+   call them, as a pair.** The initial GroupContext is
+   `required_capabilities` + an `app_data_dictionary` holding the requirement
+   list, the group profile, the admin policy and the lifecycle state; read
+   `app_data_dictionary_extension_for_group` and `do_create_group` before
+   writing it, exactly as §3h did.
 2. **Invite, which needs two `dotnet-mls` additions** (§3e, §3g): KeyPackage
    and LeafNode signature verification before a fetched package is trusted, and
    KeyPackage-level extensions so we can mark last-resort. Neither is large.
@@ -494,6 +507,63 @@ standing between a broken peer and a silently passing suite.
 is now the slowest step in `integration.yml` (a cold cargo release build). If
 that makes PRs slow, move the suite to a nightly **Ubuntu** workflow rather than
 dropping it — the existing nightly is Windows and cannot run the container.
+
+### 3h. `0x800c` was deferred and should not have been — read this before create-group
+
+`918f82d` implements the group-lifecycle component. It was scoped out at P4 as
+a P12 item, and reading `do_create_group` before writing create-group is what
+caught the mistake.
+
+**Why the deferral was wrong.** `0x800c` is in upstream's
+`default_group_components()`, beside the group profile and the admin policy. So:
+
+- **Every group a `wn-agent` creates requires it.** While it was absent from
+  `CurrentProfile.KnownGroupComponents`, our validator refused every such group
+  as requiring something unsupported — which is to say, all of them.
+- **Every invitee must advertise it.** `do_create_group` computes
+  `mandatory_components` as `default_group_components()` plus the account proof
+  and refuses any invitee whose leaf omits one. No `wn-agent` could have invited
+  us into any group.
+
+Both interop directions, blocked, by a component we had written off.
+
+**Why it looked deferrable, so the same reasoning is not repeated.** The disband
+*protocol* is genuinely heavy, and `group-lifecycle-v1.md` is the one v1
+document that mentions PSKs — which is what put it in the same mental bucket as
+media and QUIC. The *state* is one byte: `0` active, `1` disbanded. The protocol
+is still P12; the state is not.
+
+**The encoding is stricter than the obvious reading, in three ways.** Upstream's
+own test pins all of them, and each is a case a lenient decoder waves through:
+
+- **An empty payload is an error, not the default.** Tempting, since `Active` is
+  `0`. A group we alone consider active is the worst outcome available.
+- **An unknown value is an error, not something to carry.** Unlike an unknown
+  *component*, which stays opaque, this one decides whether the group is usable
+  at all — guessing is worse than refusing.
+- **A trailing byte is an error, not padding.**
+
+**It is deliberately NOT in `RequiredComponents`.** Upstream's
+`CURRENT_PROFILE_REQUIRED_APP_COMPONENTS` is `{0x8003, 0x8009}` and nothing
+else. `0x800c` becomes required through group *creation*, not through the
+profile, so a group that does not require it is still valid and must not be
+refused for lacking it. Conflating the two would reject legitimate groups.
+
+**The generalisable lesson, which is the reason this section exists:**
+**"deferred" is only safe for a component nothing else makes mandatory, and
+`default_group_components()` is where to check.** The three ids still deferred
+(`0x8002`/`0x8008`/`0x800b` media, `0x8006` QUIC, `0x8007` avatar) were
+re-checked against it and are genuinely optional.
+
+**The interop suite now closes the loop**: it asserts our advertised set covers
+every component the running peer treats as mandatory at create time, read off
+the peer's own published leaf rather than trusted from a source file.
+Re-deferring `0x800c` makes it fail — verified.
+
+**Three existing tests pinned the old deferral and failed**, which is the right
+failure. They were re-pointed at components that are still genuinely deferred
+rather than weakened. If a future scope change makes one of them fail again,
+re-point it the same way; do not delete the assertion.
 
 ### 3d. Non-code items still open (not blocking)
 
@@ -606,6 +676,7 @@ without the interop suite running).
 | Pinning only to `nip44.vectors.json` | Passes while missing the 2026-06-28 amendment the file predates | Check `44.md` prose and its inline vectors too. |
 | Using a QUIC varint for an MLS vector length | Agrees at every realistic size, then silently diverges past 2^30 | MLS allows 1/2/4 bytes only. `AppDataDictionary.WriteMlsLength` for MLS lengths, `ComponentCodec.WriteVarint` inside component payloads. |
 | Guessing a component id from its name | `0x8002` is the Blossom *image* component; encrypted-media v1 is `0x8008`. Freezing the wrong id would refuse a legal group and admit a frozen one | Read the constant out of `crates/traits/src/app_components/mod.rs`. Every id in `AppComponent` traces to a line there. |
+| Deferring a component because its protocol looks heavy | `0x800c`'s state is one byte, but it is in `default_group_components()` — so deferring it blocked create, join and invite in both directions | Check `default_group_components()` before calling anything optional. "Deferred" is only safe for what nothing else makes mandatory. |
 | Assuming last-resort is an MLS extension | It is component `0x0004` with EMPTY data in the KEYPACKAGE-level `app_data_dictionary`; `0x000a` is the obsolete form, and non-empty data is malformed | Read `KeyPackage::last_resort` in the OpenMLS revision mdk pins, not the extension registry. |
 | Treating a skipped interop suite as a passing one | The tests skip when the container is absent, so a failed image build reads as green | `integration.yml` has an explicit readiness check after the build. Do not remove it as redundant. |
 | Deleting a KeyPackage record because the publish "failed" | A timeout is not a rejection; the event may be live, and erasing its private key is unrecoverable | Only `Rejected` authorises deletion. A throwing transport is `Indeterminate`. |
