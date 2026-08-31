@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
-**Updated:** 2026-08-31 (tenth revision) · **Branch:** `feat/dark-matter`
-· **Last commit at time of writing:** `737031c`
+**Updated:** 2026-09-01 (eleventh revision) · **Branch:** `feat/dark-matter`
+· **Last commit at time of writing:** `b721255`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -27,8 +27,9 @@ and the first live interop suite all landed on 2026-08-31 (§3f, §3g). Our stac
 now validates a KeyPackage the reference implementation actually published, and
 reproduces its bytes exactly. Nothing is wired into the running app yet: the new
 engine is entirely additive and nothing depends on it, so it cannot break the
-shipping product. Create-group landed on 2026-08-31 (§3i); what remains of
-**P6** is invite and join, both gated on two small `dotnet-mls` additions.
+shipping product. Create-group landed on 2026-08-31 (§3i), and the last two `dotnet-mls`
+gaps closed on 2026-09-01 (§3j). What remains of **P6** is invite and join, and
+neither is blocked on anything now.
 
 ---
 
@@ -36,7 +37,7 @@ shipping product. Create-group landed on 2026-08-31 (§3i); what remains of
 
 Seven new projects, all standalone (no reference to `marmot-cs`), all in
 `Scramble.sln` and `Scramble.Desktop.slnf`, all running in the fast unit gate.
-**769 tests in `Scramble.Marmot.Tests`**, plus **7 in the live
+**772 tests in `Scramble.Marmot.Tests`**, plus **8 in the live
 `DarkMatterInterop` suite** (`tests/Scramble.Diagnostics/DarkMatterInterop/`),
 all passing.
 
@@ -50,8 +51,8 @@ all passing.
 | `src/Scramble.Marmot.Wire.Nostr` | P3 | kind-445 codec, kind-444 Welcome, kind-30443 KeyPackage, `NostrGroupPeeler` |
 | `src/Scramble.Marmot.AppComponents` | P4 | id registry, QUIC-varint codec, the four v1 schemas, app-data dictionary, Current-profile invariants, commit authorization, staged-commit component integrity, the shared relay-URL profile |
 
-Also landed: `dotnet-mls` is **released and pinned at `v0.1.0-beta.9`**
-(2026-08-31), which carries everything P6 needs — see §3e. **407 of its tests
+Also landed: `dotnet-mls` is **released and pinned at `v0.1.0-beta.10`**
+(2026-09-01), which carries everything P6 needs — see §3e. **415 of its tests
 pass**, RFC 9420 vectors included. The submodule sits exactly on the tag; keep
 it that way. Also a `wn-agent` interop peer in `docker-compose.test.yml`.
 
@@ -264,7 +265,7 @@ Only the byte fixtures are mirrored. Upstream's scenario vectors
 (`invite-member`, `convergence-*`, …) drive a whole engine through a step list
 and become runnable at P6.
 
-### 3e. `dotnet-mls` is released at `v0.1.0-beta.9` — nothing is blocked
+### 3e. `dotnet-mls` is released at `v0.1.0-beta.10` — nothing is blocked
 
 **Status (2026-08-31):** merged to `main`, tagged, pushed, and the Scramble
 submodule is pinned exactly on the tag (`ccb9720`). Three changes, all generic
@@ -341,13 +342,19 @@ implementations and the XML doc says so rather than letting it take credit.
   `ProcessCommit` clears it anyway) and `_resumptionPsks`, which **Marmot v1
   does not use** — checked, not assumed.
 
-**A new ask is coming at the invite path, and it is real.** `dotnet-mls`
-**signs** a KeyPackage and a LeafNode and exposes **no way to verify either** —
-there is no KeyPackageTBS verification anywhere in the library. The
-account-identity proof binds the account key to the leaf *signature* key, and
-we verify that, so identity binding is covered. What is not covered is
-**possession of the leaf private key**: a party who copies a valid leaf and its
-proof and substitutes their own `init_key` would receive the Welcome. See §3f.
+**(4) and (5), granted and released as `v0.1.0-beta.10` on 2026-09-01.**
+`dotnet-mls` **signed** a KeyPackage and a LeafNode and could verify **neither**
+— there was no KeyPackageTBS verification anywhere in it. The gap was specific:
+the account-identity proof binds the account key to the leaf *signature* key and
+nothing more, so a party who copied a valid leaf and its proof and substituted
+their own `init_key` would have received the Welcome, with the proof still
+verifying. `ValidateKeyPackage` now runs the three §10 checks that do not depend
+on the caller's clock or trust model — LeafNode signature, KeyPackage signature,
+and `init_key != encryption_key`. The KeyPackageTBS serialisation is shared
+between signing and verification rather than written twice; two copies of a
+to-be-signed serialisation is the classic way to ship a verifier that accepts
+what nothing else produces. `CreateKeyPackage` also takes
+`keyPackageExtensions`, which is what the last-resort marker needs.
 
 **Re-check whether an ask is still real before spending a permission on it.**
 Two of the earlier three dissolved on a source read costing minutes, and a
@@ -399,19 +406,15 @@ spec prose:**
 **Two deliberate divergences from upstream. Do not "fix" either without reading
 this:**
 
-- **Nothing is marked last-resort.** mdk marks every KeyPackage it generates,
-  because OpenMLS otherwise deletes the private bundle the first time a Welcome
-  consumes it. We own our storage and delete nothing implicitly, and
-  `dotnet-mls` cannot set KeyPackage-level extensions at all. **The consequence
-  is real:** kind 30443 is a replaceable event, so two people can invite us off
-  one publication and only the first Welcome will open. **§3g corrects the
-  encoding — it is a component, not an extension — and confirms the live peer at
-  our pinned tag does mark it.** Read that before acting on this bullet.
-- **The validator does not verify the KeyPackage or LeafNode signatures**,
-  because `dotnet-mls` offers no way to. See §3e. **This must close before the
-  invite path treats a fetched KeyPackage as trustworthy** — it is the one hole
-  left in the fetch path. It is documented in the validator's own XML docs so
-  whoever writes that path cannot miss it.
+- ~~Nothing is marked last-resort~~ **✅ CLOSED (2026-09-01)** — we mark it,
+  and the interop suite compares our marker against the reference's byte for
+  byte. **The encoding is the part to get right**: a KeyPackage-level component
+  `0x0004` with EMPTY data, not a leaf extension and not the obsolete `0x000a`
+  extension. Non-empty data there is malformed, so presence is not the test.
+- ~~The validator does not verify the KeyPackage or LeafNode signatures~~
+  **✅ CLOSED (2026-09-01)** — `v0.1.0-beta.10` added `ValidateKeyPackage`, and
+  `KeyPackagePublicationValidator` runs it **before** any Marmot rule, because
+  everything after it reads fields off the leaf.
 
 **Publishing landed too** (`ca93ff4`): `KeyPackagePublisher` builds, persists
 and publishes, then binds the record to its event id. The ordering is
@@ -597,24 +600,78 @@ independently load-bearing, each verified by mutating the other away. **The
 general rule, already in §4: a guard that survives mutation is not automatically
 the guard doing the work.**
 
-**What is NOT here, deliberately: invitees.** Adding one means trusting a
-fetched KeyPackage, and `dotnet-mls` exposes no way to verify a KeyPackage or
-LeafNode signature (§3e, §3g). The negotiation and admin-coupling rules take
-member component sets and are ready for the caller that will supply real
-invitees.
+**What is NOT here: invitees.** The negotiation and admin-coupling rules
+already take member component sets and are ready for the caller that supplies
+them. The blocker that kept them out — no way to verify a fetched KeyPackage —
+**closed on 2026-09-01** (§3j), so add-members is now just work.
 
 **What P6 needs next**, in order:
 
-1. **KeyPackage + LeafNode signature verification in `dotnet-mls`.** The
-   blocker for invite, and the one thing standing between create-group and a
-   two-party group. Generic RFC 9420; the library already signs both.
-2. **KeyPackage-level extensions in `dotnet-mls`**, so we can mark last-resort
-   (§3g). Smaller, and independent of (1).
-3. **Invite / add-members**, once (1) lands — and with it the outbound interop
-   direction, a live `wn-agent` joining a group we created.
-4. **Join from a Welcome.** `AppComponentIntegrity.ValidateStagedCommit` and
-   `ValidateUpdateBatch` still have no caller (§3c) — **they must be called as a
-   pair.**
+1. **Invite / add-members.** Unblocked. `MarmotGroupProfile.Negotiate` and the
+   admin-coupling check take the invitee sets; what is missing is the MLS Add
+   proposal and commit, the Welcome, and the kind-444 publish.
+2. **The outbound interop direction** — a live `wn-agent` joining a group we
+   created. §3g covers inbound only, and this is the half that proves our
+   GroupContext is right.
+3. **Join from a Welcome.** `AppComponentIntegrity.ValidateStagedCommit` and
+   `ValidateUpdateBatch` still have no caller (§3c) — **they must be called as
+   a pair.**
+
+### 3j. The two open gaps are CLOSED — `v0.1.0-beta.10`
+
+`c21a759` pins the release; `b721255` uses it. Both gaps that earlier sections
+documented rather than fixed are now shut, and the interop suite pins each.
+
+**KeyPackage verification.** `dotnet-mls` signed a KeyPackage and a LeafNode
+and could verify **neither** — there was no KeyPackageTBS verification anywhere
+in it. `MlsGroup.ValidateKeyPackage` now runs the three RFC 9420 §10 checks that
+do not depend on the caller's clock or trust model: the LeafNode signature, the
+KeyPackage signature, and `init_key != encryption_key`. Lifetime, credential and
+capability checks stay with the caller, because the library cannot decide them.
+
+**Why it was not belt-and-braces.** The account-identity proof binds the account
+key to the leaf **signature** key and nothing more. Without the KeyPackage
+signature, a party could copy a valid leaf *and its proof*, substitute their own
+`init_key`, and receive the Welcome — **and the proof would still verify.** The
+leaf signature does not cover the `init_key`; only the KeyPackage signature does.
+There is an interop test asserting exactly that attack fails.
+
+`KeyPackagePublicationValidator` runs it **before** any Marmot rule. That
+ordering is deliberate twice over: everything after it reads fields off the leaf,
+and reading them from a KeyPackage whose signature does not verify is reading
+attacker-chosen values; and a broken signature should be reported as a malformed
+KeyPackage rather than as some Marmot-level mismatch, which would send whoever
+reads the error looking in the wrong place.
+
+**Last-resort.** We mark it now, and the interop suite compares our marker
+against the reference's **byte for byte**. The encoding is the part to get
+right, and two wrong readings are both tempting:
+
+- It is a **KeyPackage-level** component `0x0004` with **EMPTY** data.
+- It is **not** a leaf extension — every other dictionary we build is a leaf's,
+  which is what makes that reading tempting.
+- It is **not** the obsolete `0x000a` extension.
+- **Non-empty data there is malformed, not true**, so `IsLastResort` checks
+  emptiness rather than presence. A presence check would accept a KeyPackage the
+  peer refuses.
+
+Why it matters: kind 30443 is addressable, one live event per slot, so several
+people can invite us off one publication. Unmarked, only the first of those
+Welcomes could be opened. `KeyPackageRecord.LastResort` is read off the
+KeyPackage rather than passed in, so the record and the bytes on the wire cannot
+disagree about whether the private material may outlive its first Welcome.
+
+**A note on what an interop test is worth.** The new §10 assertions run against a
+*reference-produced* KeyPackage. Our own KeyPackages passing them proves only
+that our signer and our verifier agree with each other; a reference KeyPackage
+passing them proves the verifier agrees with everyone else. That distinction is
+the whole reason this suite exists, and it is worth preserving when adding to it.
+
+**Still open in `dotnet-mls`, unchanged:**
+
+- **(b) SelfRemove — real, ask at P7.** `0x000a` is not expressible; the closed
+  `ProposalType` enum stops at `AppDataUpdate = 8`.
+- **(d) retained past-epochs — probably avoidable, do not ask yet.** Blocks P8.
 
 ### 3d. Non-code items still open (not blocking)
 
@@ -627,10 +684,10 @@ invitees.
   merged fast-forward into `main`, released as `v0.1.0-beta.8`.
 - ~~**Release the `dotnet-mls` P6 blockers**~~ **✅ DONE (2026-08-31)** — merged
   fast-forward into `main`, released as `v0.1.0-beta.9`, submodule pinned on the
-  tag.
-- **Decide the last-resort question.** Interop settled the *encoding* (§3g);
-  what is left is whether to ask `dotnet-mls` for KeyPackage-level extensions
-  now or accept one-Welcome-per-publication until invite needs it.
+  tag. **`v0.1.0-beta.10` followed on 2026-09-01** with KeyPackage validation
+  and KeyPackage-level extensions (§3j).
+- ~~**Decide the last-resort question**~~ **✅ DONE (2026-09-01)** — we mark it,
+  matching the reference byte for byte (§3j).
 - **Watch the interop step's cost in CI.** It is the slowest step in
   `integration.yml`; §3g says what to do if it becomes the reason PRs are slow.
 - **Send Whitenoise the questions** in plan §5 (deployed tag, flip date,
@@ -679,8 +736,9 @@ without the interop suite running).
 - **Generic Nostr crypto stays out of Marmot namespaces** — it lives in
   `Scramble.Nostr.Crypto` so a future non-Marmot provider can reuse it.
 - **`lib/dotnet-mls` needs explicit permission per change.** Everything P6 needs
-  is granted, done, and released as **`v0.1.0-beta.9`** (§3e) — **reference the
-  tag, never the branch**, and keep the submodule pinned exactly on it. What is
+  is granted, done, and released as **`v0.1.0-beta.10`** (§3e, §3j) —
+  **reference the tag, never the branch**, and keep the submodule pinned exactly
+  on it. What is
   still open, and the one ask that is coming, are in §3e.
   **Re-check whether an ask is still real before spending a permission on it.**
   Two of the earlier asks dissolved on a source read costing minutes, and a
@@ -727,6 +785,8 @@ without the interop suite running).
 | Pinning only to `nip44.vectors.json` | Passes while missing the 2026-06-28 amendment the file predates | Check `44.md` prose and its inline vectors too. |
 | Using a QUIC varint for an MLS vector length | Agrees at every realistic size, then silently diverges past 2^30 | MLS allows 1/2/4 bytes only. `AppDataDictionary.WriteMlsLength` for MLS lengths, `ComponentCodec.WriteVarint` inside component payloads. |
 | Guessing a component id from its name | `0x8002` is the Blossom *image* component; encrypted-media v1 is `0x8008`. Freezing the wrong id would refuse a legal group and admit a frozen one | Read the constant out of `crates/traits/src/app_components/mod.rs`. Every id in `AppComponent` traces to a line there. |
+| Reading a last-resort marker by presence | Non-empty data under `0x0004` is malformed, not true — a presence check accepts a KeyPackage the peer refuses | Check the data is EMPTY. And it is a KeyPackage-level component, not a leaf extension and not `0x000a`. |
+| Trusting a fetched KeyPackage because its account proof verifies | The proof binds the account key to the leaf SIGNATURE key only; the leaf signature does not cover `init_key` | Run `MlsGroup.ValidateKeyPackage` first. Without it, a copied leaf plus a swapped `init_key` receives the Welcome, proof intact. |
 | Putting component ids in `required_capabilities` | It is MLS's vocabulary — extension and proposal types only. Components live in the dictionary's own requirement list | Two different registries, two different places. |
 | Deferring a component because its protocol looks heavy | `0x800c`'s state is one byte, but it is in `default_group_components()` — so deferring it blocked create, join and invite in both directions | Check `default_group_components()` before calling anything optional. "Deferred" is only safe for what nothing else makes mandatory. |
 | Assuming last-resort is an MLS extension | It is component `0x0004` with EMPTY data in the KEYPACKAGE-level `app_data_dictionary`; `0x000a` is the obsolete form, and non-empty data is malformed | Read `KeyPackage::last_resort` in the OpenMLS revision mdk pins, not the extension registry. |
