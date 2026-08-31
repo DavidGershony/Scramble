@@ -675,7 +675,7 @@ the whole reason this suite exists, and it is worth preserving when adding to it
 
 ### 3d. Non-code items still open (not blocking)
 
-- **Open a PR for `feat/dark-matter`.** **59 commits** ahead of `master` (58 before this doc commit) and
+- **Open a PR for `feat/dark-matter`.** **62 commits** ahead of `master` and
   growing; it is reviewable now and will not be after P6. This is the repo's
   documented flag-day failure mode (I4). *(The user has said a PR is not wanted
   — the plan is to keep going and merge at the end. Recorded here because I4
