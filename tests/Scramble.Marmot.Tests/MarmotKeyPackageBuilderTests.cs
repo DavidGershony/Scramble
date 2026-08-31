@@ -311,9 +311,60 @@ public class MarmotKeyPackageBuilderTests
         Assert.Equal(bundle.PublishedBytes, record.PublicKeyPackage);
         Assert.Equal((long)bundle.Lifetime.NotAfter, record.NotAfter);
 
-        // Not last-resort, deliberately: we erase private material on consume,
-        // and dotnet-mls cannot set the extension in any case.
-        Assert.False(record.LastResort);
+        // Last-resort, read off the KeyPackage rather than passed in, so the
+        // record and the published bytes cannot disagree about whether the
+        // private material may outlive its first Welcome.
+        Assert.True(record.LastResort);
+    }
+
+    [Fact]
+    public async Task APublishedKeyPackageIsMarkedLastResort()
+    {
+        var bundle = await BuildAsync();
+
+        // Kind 30443 is addressable — one live event per slot — so several
+        // people can invite us off one publication. Unmarked, only the first of
+        // those Welcomes could be opened.
+        Assert.True(MarmotLeaf.IsLastResort(bundle.KeyPackage));
+
+        Extension carried = Assert.Single(bundle.KeyPackage.Extensions);
+        Assert.Equal(MarmotDictionary.ExtensionType, carried.ExtensionType);
+
+        // The marker is a KEYPACKAGE-level component with EMPTY data. Not a leaf
+        // extension, and not the obsolete 0x000a extension — both readings are
+        // wrong and the first is the tempting one.
+        byte[] marker = MarmotDictionary.Decode(carried.ExtensionData)
+            .Get(MarmotLeaf.LastResortComponentId)!;
+        Assert.Empty(marker);
+
+        Assert.Null(MarmotLeaf.ReadDictionary(bundle.KeyPackage.LeafNode)!
+            .Get(MarmotLeaf.LastResortComponentId));
+    }
+
+    [Fact]
+    public async Task ANonLastResortKeyPackageCarriesNoExtensionsAtAll()
+    {
+        var bundle = await MarmotKeyPackageBuilder.CreateAsync(
+            _cs, new LocalSigner(), Now, lastResort: false);
+
+        Assert.Empty(bundle.KeyPackage.Extensions);
+        Assert.False(MarmotLeaf.IsLastResort(bundle.KeyPackage));
+        Assert.False(bundle.ToRecord("a", DateTimeOffset.UnixEpoch).LastResort);
+    }
+
+    [Fact]
+    public async Task NonEmptyMarkerDataIsNotReadAsLastResort()
+    {
+        var bundle = await BuildAsync();
+
+        // OpenMLS calls non-empty data under this id malformed rather than
+        // true, so a presence check would accept a KeyPackage the peer refuses.
+        var dictionary = new MarmotDictionary();
+        dictionary.Set(MarmotLeaf.LastResortComponentId, [0x01]);
+        bundle.KeyPackage.Extensions =
+            [new Extension(MarmotDictionary.ExtensionType, dictionary.Encode())];
+
+        Assert.False(MarmotLeaf.IsLastResort(bundle.KeyPackage));
     }
 
     // ---- Publishing, and the checks the codec left to the engine ----

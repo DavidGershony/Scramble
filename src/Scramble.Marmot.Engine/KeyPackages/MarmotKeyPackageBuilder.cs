@@ -46,9 +46,10 @@ public sealed record MarmotKeyPackageBundle(
     /// Builds the durable record for this bundle.
     /// </summary>
     /// <remarks>
-    /// Always <see cref="KeyPackageRecordState.Created"/> and never
-    /// last-resort: see <see cref="MarmotKeyPackageBuilder"/> on why nothing
-    /// this builder produces is reusable.
+    /// Always <see cref="KeyPackageRecordState.Created"/>. The last-resort flag
+    /// is read off the KeyPackage rather than passed in, so the record and the
+    /// bytes on the wire cannot disagree about whether the private material may
+    /// outlive its first Welcome.
     /// </remarks>
     public KeyPackageRecord ToRecord(string slotId, DateTimeOffset createdAt) =>
         new(
@@ -56,7 +57,7 @@ public sealed record MarmotKeyPackageBundle(
             slotId,
             PublishedBytes,
             PrivateMaterial.Encode(),
-            LastResort: false,
+            LastResort: MarmotLeaf.IsLastResort(KeyPackage),
             NotBefore: checked((long)Lifetime.NotBefore),
             NotAfter: checked((long)Lifetime.NotAfter),
             KeyPackageRecordState.Created,
@@ -84,16 +85,13 @@ public sealed record MarmotKeyPackageBundle(
 /// schemes) and pointless.
 /// </para>
 /// <para>
-/// <b>Nothing here is marked last-resort, which is a deliberate divergence from
-/// upstream.</b> <c>mdk</c> calls <c>mark_as_last_resort()</c> on every
-/// KeyPackage it generates, because OpenMLS otherwise deletes the private
-/// bundle the first time a Welcome consumes it. We own our storage and delete
-/// nothing implicitly, so the extension buys us none of that — and
-/// <c>dotnet-mls</c> cannot set KeyPackage-level extensions at all today. The
-/// consequence is real and worth naming: kind 30443 is a replaceable event, so
-/// two people can invite us off one publication and only the first Welcome will
-/// open. That is a republish-cadence question for KeyPackage maintenance, not a
-/// reason to advertise an extension we do not honour.
+/// <b>KeyPackages are marked last-resort by default</b>, matching the reference
+/// implementation. Kind 30443 is addressable — one live event per slot — so
+/// several people can invite us off one publication, and an unmarked KeyPackage
+/// says only the first of those Welcomes may be opened. The marker is a
+/// KeyPackage-level component, not a leaf extension and not the obsolete
+/// <c>0x000a</c> extension; see <see cref="MarmotLeaf.LastResortComponentId"/>,
+/// where getting it wrong is easy.
 /// </para>
 /// </remarks>
 public static class MarmotKeyPackageBuilder
@@ -139,6 +137,11 @@ public static class MarmotKeyPackageBuilder
     /// Lifetime ahead of <paramref name="now"/>; see
     /// <see cref="KeyPackageLifetimePolicy"/>.
     /// </param>
+    /// <param name="lastResort">
+    /// Whether the KeyPackage may serve more than one Welcome. Defaults to true,
+    /// which is what a published KeyPackage wants: pass false only for one
+    /// addressed to a single known inviter.
+    /// </param>
     /// <exception cref="ArgumentException">
     /// The signer's account key is not a valid Marmot credential identity.
     /// </exception>
@@ -148,6 +151,7 @@ public static class MarmotKeyPackageBuilder
         ulong now,
         IReadOnlySet<ushort>? supportedComponents = null,
         ulong? validitySeconds = null,
+        bool lastResort = true,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(cs);
@@ -191,7 +195,8 @@ public static class MarmotKeyPackageBuilder
             supportedExtensionTypes: MarmotLeaf.ExtensionTypes.ToArray(),
             supportedProposalTypes: MarmotLeaf.ProposalTypes.ToArray(),
             leafExtensions: new[] { MarmotLeaf.ToExtension(dictionary) },
-            lifetime: lifetime);
+            lifetime: lifetime,
+            keyPackageExtensions: lastResort ? [MarmotLeaf.LastResortExtension()] : null);
 
         byte[] keyPackageBytes = TlsCodec.Serialize(keyPackage.WriteTo);
         var keyPackageRef = KeyPackageRef.Compute(cs, keyPackageBytes);

@@ -127,6 +127,65 @@ public static class MarmotLeaf
     }
 
     /// <summary>
+    /// The <c>last_resort_key_package</c> component, draft-ietf-mls-extensions.
+    /// </summary>
+    /// <remarks>
+    /// Lives in the <b>KeyPackage-level</b> <c>app_data_dictionary</c>, not the
+    /// leaf's, and its data must be <b>empty</b> — OpenMLS treats non-empty data
+    /// there as malformed. It is not the obsolete <c>0x000a</c> extension, and
+    /// it is not a leaf extension; both of those readings are wrong and the
+    /// second is the tempting one, since every other dictionary we build is a
+    /// leaf's.
+    /// </remarks>
+    public const ushort LastResortComponentId = 0x0004;
+
+    /// <summary>
+    /// The KeyPackage-level extension marking a KeyPackage last-resort.
+    /// </summary>
+    /// <remarks>
+    /// A KeyPackage published to a relay is fetched by anyone who wants to
+    /// invite us, and kind 30443 is addressable — one live event per slot. So
+    /// several people can invite us off one publication, and without this marker
+    /// only the first Welcome could be opened. The marker is what says the
+    /// KeyPackage is reusable; retaining the private material past first use is
+    /// then a storage decision, which
+    /// <see cref="Scramble.Marmot.Storage.KeyPackageRecord.LastResort"/> carries.
+    /// </remarks>
+    public static Extension LastResortExtension()
+    {
+        var dictionary = new MarmotDictionary();
+        dictionary.Set(LastResortComponentId, []);
+        return new Extension(MarmotDictionary.ExtensionType, dictionary.Encode());
+    }
+
+    /// <summary>
+    /// Whether a KeyPackage's own extensions mark it last-resort.
+    /// </summary>
+    /// <remarks>
+    /// Non-empty data under the id is <b>not</b> last-resort: OpenMLS calls that
+    /// malformed rather than true, so reading it as a presence flag would accept
+    /// a KeyPackage the peer refuses.
+    /// </remarks>
+    public static bool IsLastResort(KeyPackage keyPackage)
+    {
+        ArgumentNullException.ThrowIfNull(keyPackage);
+
+        foreach (var extension in keyPackage.Extensions)
+        {
+            if (extension.ExtensionType != MarmotDictionary.ExtensionType)
+                continue;
+
+            byte[]? marker = MarmotDictionary.Decode(extension.ExtensionData)
+                .Get(LastResortComponentId);
+
+            if (marker is { Length: 0 })
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Reads a leaf's <c>app_data_dictionary</c>, or null when it carries none.
     /// </summary>
     /// <exception cref="AppComponentException">The extension data is malformed.</exception>

@@ -1,5 +1,6 @@
 using DotnetMls.Codec;
 using DotnetMls.Crypto;
+using DotnetMls.Group;
 using DotnetMls.Types;
 using Scramble.Marmot.Identity;
 using Scramble.Marmot.Wire.Nostr;
@@ -48,15 +49,20 @@ public sealed record ValidatedKeyPackage(
 /// </item>
 /// </list>
 /// <para>
-/// <b>Known gap, deliberately not papered over.</b> This does not verify the
-/// KeyPackage or LeafNode <i>signatures</i>: <c>dotnet-mls</c> signs both and
-/// exposes no way to verify either. What is checked still binds the account key
-/// to the leaf signature key — that is exactly what the account-identity proof
-/// is, and it is BIP-340-verified below. What is <b>not</b> yet checked is
-/// possession of the leaf private key, so a party who copies a valid leaf and
-/// substitutes their own <c>init_key</c> would receive the Welcome. That closes
-/// with a KeyPackage-signature verification API in the MLS library, and it must
-/// close before the invite path treats a fetched KeyPackage as trustworthy.
+/// <b>The MLS signatures are checked too, as of `v0.1.0-beta.10`.</b>
+/// <c>MlsGroup.ValidateKeyPackage</c> covers the LeafNode signature, the
+/// KeyPackage signature and the RFC 9420 §10 rule that <c>init_key</c> differ
+/// from the leaf's <c>encryption_key</c>. That matters here rather than being
+/// belt-and-braces: the account-identity proof binds the account key to the
+/// leaf <i>signature</i> key, and nothing more, so without the KeyPackage
+/// signature a party could copy a valid leaf and its proof, substitute their
+/// own <c>init_key</c>, and receive the Welcome. The proof would still verify.
+/// </para>
+/// <para>
+/// The ordering below is deliberate: MLS validity first, Marmot rules second.
+/// A KeyPackage whose own signature is broken should be refused as malformed
+/// rather than reported as some Marmot-level mismatch, which would send whoever
+/// reads the error looking in the wrong place.
 /// </para>
 /// </remarks>
 public static class KeyPackagePublicationValidator
@@ -103,6 +109,18 @@ public static class KeyPackagePublicationValidator
         {
             throw new KeyPackagePublicationException(
                 $"The i tag says {publication.KeyPackageRefHex}, but the KeyPackage hashes to {computed}.");
+        }
+
+        // MLS validity before Marmot rules. Everything after this point reads
+        // fields off the leaf, and reading them from a KeyPackage whose
+        // signature does not verify is reading attacker-chosen values.
+        try
+        {
+            MlsGroup.ValidateKeyPackage(cs, keyPackage);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new KeyPackagePublicationException($"The KeyPackage is invalid: {ex.Message}");
         }
 
         byte[] identity = CredentialIdentityOf(keyPackage.LeafNode);

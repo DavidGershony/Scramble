@@ -26,10 +26,9 @@ namespace Scramble.Diagnostics.DarkMatterInterop;
 /// by the author of the code it checks.
 /// </para>
 /// <para>
-/// The direction is inbound only. Having the agent validate <i>our</i>
-/// KeyPackage needs the invite path, which needs create-group; that arrives
-/// with the next P6 slice. What this does cover is every step between the wire
-/// and a validated member identity.
+/// The direction is inbound only: everything between the wire and a validated
+/// member identity. Having the agent validate <i>our</i> KeyPackage needs the
+/// invite path — create-group has landed, so what remains is add-members.
 /// </para>
 /// <para>
 /// Requires <c>docker compose -f docker-compose.test.yml up -d nostr-relay
@@ -226,43 +225,61 @@ public class KeyPackageInteropTests
     }
 
     [Fact]
-    public async Task TheReferenceMarksItsKeyPackageLastResortAndWeDoNot()
+    public async Task BothSidesMarkTheirKeyPackagesLastResortTheSameWay()
     {
         var fetched = await FetchAgentKeyPackageAsync();
         Assert.SkipWhen(fetched is null, "The wn-agent interop peer is not running.");
 
         var (_, keyPackage) = fetched!.Value;
 
-        // Pins a known divergence rather than a shared rule, so it is visible
-        // instead of forgotten. Last-resort in the Current profile is component
-        // 0x0004 with EMPTY data inside the KEYPACKAGE-level app_data_dictionary
-        // — not a leaf extension, and not the obsolete 0x000a extension
-        // (openmls/src/key_packages/mod.rs, KeyPackage::last_resort). Non-empty
-        // data there is explicitly malformed.
+        // This pinned a divergence until v0.1.0-beta.10 gave dotnet-mls a way to
+        // set KeyPackage-level extensions. Last-resort in the Current profile is
+        // component 0x0004 with EMPTY data inside the KEYPACKAGE-level
+        // app_data_dictionary — not a leaf extension, and not the obsolete
+        // 0x000a extension (openmls/src/key_packages/mod.rs,
+        // KeyPackage::last_resort). Non-empty data there is explicitly
+        // malformed, which is why presence alone is not the test.
         Extension dictionaryExtension = Assert.Single(
             keyPackage.Extensions, e => e.ExtensionType == MarmotDictionary.ExtensionType);
 
         byte[]? marker = MarmotDictionary
             .Decode(dictionaryExtension.ExtensionData)
-            .Get(LastResortComponentId);
+            .Get(MarmotLeaf.LastResortComponentId);
 
         Assert.NotNull(marker);
         Assert.Empty(marker!);
 
-        // Ours, built for real and compared. We emit no KeyPackage-level
-        // extensions at all, because MlsGroup.CreateKeyPackage hardcodes an
-        // empty set and offers no parameter. The cost is that only the first
-        // Welcome sent to one of our publications can be opened. When the
-        // library grows that parameter, this assertion fails and says so —
-        // which is the point of pinning the divergence rather than a comment.
+        // Ours, built for real and compared byte for byte against theirs. The
+        // marker has no payload to get wrong, so equality here is the whole
+        // check: same id, same empty data, same place.
         var ours = await MarmotKeyPackageBuilder.CreateAsync(
             _cs, new EphemeralSigner(), (ulong)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
 
-        Assert.Empty(ours.KeyPackage.Extensions);
+        Assert.True(MarmotLeaf.IsLastResort(ours.KeyPackage));
+
+        Extension ourDictionary = Assert.Single(
+            ours.KeyPackage.Extensions, e => e.ExtensionType == MarmotDictionary.ExtensionType);
+
+        Assert.Equal(dictionaryExtension.ExtensionData, ourDictionary.ExtensionData);
     }
 
-    /// <summary>The last_resort_key_package component, draft-ietf-mls-extensions.</summary>
-    private const ushort LastResortComponentId = 0x0004;
+    [Fact]
+    public async Task OurValidatorAcceptsTheReferenceKeyPackagesMlsSignatures()
+    {
+        var fetched = await FetchAgentKeyPackageAsync();
+        Assert.SkipWhen(fetched is null, "The wn-agent interop peer is not running.");
+
+        var (_, keyPackage) = fetched!.Value;
+
+        // The RFC 9420 §10 checks, against bytes we did not produce. Our own
+        // KeyPackages passing them proves the signer and verifier agree; a
+        // reference KeyPackage passing them proves the verifier agrees with
+        // everyone else, which is the only version that matters.
+        DotnetMls.Group.MlsGroup.ValidateKeyPackage(_cs, keyPackage);
+
+        Assert.True(DotnetMls.Group.MlsGroup.VerifyKeyPackageSignature(_cs, keyPackage));
+        Assert.True(DotnetMls.Group.MlsGroup.VerifyLeafNode(_cs, keyPackage.LeafNode));
+    }
 
     /// <summary>A throwaway account key, for building one KeyPackage locally.</summary>
     private sealed class EphemeralSigner : IAccountIdentityProofSigner

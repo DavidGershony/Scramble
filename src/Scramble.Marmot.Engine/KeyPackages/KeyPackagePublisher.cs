@@ -175,8 +175,12 @@ public sealed class KeyPackagePublisher
     {
         slotId ??= await CurrentSlotIdAsync(ct).ConfigureAwait(false);
 
+        // Last-resort by default, and the publisher does not offer to turn it
+        // off: a published KeyPackage is exactly the case that needs it, since
+        // anyone who fetches the slot may invite us off it.
         MarmotKeyPackageBundle bundle = await MarmotKeyPackageBuilder.CreateAsync(
-            _cs, _signer, now, supportedComponents, validitySeconds, ct).ConfigureAwait(false);
+            _cs, _signer, now, supportedComponents, validitySeconds, lastResort: true, ct)
+            .ConfigureAwait(false);
 
         string accountHex = Convert.ToHexString(
             _signer.AccountPublicKey.ToArray()).ToLowerInvariant();
