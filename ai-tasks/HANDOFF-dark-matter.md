@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
-**Updated:** 2026-08-31 (seventh revision) · **Branch:** `feat/dark-matter`
-· **Last commit at time of writing:** `c36e7da`
+**Updated:** 2026-08-31 (eighth revision) · **Branch:** `feat/dark-matter`
+· **Last commit at time of writing:** `909a9d9`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -22,12 +22,12 @@ Scramble is replacing its Marmot engine with a standalone Dark Matter
 implementation (`Scramble.Marmot.*`), built fresh against Rust `mdk` pinned at
 **`wn-agent-v0.9.10`**. Planning is finished. Phases P0 (storage), P1 (epoch
 state machine), P2 (account-identity proof) and P4 (app components) are done,
-P3's transport codecs are complete, and **P6 has started**: KeyPackage
-generation landed on 2026-08-31 (§3f), which is the first `dotnet-mls`
-reference from a `Scramble.Marmot.*` project. Nothing is wired into the running
-app yet: the new engine is entirely additive and nothing depends on it, so it
-cannot break the shipping product. The milestone that matters is still **P6:
-engine v1 talking to a real `wn-agent`**.
+**P3 is closed**, and **P6 has started**: KeyPackage generation, publication
+and the first live interop suite all landed on 2026-08-31 (§3f, §3g). Our stack
+now validates a KeyPackage the reference implementation actually published, and
+reproduces its bytes exactly. Nothing is wired into the running app yet: the new
+engine is entirely additive and nothing depends on it, so it cannot break the
+shipping product. What remains of **P6** is create-group, join and invite.
 
 ---
 
@@ -35,15 +35,17 @@ engine v1 talking to a real `wn-agent`**.
 
 Seven new projects, all standalone (no reference to `marmot-cs`), all in
 `Scramble.sln` and `Scramble.Desktop.slnf`, all running in the fast unit gate.
-**727 tests in `Scramble.Marmot.Tests`, all passing.**
+**737 tests in `Scramble.Marmot.Tests`**, plus **6 in the live
+`DarkMatterInterop` suite** (`tests/Scramble.Diagnostics/DarkMatterInterop/`),
+all passing.
 
 | Project | Phase | Contains |
 |---|---|---|
 | `src/Scramble.Marmot.Abstractions` | P0/P1/P3 | Ids (`GroupId`, `EpochId`, `MessageId`, `MemberId`), storage contracts and records incl. `IKeyPackageStorage`, `EpochState`, `ITransportPeeler` + `PeeledMessage` |
 | `src/Scramble.Marmot.Storage.Sqlite` | P0/P3 | SQLite provider, migrations, transactions, epoch-anchored snapshots, KeyPackage bundles + private material |
-| `src/Scramble.Marmot.Engine` | P1/P6 | `EpochManager`; `KeyPackages/` — leaf shape, lifetime policy, the builder, the publication validator. **The only project referencing `dotnet-mls`.** |
+| `src/Scramble.Marmot.Engine` | P1/P6 | `EpochManager`; `KeyPackages/` — leaf shape, lifetime policy, the builder, the publisher, the publication validator. **The only project referencing `dotnet-mls`.** |
 | `src/Scramble.Marmot.Identity` | P2 | `AccountIdentityProof` (`0x8009`), async signer seam |
-| `src/Scramble.Nostr.Crypto` | P2/P3 | BIP-340, NIP-01 event ids, NIP-44 v2, NIP-59 gift wrap, ChaCha20-Poly1305 envelope, secp256k1 |
+| `src/Scramble.Nostr.Crypto` | P2/P3 | BIP-340, NIP-01 event ids and envelope serialisation, NIP-44 v2, NIP-59 gift wrap, ChaCha20-Poly1305 envelope, secp256k1 |
 | `src/Scramble.Marmot.Wire.Nostr` | P3 | kind-445 codec, kind-444 Welcome, kind-30443 KeyPackage, `NostrGroupPeeler` |
 | `src/Scramble.Marmot.AppComponents` | P4 | id registry, QUIC-varint codec, the four v1 schemas, app-data dictionary, Current-profile invariants, commit authorization, staged-commit component integrity, the shared relay-URL profile |
 
@@ -92,7 +94,7 @@ because the fixture it used could only ever exercise the rejection path. When
 code and tests share an author, the tests are not an oracle — pin to external
 vectors, and get fresh eyes on cryptography.
 
-### 3b. P3's transport codecs are DONE — what is left of P3 needs MLS
+### 3b. P3 is DONE, including its interop exit criterion
 
 `c72dd91` added the kind-30443 codec and `f2143ee` the KeyPackage storage.
 Both are green in the fast unit gate. What landed:
@@ -123,13 +125,10 @@ reference arrived:
   author to the credential identity — `KeyPackagePublicationValidator`. They
   have a caller now.
 
-Still open from P3's exit criterion: **no `DarkMatterInterop` test that
-publishes a KeyPackage a live `wn-agent` will fetch.** Upstream ships no byte
-fixture for kind 30443 — the codec is pinned to the spec text and to
-`transport-nostr-adapter/src/key_package.rs` — so the live fetch is the only
-thing that will tell us whether the leaf shape in §3f is right. A hand-written
-fixture would not; it would need the Amethyst-style generator (plan §3
-tier 2b).
+**P3 is now closed.** Its last exit criterion — a `DarkMatterInterop` test
+against a live `wn-agent` — landed in `909a9d9`. See §3g for what the peer
+confirmed and what it corrected. The remaining direction, an agent *validating*
+a KeyPackage we published, needs the invite path and arrives with create-group.
 
 ### 3c. P4 is DONE — next is P6
 
@@ -391,40 +390,114 @@ spec prose:**
 **Two deliberate divergences from upstream. Do not "fix" either without reading
 this:**
 
-- **Nothing is marked last-resort.** mdk calls `mark_as_last_resort()` on every
-  KeyPackage it generates, because OpenMLS otherwise deletes the private bundle
-  the first time a Welcome consumes it. We own our storage and delete nothing
-  implicitly, and `dotnet-mls` cannot set KeyPackage-level extensions at all.
-  **The consequence is real:** kind 30443 is a replaceable event, so two people
-  can invite us off one publication and only the first Welcome will open. That
-  is a republish-cadence question for KeyPackage maintenance, not a reason to
-  advertise an extension we do not honour — but decide it deliberately before
-  interop rather than discovering it at interop.
+- **Nothing is marked last-resort.** mdk marks every KeyPackage it generates,
+  because OpenMLS otherwise deletes the private bundle the first time a Welcome
+  consumes it. We own our storage and delete nothing implicitly, and
+  `dotnet-mls` cannot set KeyPackage-level extensions at all. **The consequence
+  is real:** kind 30443 is a replaceable event, so two people can invite us off
+  one publication and only the first Welcome will open. **§3g corrects the
+  encoding — it is a component, not an extension — and confirms the live peer at
+  our pinned tag does mark it.** Read that before acting on this bullet.
 - **The validator does not verify the KeyPackage or LeafNode signatures**,
   because `dotnet-mls` offers no way to. See §3e. **This must close before the
   invite path treats a fetched KeyPackage as trustworthy** — it is the one hole
   left in the fetch path. It is documented in the validator's own XML docs so
   whoever writes that path cannot miss it.
 
+**Publishing landed too** (`ca93ff4`): `KeyPackagePublisher` builds, persists
+and publishes, then binds the record to its event id. The ordering is
+persist-then-publish and the failure handling is the substance — the relay seam
+reports **three** outcomes, and only `Rejected` authorises deleting the record.
+A transport that throws is read as `Indeterminate`, because an exception says
+nothing about what the relay saw. Erasing the private key for a KeyPackage that
+did reach a relay is unrecoverable; accumulating a few dead records is not.
+The slot is derived from the newest existing record, so a republish supersedes
+rather than accumulates.
+
 **What P6 needs next**, roughly in order:
 
-1. **Publish the KeyPackage.** Slot-id persistence, `MarkPublishedAsync` on the
-   relay's OK, and deleting the orphan when a publish ultimately fails — the
-   record exists from before the publish precisely so material is never lost
-   for a KeyPackage others can already fetch.
-2. **A `DarkMatterInterop` test that a live `wn-agent` fetches.** This is P3's
-   still-open exit criterion and the first thing that will say whether the leaf
-   shape above is right. Upstream ships no byte fixture for kind 30443, so
-   there is no cheaper way to find out.
-3. **Create group / join.** `AppComponentIntegrity.ValidateStagedCommit` and
-   `ValidateUpdateBatch` are still pure functions with no caller (§3c) —
-   **P6's engine has to actually call them, as a pair.**
-4. **KeyPackage-signature verification in `dotnet-mls`**, before the invite path
-   trusts a fetched package.
+1. **Create group / join.** The big one, and the next real milestone.
+   `AppComponentIntegrity.ValidateStagedCommit` and `ValidateUpdateBatch` are
+   still pure functions with no caller (§3c) — **P6's engine has to actually
+   call them, as a pair.**
+2. **Invite, which needs two `dotnet-mls` additions** (§3e, §3g): KeyPackage
+   and LeafNode signature verification before a fetched package is trusted, and
+   KeyPackage-level extensions so we can mark last-resort. Neither is large.
+3. **The outbound interop direction** — a live `wn-agent` validating a
+   KeyPackage *we* published, which the invite path unlocks. §3g covers the
+   inbound direction only.
+
+### 3g. Interop is LIVE — what the reference peer confirmed and corrected
+
+`909a9d9` landed the first `DarkMatterInterop` suite, closing P3's last exit
+criterion. It bootstraps the `wn-agent` container, fetches its kind-30443 event
+off the relay, and runs our stack over bytes the reference implementation
+produced. **Six tests, green against `wn-agent-v0.9.10`, mutation-checked.**
+
+Run it with:
+
+```powershell
+docker compose -f docker-compose.test.yml up -d --build wn-agent
+dotnet test tests/Scramble.Diagnostics/ --filter "Category=DarkMatterInterop"
+```
+
+**The assertion that carries the weight** is not that we can decode upstream's
+KeyPackage — a decoder that silently drops a field it does not understand still
+decodes. It is that **re-encoding the decoded KeyPackage and hashing it
+reproduces upstream's own `i` tag**. That makes the round trip byte-exact, and
+it is the only cheap way to prove a codec against a peer.
+
+**Confirmed, having previously only been inferred:**
+
+- The leaf `app_data_dictionary` carries exactly three entries, and `safe_aad`
+  is present and **empty**. The asymmetry with GroupContext state is real.
+- The advertised component list unions in `0x0001` and `0x8009`.
+- `0x8009` is absent from leaf extension capabilities in Current.
+- **The lifetime range is exactly 7,261,200 seconds** — the bound derived by
+  reading the OpenMLS revision mdk pins, now observed on the wire. This is the
+  assertion that would have caught the unbounded lifetime we used to emit,
+  before a peer ever saw it.
+
+**Corrected, and this one matters:**
+
+**Last-resort is a component, not an extension.** The reference marks its
+KeyPackage last-resort as component **`0x0004` with EMPTY data inside the
+KEYPACKAGE-level `app_data_dictionary`** — not a leaf extension, and not the
+obsolete `0x000a` extension. Confirmed in
+`openmls/src/key_packages/mod.rs::KeyPackage::last_resort` at the pinned
+revision, which also treats **non-empty data there as malformed**. The agent at
+our own pinned tag does mark it, so this is a divergence from `v0.9.10`, not
+only from `0.9.15` as §3f originally implied.
+
+We still cannot emit it: `MlsGroup.CreateKeyPackage` hardcodes an empty
+KeyPackage-level extension set and offers no parameter. The interop test asserts
+both sides, so it fails deliberately the day the library grows one. **This is
+the next `dotnet-mls` ask** — the same shape as the `leafExtensions` and
+`lifetime` parameters already added, and smaller than either.
+
+**Differences that are expected and are NOT bugs:**
+
+- The agent advertises extensions `0xf2d1`, `0xf2d2`, `0xf2d4` from its feature
+  registry, and proposal `0x000a` (SelfRemove). We advertise neither. The test
+  asserts only that **our** set is a subset of theirs, which is the direction
+  that has to hold.
+- The agent's `app_components` tag lists `0x8001`–`0x800c`; ours lists the
+  Known set. Its leaf list also contains `0x0001` while its tag does not.
+
+**The suite skips when the container is absent**, because a missing container is
+an absent environment, not a regression. That means a failed image build would
+turn it green-but-empty, so `integration.yml` has an explicit readiness check
+after the build. **Do not remove it as redundant** — it is the only thing
+standing between a broken peer and a silently passing suite.
+
+**One cost, named rather than buried:** building the peer from a pinned mdk ref
+is now the slowest step in `integration.yml` (a cold cargo release build). If
+that makes PRs slow, move the suite to a nightly **Ubuntu** workflow rather than
+dropping it — the existing nightly is Windows and cannot run the container.
 
 ### 3d. Non-code items still open (not blocking)
 
-- **Open a PR for `feat/dark-matter`.** **51 commits** ahead of `master` and
+- **Open a PR for `feat/dark-matter`.** **54 commits** ahead of `master` and
   growing; it is reviewable now and will not be after P6. This is the repo's
   documented flag-day failure mode (I4). *(The user has said a PR is not wanted
   — the plan is to keep going and merge at the end. Recorded here because I4
@@ -434,7 +507,11 @@ this:**
 - ~~**Release the `dotnet-mls` P6 blockers**~~ **✅ DONE (2026-08-31)** — merged
   fast-forward into `main`, released as `v0.1.0-beta.9`, submodule pinned on the
   tag.
-- **Decide the last-resort question** before interop, not at it. See §3f.
+- **Decide the last-resort question.** Interop settled the *encoding* (§3g);
+  what is left is whether to ask `dotnet-mls` for KeyPackage-level extensions
+  now or accept one-Welcome-per-publication until invite needs it.
+- **Watch the interop step's cost in CI.** It is the slowest step in
+  `integration.yml`; §3g says what to do if it becomes the reason PRs are slow.
 - **Send Whitenoise the questions** in plan §5 (deployed tag, flip date,
   wire-stable tag, disband-for-interop). Q2 on legacy proofs is closed.
 
@@ -455,8 +532,12 @@ dotnet test tests/Scramble.Marmot.Tests
 docker compose -f docker-compose.test.yml up -d nostr-relay
 dotnet test tests/Scramble.Diagnostics/ --filter "Category=Integration|Category=MIP-Compliance|Category=ProtocolCompliance|Category=FullE2E|Category=EpochSync|Category=DeviceSync|Category=OutboxModel|Category=Notifications|Category=RelayHarness|Category=ExporterSecret"
 
-# The Dark Matter interop peer
-docker compose -f docker-compose.test.yml up -d --build wn-agent
+# The Dark Matter interop suite. The peer builds from a pinned mdk ref, so the
+# first run is slow; the tests SKIP when it is not up rather than failing.
+docker compose -f docker-compose.test.yml up -d --build nostr-relay wn-agent
+dotnet test tests/Scramble.Diagnostics/ --filter "Category=DarkMatterInterop"
+
+# Driving the peer by hand (it bootstraps itself in the tests)
 docker exec wn-agent-interop wn-agent bootstrap --home /data/marmot-agent `
   --socket /run/marmot-agent/wn-agent.sock --no-quic --json
 
@@ -525,6 +606,9 @@ without the interop suite running).
 | Pinning only to `nip44.vectors.json` | Passes while missing the 2026-06-28 amendment the file predates | Check `44.md` prose and its inline vectors too. |
 | Using a QUIC varint for an MLS vector length | Agrees at every realistic size, then silently diverges past 2^30 | MLS allows 1/2/4 bytes only. `AppDataDictionary.WriteMlsLength` for MLS lengths, `ComponentCodec.WriteVarint` inside component payloads. |
 | Guessing a component id from its name | `0x8002` is the Blossom *image* component; encrypted-media v1 is `0x8008`. Freezing the wrong id would refuse a legal group and admit a frozen one | Read the constant out of `crates/traits/src/app_components/mod.rs`. Every id in `AppComponent` traces to a line there. |
+| Assuming last-resort is an MLS extension | It is component `0x0004` with EMPTY data in the KEYPACKAGE-level `app_data_dictionary`; `0x000a` is the obsolete form, and non-empty data is malformed | Read `KeyPackage::last_resort` in the OpenMLS revision mdk pins, not the extension registry. |
+| Treating a skipped interop suite as a passing one | The tests skip when the container is absent, so a failed image build reads as green | `integration.yml` has an explicit readiness check after the build. Do not remove it as redundant. |
+| Deleting a KeyPackage record because the publish "failed" | A timeout is not a rejection; the event may be live, and erasing its private key is unrecoverable | Only `Rejected` authorises deletion. A throwing transport is `Indeterminate`. |
 | A literal `64` as a varint length prefix in a test fixture | Decodes as the one-byte value 0, so the test still throws — for the wrong reason | Build fixtures through the codec, never by hand. |
 | Letting `CreateKeyPackage` pick the lifetime | `dotnet-mls` defaults to `(0, ulong.MaxValue)`; `wn-agent` refuses it before reading anything else | Always pass a window from `KeyPackageLifetimePolicy`. The bound is OpenMLS's `MAX_LEAF_NODE_LIFETIME_RANGE_SECONDS`, not a Marmot rule, and no Marmot document restates it. |
 | Adding headroom to the KeyPackage validity | The default already sits exactly on the acceptable range; anything above it is refused | The window is `margin + validity` and the peer's check is `<=`. There is no room above. |
