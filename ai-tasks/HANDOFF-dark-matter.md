@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
-**Updated:** 2026-09-01 (eleventh revision) · **Branch:** `feat/dark-matter`
-· **Last commit at time of writing:** `b721255`
+**Updated:** 2026-09-01 (twelfth revision) · **Branch:** `feat/dark-matter`
+· **Last commit at time of writing:** `d67b699`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -27,9 +27,11 @@ and the first live interop suite all landed on 2026-08-31 (§3f, §3g). Our stac
 now validates a KeyPackage the reference implementation actually published, and
 reproduces its bytes exactly. Nothing is wired into the running app yet: the new
 engine is entirely additive and nothing depends on it, so it cannot break the
-shipping product. Create-group landed on 2026-08-31 (§3i), and the last two `dotnet-mls`
-gaps closed on 2026-09-01 (§3j). What remains of **P6** is invite and join, and
-neither is blocked on anything now.
+shipping product. Create-group landed on 2026-08-31 (§3i), the last two `dotnet-mls` gaps closed
+on 2026-09-01 (§3j), and **invite landed the same day (§3k)** — there is a
+two-party group with a member who joined through a Welcome. What remains of
+**P6** is join-from-Welcome, application messages, and proving any of it against
+the live peer in the outbound direction.
 
 ---
 
@@ -37,7 +39,7 @@ neither is blocked on anything now.
 
 Seven new projects, all standalone (no reference to `marmot-cs`), all in
 `Scramble.sln` and `Scramble.Desktop.slnf`, all running in the fast unit gate.
-**772 tests in `Scramble.Marmot.Tests`**, plus **8 in the live
+**786 tests in `Scramble.Marmot.Tests`**, plus **8 in the live
 `DarkMatterInterop` suite** (`tests/Scramble.Diagnostics/DarkMatterInterop/`),
 all passing.
 
@@ -45,7 +47,7 @@ all passing.
 |---|---|---|
 | `src/Scramble.Marmot.Abstractions` | P0/P1/P3 | Ids (`GroupId`, `EpochId`, `MessageId`, `MemberId`), storage contracts and records incl. `IKeyPackageStorage`, `EpochState`, `ITransportPeeler` + `PeeledMessage` |
 | `src/Scramble.Marmot.Storage.Sqlite` | P0/P3 | SQLite provider, migrations, transactions, epoch-anchored snapshots, KeyPackage bundles + private material |
-| `src/Scramble.Marmot.Engine` | P1/P6 | `EpochManager`; `KeyPackages/` — leaf shape, lifetime policy, builder, publisher, publication validator; `Groups/` — `required_capabilities` codec, component negotiation, group creation. **The only project referencing `dotnet-mls`.** |
+| `src/Scramble.Marmot.Engine` | P1/P6 | `EpochManager`; `KeyPackages/` — leaf shape, lifetime policy, builder, publisher, publication validator; `Groups/` — `required_capabilities` codec, component negotiation, group creation, add-members. **The only project referencing `dotnet-mls`.** |
 | `src/Scramble.Marmot.Identity` | P2 | `AccountIdentityProof` (`0x8009`), async signer seam |
 | `src/Scramble.Nostr.Crypto` | P2/P3 | BIP-340, NIP-01 event ids and envelope serialisation, NIP-44 v2, NIP-59 gift wrap, ChaCha20-Poly1305 envelope, secp256k1 |
 | `src/Scramble.Marmot.Wire.Nostr` | P3 | kind-445 codec, kind-444 Welcome, kind-30443 KeyPackage, `NostrGroupPeeler` |
@@ -605,17 +607,7 @@ already take member component sets and are ready for the caller that supplies
 them. The blocker that kept them out — no way to verify a fetched KeyPackage —
 **closed on 2026-09-01** (§3j), so add-members is now just work.
 
-**What P6 needs next**, in order:
-
-1. **Invite / add-members.** Unblocked. `MarmotGroupProfile.Negotiate` and the
-   admin-coupling check take the invitee sets; what is missing is the MLS Add
-   proposal and commit, the Welcome, and the kind-444 publish.
-2. **The outbound interop direction** — a live `wn-agent` joining a group we
-   created. §3g covers inbound only, and this is the half that proves our
-   GroupContext is right.
-3. **Join from a Welcome.** `AppComponentIntegrity.ValidateStagedCommit` and
-   `ValidateUpdateBatch` still have no caller (§3c) — **they must be called as
-   a pair.**
+**What P6 needs next is in §3k**, which supersedes the list that stood here.
 
 ### 3j. The two open gaps are CLOSED — `v0.1.0-beta.10`
 
@@ -673,9 +665,83 @@ the whole reason this suite exists, and it is worth preserving when adding to it
   `ProposalType` enum stops at `AppDataUpdate = 8`.
 - **(d) retained past-epochs — probably avoidable, do not ask yet.** Blocks P8.
 
+### 3k. Invite is DONE — the first two-party group
+
+`d67b699` adds members to a group. **14 tests, mutation-checked**, and one of
+them is the first end-to-end exercise in this work: create a group, add a
+member, have that member process the Welcome and reach the same epoch with the
+same required-component set. That is the KeyPackage builder, the group builder
+and the private-material bundle proving they belong to each other.
+
+**Every gate is ours, because the MLS library has almost none.** It defines
+`ValidateAddLeafCapabilities` for RFC 9420 §12.1.1 and **never calls it**, and
+it has no notion of app components at all. `ValidateInvitee` therefore checks,
+in this order:
+
+1. `MlsGroup.ValidateKeyPackage` — **first**, because everything after it reads
+   fields off the leaf, and reading them from an unverified KeyPackage is
+   reading attacker-chosen values, including the credential returned as a
+   member identity.
+2. Protocol version and ciphersuite (§12.1.1, the check the library skips).
+3. The group's required extension and proposal types.
+4. The group's required **app components** — the Marmot half, invisible to MLS.
+   A member lacking one joins and then cannot honour state everyone else treats
+   as mandatory; the group looks healthy and behaves inconsistently.
+
+**The commit is staged, not applied.** A commit applied locally and never
+published forks the committer into an epoch nobody else can reach, and every
+message they send afterwards is undecryptable by the group they think they are
+in. So: **publish, then apply** — the mirror image of the KeyPackage rule, where
+the private material is persisted *before* the publish. **Whichever step is
+unrecoverable goes second.** The caller finishes with `Applied()` or
+`Discard()`; leaving it unfinished blocks the next commit.
+
+`StagedInvite` is a sealed class, not a positional record, because a record's
+primary constructor is public and one built through it would carry no group and
+throw from `Applied()` **after the commit was already on a relay**.
+
+**Three test corrections, all found by mutation, and the pattern is the point.**
+This is now the third, fourth and fifth time in this work that a test asserted
+less than its name claimed:
+
+- The required-proposal test edited a valid leaf. That breaks the leaf
+  signature, so it tripped the signature gate and asserted nothing about the
+  rule it named. It now builds a correctly signed but non-conformant KeyPackage.
+- There is **no** negative test for the required-*extension* gate, because one
+  cannot be built: `CreateKeyPackage` unions a carried leaf extension's type
+  into the advertised set, and a Marmot leaf always carries the
+  `app_data_dictionary`. A test pins that property instead, so the absence is
+  explained rather than looking like an oversight.
+- "A bad invitee leaves the group untouched" asserted only the epoch — which a
+  commit built *before* validation also satisfies, since `CommitPublic` stages
+  rather than advances. It now asserts `HasPendingCommit` is false, which is
+  what actually distinguishes the two.
+
+**The habit that keeps paying: mutate the code, not just the test.** A green
+suite says nothing about which line is load-bearing.
+
+**Not in scope, deliberately: granting admin.** Upstream couples an admin-policy
+`AppDataUpdate` into the same commit for invite-with-admin-grant. That needs the
+proposal wired through `AppComponentIntegrity`, and doing it badly means an
+admin set no member observed being granted.
+
+**What P6 needs next:**
+
+1. **The outbound interop direction.** A live `wn-agent` joining a group we
+   created — publish the Welcome as kind 444 and the commit as kind 445, and let
+   the agent process them. §3g covers inbound only, and **this is the half that
+   proves our GroupContext is right**; everything about it so far is checked
+   only against our own reading of upstream.
+2. **Join from a Welcome.** `AppComponentIntegrity.ValidateStagedCommit` and
+   `ValidateUpdateBatch` still have no caller (§3c) — **they must be called as a
+   pair.**
+3. **Send and ingest application messages**, which is what makes it a messenger
+   rather than a key-agreement demo.
+4. **Invite-with-admin-grant**, once the `AppDataUpdate` proposal path exists.
+
 ### 3d. Non-code items still open (not blocking)
 
-- **Open a PR for `feat/dark-matter`.** **62 commits** ahead of `master` and
+- **Open a PR for `feat/dark-matter`.** **64 commits** ahead of `master` and
   growing; it is reviewable now and will not be after P6. This is the repo's
   documented flag-day failure mode (I4). *(The user has said a PR is not wanted
   — the plan is to keep going and merge at the end. Recorded here because I4
@@ -785,6 +851,9 @@ without the interop suite running).
 | Pinning only to `nip44.vectors.json` | Passes while missing the 2026-06-28 amendment the file predates | Check `44.md` prose and its inline vectors too. |
 | Using a QUIC varint for an MLS vector length | Agrees at every realistic size, then silently diverges past 2^30 | MLS allows 1/2/4 bytes only. `AppDataDictionary.WriteMlsLength` for MLS lengths, `ComponentCodec.WriteVarint` inside component payloads. |
 | Guessing a component id from its name | `0x8002` is the Blossom *image* component; encrypted-media v1 is `0x8008`. Freezing the wrong id would refuse a legal group and admit a frozen one | Read the constant out of `crates/traits/src/app_components/mod.rs`. Every id in `AppComponent` traces to a line there. |
+| Applying a commit before publishing it | Forks the committer into an epoch nobody else can reach; every message after is undecryptable by the group | Publish, then apply. Whichever step is unrecoverable goes second. |
+| Testing a leaf-capability rule by editing a valid leaf | Editing breaks the leaf signature, so the signature gate fires and the rule under test never runs | Build a correctly signed but non-conformant KeyPackage through `CreateKeyPackage`. |
+| Asserting "the group was untouched" by epoch alone | `CommitPublic` stages rather than advances, so a commit built before validation leaves the epoch unchanged too | Assert `HasPendingCommit` is false. |
 | Reading a last-resort marker by presence | Non-empty data under `0x0004` is malformed, not true — a presence check accepts a KeyPackage the peer refuses | Check the data is EMPTY. And it is a KeyPackage-level component, not a leaf extension and not `0x000a`. |
 | Trusting a fetched KeyPackage because its account proof verifies | The proof binds the account key to the leaf SIGNATURE key only; the leaf signature does not cover `init_key` | Run `MlsGroup.ValidateKeyPackage` first. Without it, a copied leaf plus a swapped `init_key` receives the Welcome, proof intact. |
 | Putting component ids in `required_capabilities` | It is MLS's vocabulary — extension and proposal types only. Components live in the dictionary's own requirement list | Two different registries, two different places. |
