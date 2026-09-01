@@ -33,9 +33,14 @@ RUN cargo build --locked --release -p agent-connector --bin wn-agent
 
 FROM debian:bookworm-slim
 
+# socat is how the tests reach the agent's control socket. The control plane
+# is a Unix socket inside this container and the CLI exposes only
+# `bootstrap`, so without it there is no way to ask the agent anything -
+# including whether it joined a group we invited it to. Test image only.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         libssl3 \
+        socat \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/target/release/wn-agent /usr/local/bin/wn-agent

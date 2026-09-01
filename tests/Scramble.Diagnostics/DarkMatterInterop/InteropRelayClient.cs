@@ -91,6 +91,66 @@ public sealed class InteropRelayClient(string relayUrl)
         return events;
     }
 
+    /// <summary>
+    /// Publishes one event and waits for the relay's OK.
+    /// </summary>
+    /// <param name="envelope">A complete signed event object.</param>
+    /// <exception cref="InvalidOperationException">The relay refused it, or said nothing.</exception>
+    /// <remarks>
+    /// Waits for the OK rather than firing and forgetting. A test that publishes
+    /// and immediately starts polling for a result cannot tell "the peer has not
+    /// reacted yet" from "the relay never took the event", and the second
+    /// failure would be read as the first for the whole timeout.
+    /// </remarks>
+    public async Task PublishAsync(string envelope, TimeSpan timeout, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(timeout);
+
+        using var socket = new ClientWebSocket();
+        await socket.ConnectAsync(new Uri(relayUrl), cts.Token);
+
+        string request = "[\"EVENT\"," + envelope + "]";
+        await socket.SendAsync(
+            Encoding.UTF8.GetBytes(request), WebSocketMessageType.Text, true, cts.Token);
+
+        var buffer = new byte[64 * 1024];
+        while (!cts.Token.IsCancellationRequested)
+        {
+            var message = new StringBuilder();
+            WebSocketReceiveResult result;
+            do
+            {
+                result = await socket.ReceiveAsync(buffer, cts.Token);
+                if (result.MessageType == WebSocketMessageType.Close)
+                    throw new InvalidOperationException("The relay closed before acknowledging.");
+
+                message.Append(Encoding.UTF8.GetString(buffer, 0, result.Count));
+            }
+            while (!result.EndOfMessage);
+
+            using var document = JsonDocument.Parse(message.ToString());
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Array || root.GetArrayLength() < 3)
+                continue;
+
+            if (root[0].GetString() != "OK")
+                continue;
+
+            if (!root[2].GetBoolean())
+            {
+                string reason = root.GetArrayLength() > 3 ? root[3].GetString() ?? "" : "";
+                throw new InvalidOperationException($"The relay rejected the event: {reason}");
+            }
+
+            return;
+        }
+
+        throw new InvalidOperationException("The relay never acknowledged the event.");
+    }
+
     /// <summary>Fetches the KeyPackage publications of one author.</summary>
     public Task<IReadOnlyList<string>> FetchKeyPackagesAsync(
         string authorHex, TimeSpan timeout, CancellationToken ct = default) =>
