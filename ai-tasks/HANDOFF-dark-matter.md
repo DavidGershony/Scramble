@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
-**Updated:** 2026-09-01 (twelfth revision) · **Branch:** `feat/dark-matter`
-· **Last commit at time of writing:** `d67b699`
+**Updated:** 2026-09-01 (thirteenth revision) · **Branch:** `feat/dark-matter`
+· **Last commit at time of writing:** `ab506e0`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -29,9 +29,9 @@ reproduces its bytes exactly. Nothing is wired into the running app yet: the new
 engine is entirely additive and nothing depends on it, so it cannot break the
 shipping product. Create-group landed on 2026-08-31 (§3i), the last two `dotnet-mls` gaps closed
 on 2026-09-01 (§3j), and **invite landed the same day (§3k)** — there is a
-two-party group with a member who joined through a Welcome. What remains of
-**P6** is join-from-Welcome, application messages, and proving any of it against
-the live peer in the outbound direction.
+two-party group with a member who joined through a Welcome. What remains of **P6** is join-from-Welcome, application messages, and the
+outbound interop direction — which is **started and stuck**, with the findings
+in §3l.
 
 ---
 
@@ -39,8 +39,8 @@ the live peer in the outbound direction.
 
 Seven new projects, all standalone (no reference to `marmot-cs`), all in
 `Scramble.sln` and `Scramble.Desktop.slnf`, all running in the fast unit gate.
-**786 tests in `Scramble.Marmot.Tests`**, plus **8 in the live
-`DarkMatterInterop` suite** (`tests/Scramble.Diagnostics/DarkMatterInterop/`),
+**791 tests in `Scramble.Marmot.Tests`**, plus **8 passing and 1 skipped in the
+live `DarkMatterInterop` suite** (`tests/Scramble.Diagnostics/DarkMatterInterop/`),
 all passing.
 
 | Project | Phase | Contains |
@@ -725,19 +725,68 @@ suite says nothing about which line is load-bearing.
 proposal wired through `AppComponentIntegrity`, and doing it badly means an
 admin set no member observed being granted.
 
-**What P6 needs next:**
+**What P6 needs next is in §3l**, which supersedes the list that stood here.
 
-1. **The outbound interop direction.** A live `wn-agent` joining a group we
-   created — publish the Welcome as kind 444 and the commit as kind 445, and let
-   the agent process them. §3g covers inbound only, and **this is the half that
-   proves our GroupContext is right**; everything about it so far is checked
-   only against our own reading of upstream.
-2. **Join from a Welcome.** `AppComponentIntegrity.ValidateStagedCommit` and
-   `ValidateUpdateBatch` still have no caller (§3c) — **they must be called as a
-   pair.**
-3. **Send and ingest application messages**, which is what makes it a messenger
-   rather than a key-agreement demo.
-4. **Invite-with-admin-grant**, once the `AppDataUpdate` proposal path exists.
+### 3l. Welcome publishing is DONE — outbound interop is NOT, and here is exactly where it stopped
+
+`ab506e0` adds `WelcomePublication` and the harness the outbound direction
+needs. **The engine half is verified (5 unit tests, full round trip). The
+end-to-end test is committed skipped**, because it does not pass and the
+investigation is worth more than the code.
+
+**What is verified.** A Welcome is serialized as an `MLSMessage` — the receiver
+deserializes one and extracts the body, so a bare `Welcome` struct is refused
+before anything about the group is read; same rule as the KeyPackage. The rumor
+names the KeyPackage **event id**, not the ref, because that is what a recipient
+looks their own published KeyPackage up by. A unit test wraps, unwraps as the
+recipient, and processes into a joined group at the right epoch. The outer
+gift-wrap ephemeral key is generated inside `Wrap` so it cannot be reused —
+reuse links every invite a sender makes.
+
+**The harness, which is reusable and was the expensive part:**
+
+- **`socat` is now in the test image.** The agent's control plane is a Unix
+  socket and its CLI exposes only `bootstrap`, so before this there was no way
+  to ask the agent anything.
+- `WnAgentDockerClient.ControlAsync` speaks `marmot.agent-control.v2`.
+- `InteropRelayClient.PublishAsync` waits for the relay's `OK` — firing and
+  forgetting makes "the relay never took it" look like "the peer has not
+  reacted yet" for a whole timeout.
+
+**What the failed runs established, which is the real output of this section:**
+
+1. **Our Welcome is on the relay and well-formed.** Verified directly against
+   the relay: kind 1059, correct `p` tag, and a `created_at` inside the NIP-59
+   two-day **backwards** jitter window. The publish path is not the problem.
+2. **The agent subscribes to nothing on its own.** Its relay connection shows
+   `sent: 0 events` in the relay log across 27 hours. `subscribe_inbound` is a
+   **streaming** control request — `connection.rs` returns
+   `stream_inbound_events` and holds the socket — so the relay subscription
+   lives exactly as long as that connection.
+3. **`printf | socat` cannot hold it.** stdin hits EOF the moment printf ends,
+   socat half-closes, and the subscription is gone before any event arrives.
+   The fix is to keep the pipe's writer alive (`{ printf …; sleep N; }`).
+4. **A held subscription starves the control pool.** With one open, `group_info`
+   returns nothing at all — so the obvious test shape (subscribe, publish, poll)
+   cannot work. Read the stream while subscribed; query after releasing.
+
+**What is NOT established, and must not be assumed:** whether holding the
+subscription actually makes the agent fetch and process the Welcome. That was
+never reached.
+
+**A finding to treat carefully.** Twice the agent's data volume was left
+**unstartable** (`startup failed code=app_error`) after a run. That is
+reproducible, but **not cleanly attributable to our Welcome** — manual probing
+killed subscriptions mid-stream in between, and the confound was never isolated.
+Do not report it upstream as a bug until it reproduces from a clean volume with
+no manual interference. Recovery is `docker volume rm scramble_wn-agent-data`
+and a restart; `bootstrap` rebuilds the account, with a new account id.
+
+**The next step is to read, not to guess.** `stream_inbound_events` in
+`crates/agent-connector/src/` will say what the subscription actually drives and
+whether some further session step is needed. Four failed runs' worth of guessing
+was already spent; twenty minutes of reading upstream would have been cheaper,
+which is the same lesson §3e records about the lifetime blocker.
 
 ### 3d. Non-code items still open (not blocking)
 
@@ -851,6 +900,8 @@ without the interop suite running).
 | Pinning only to `nip44.vectors.json` | Passes while missing the 2026-06-28 amendment the file predates | Check `44.md` prose and its inline vectors too. |
 | Using a QUIC varint for an MLS vector length | Agrees at every realistic size, then silently diverges past 2^30 | MLS allows 1/2/4 bytes only. `AppDataDictionary.WriteMlsLength` for MLS lengths, `ComponentCodec.WriteVarint` inside component payloads. |
 | Guessing a component id from its name | `0x8002` is the Blossom *image* component; encrypted-media v1 is `0x8008`. Freezing the wrong id would refuse a legal group and admit a frozen one | Read the constant out of `crates/traits/src/app_components/mod.rs`. Every id in `AppComponent` traces to a line there. |
+| Expecting `wn-agent` to fetch anything without a held subscription | Its relay connection sits at `sent: 0 events`; `subscribe_inbound` is streaming and the subscription dies with the connection | Hold it open, and keep the pipe's writer alive — `printf \| socat` half-closes at EOF. |
+| Polling `group_info` while holding a subscription | A held subscription starves the agent's small control pool and the query returns nothing at all | Read the stream while subscribed; query after releasing. |
 | Applying a commit before publishing it | Forks the committer into an epoch nobody else can reach; every message after is undecryptable by the group | Publish, then apply. Whichever step is unrecoverable goes second. |
 | Testing a leaf-capability rule by editing a valid leaf | Editing breaks the leaf signature, so the signature gate fires and the rule under test never runs | Build a correctly signed but non-conformant KeyPackage through `CreateKeyPackage`. |
 | Asserting "the group was untouched" by epoch alone | `CommitPublic` stages rather than advances, so a commit built before validation leaves the epoch unchanged too | Assert `HasPendingCommit` is false. |
