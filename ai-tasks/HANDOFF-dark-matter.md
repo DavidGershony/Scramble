@@ -741,7 +741,7 @@ admin set no member observed being granted.
 
 ### 3d. Non-code items still open (not blocking)
 
-- **Open a PR for `feat/dark-matter`.** **64 commits** ahead of `master` and
+- **Open a PR for `feat/dark-matter`.** **65 commits** ahead of `master` and
   growing; it is reviewable now and will not be after P6. This is the repo's
   documented flag-day failure mode (I4). *(The user has said a PR is not wanted
   — the plan is to keep going and merge at the end. Recorded here because I4
