@@ -831,6 +831,30 @@ never issues a subscription, so the Welcome sits on the relay unread. (An
 earlier revision said "zero relay connections"; that was measured in too narrow
 a log window and was wrong — it connects, it just never subscribes.)
 
+**The deployed public WhiteNoise runs the Current profile — checked on
+2026-09-02, and this answers plan §5's Q1 empirically.** Read-only probe of
+`wss://relay.eu.whitenoise.chat`:
+
+- It **rejects kind 443** at the filter (`kind not allowed: 443`), the legacy
+  KeyPackage kind. Only `30443` is served.
+- Live kind-30443 events there carry **exactly the shape our pinned
+  `wn-agent-v0.9.10` publishes** — `mls_extensions` `0x0003,0x0006,0xf2d1,
+  0xf2d2,0xf2d4`; `mls_proposals` `0x0008,0x000a`; `app_components`
+  `0x8001`–`0x800c`.
+- **Our stack validates a real production KeyPackage end to end**: the
+  KeyPackageRef we recompute matches theirs byte-for-byte, the lifetime range is
+  exactly `7261200`, the last-resort marker reads correctly, the leaf dictionary
+  is the expected `{0x0001, 0x0002, 0x8009}`, and the BIP-340 account-identity
+  proof verifies.
+
+So the pin is not drifting from production, and the inbound half of our
+implementation is confirmed against the real deployment rather than only against
+a container. **A real WhiteNoise user is therefore a valid interop peer** — which
+matters, because a shipping client subscribes properly and would route around the
+`wn-agent` blocker entirely. Two caveats before doing that: it needs a human on
+the other end so it cannot be a CI gate, and publishing a KeyPackage under a real
+npub to public relays is an outward-facing act that needs a deliberate decision.
+
 **Next step, in order:** raise the relay container's log level to confirm whether
 the agent ever sends a `REQ` at all; then the account worker's sync path —
 `sync_with_startup_stage_telemetry` in `runtime/account_worker.rs`, which runs
