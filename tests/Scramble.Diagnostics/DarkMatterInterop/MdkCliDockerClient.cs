@@ -125,6 +125,24 @@ public sealed class MdkCliDockerClient(Action<string> log)
     public Task SendMessageAsync(string groupIdHex, string text) =>
         CliAsync("messages", "send", "--group", groupIdHex, text);
 
+    /// <summary>Raw JSON of the messages the peer has in a group.</summary>
+    public Task<JsonElement> MessagesAsync(string groupIdHex) =>
+        CliJsonAsync("messages", "list", "--group", groupIdHex);
+
+    /// <summary>
+    /// Whether the peer holds a message with exactly this content.
+    /// </summary>
+    /// <remarks>
+    /// Matched on the message body rather than on an id, because the ids the
+    /// two sides use for a message are not required to agree and asserting on
+    /// them would test our reading of the CLI's JSON rather than interop.
+    /// </remarks>
+    public async Task<bool> HasMessageAsync(string groupIdHex, string content)
+    {
+        JsonElement messages = await MessagesAsync(groupIdHex);
+        return Strings(messages).Any(value => value == content);
+    }
+
     /// <summary>The CLI version, for the test log.</summary>
     public async Task<string> VersionAsync() => (await ExecAsync("wn", "--version")).Trim();
 

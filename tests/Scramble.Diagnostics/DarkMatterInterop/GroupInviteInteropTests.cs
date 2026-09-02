@@ -34,6 +34,7 @@ namespace Scramble.Diagnostics.DarkMatterInterop;
 /// </para>
 /// </remarks>
 [Trait("Category", "DarkMatterInterop")]
+[Collection(DarkMatterInteropCollection.Name)]
 public class GroupInviteInteropTests
 {
     private static readonly TimeSpan RelayTimeout = TimeSpan.FromSeconds(20);

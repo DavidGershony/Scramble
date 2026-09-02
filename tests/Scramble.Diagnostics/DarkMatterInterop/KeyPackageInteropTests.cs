@@ -38,6 +38,7 @@ namespace Scramble.Diagnostics.DarkMatterInterop;
 /// </para>
 /// </remarks>
 [Trait("Category", "DarkMatterInterop")]
+[Collection(DarkMatterInteropCollection.Name)]
 public class KeyPackageInteropTests
 {
     private static readonly TimeSpan FetchTimeout = TimeSpan.FromSeconds(20);
