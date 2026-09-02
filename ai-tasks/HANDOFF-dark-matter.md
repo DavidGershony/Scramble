@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
-**Updated:** 2026-09-01 (thirteenth revision) · **Branch:** `feat/dark-matter`
-· **Last commit at time of writing:** `ab506e0`
+**Updated:** 2026-09-02 (fourteenth revision) · **Branch:** `feat/dark-matter`
+· **Last commit at time of writing:** `b889092`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -727,7 +727,7 @@ admin set no member observed being granted.
 
 **What P6 needs next is in §3l**, which supersedes the list that stood here.
 
-### 3l. Welcome publishing is DONE — outbound interop is NOT, and here is exactly where it stopped
+### 3l. Welcome publishing is DONE — outbound interop is blocked INSIDE the agent
 
 `ab506e0` adds `WelcomePublication` and the harness the outbound direction
 needs. **The engine half is verified (5 unit tests, full round trip). The
@@ -774,19 +774,60 @@ reuse links every invite a sender makes.
 subscription actually makes the agent fetch and process the Welcome. That was
 never reached.
 
-**A finding to treat carefully.** Twice the agent's data volume was left
-**unstartable** (`startup failed code=app_error`) after a run. That is
-reproducible, but **not cleanly attributable to our Welcome** — manual probing
-killed subscriptions mid-stream in between, and the confound was never isolated.
-Do not report it upstream as a bug until it reproduces from a clean volume with
-no manual interference. Recovery is `docker volume rm scramble_wn-agent-data`
-and a restart; `bootstrap` rebuilds the account, with a new account id.
+**The agent's state does get wedged, and our Welcome is not the cause.** The
+first revision of this section wondered whether it was; it is not. What is
+established, and the nuance matters because a first correction over-claimed:
 
-**The next step is to read, not to guess.** `stream_inbound_events` in
-`crates/agent-connector/src/` will say what the subscription actually drives and
-whether some further session step is needed. Four failed runs' worth of guessing
-was already spent; twenty minutes of reading upstream would have been cheaper,
-which is the same lesson §3e records about the lifetime blocker.
+- **Two `wn-agent` instances on one SQLite home corrupts it, provably.** A
+  `docker run` probe against `scramble_wn-agent-data` while the compose
+  container is up will do it. **Never do that** — stop the compose container
+  first, or use a separate volume.
+- **That is not the only path.** The volume was later left unstartable again
+  with only one instance ever running, after a session that held and killed
+  `subscribe_inbound` streams. **That trigger was not isolated**, and it should
+  not be reported upstream until it is.
+- **A clean single-instance run of the whole suite leaves the agent healthy** —
+  verified twice, including immediately after this was written.
+
+The symptom sequence is recognisable: `bootstrap` starts timing out (30s) while
+`account_list` still answers instantly — that is a wedged account worker — and a
+restart from that state fails with `startup failed code=app_error`. **Recovery is
+`docker volume rm scramble_wn-agent-data` and a restart**; `bootstrap` rebuilds
+the account with a new id, and the suite goes green again.
+
+**Reading the source settled the mechanism.** `subscribe_inbound` →
+`stream_inbound_events` → a **one-shot** catch-up at subscription start:
+`reconcile()` spawns an account worker per active account, then one `CatchUp`
+command goes to each. There is no periodic re-fetch in that loop. So subscribing
+first and publishing after leaves the catch-up already run — which is why the
+order was inverted. It did not help.
+
+**Everything on our side is now ruled out.** Each of these was checked
+directly, not inferred:
+
+- The Welcome **is** on the relay, correct `p` tag, inside the NIP-59
+  backwards-jitter window.
+- The agent's account is **active and local-signing** (`account.json`), so
+  `reconcile()`'s filter admits it.
+- The agent publishes **kind-10002 and kind-10050 relay lists, both naming our
+  relay** — it knows exactly where to listen.
+- **Ordering is not it.** Publishing before and after subscribing were both
+  tried.
+
+**What remains is inside the agent, and it is precisely bounded: with
+`subscribe_inbound` held open for 35 seconds it opens ZERO relay connections.**
+The subscription acks, the catch-up completes without error and without emitting
+anything, and the relay logs no connection at all. It never dials, so it never
+fetches.
+
+**The next step is the account worker's relay plane** — why a worker spawned by
+`reconcile()` and handed `relay_plane` never connects. **Do not re-investigate
+the publish side; it is settled.**
+
+**The process lesson, twice learned now.** Four runs were spent guessing before
+reading `stream_inbound_events`, and the reading took twenty minutes and
+immediately produced the one-shot-catch-up fact. §3e records the same lesson
+about the lifetime blocker. Read the peer first.
 
 ### 3d. Non-code items still open (not blocking)
 
@@ -900,6 +941,8 @@ without the interop suite running).
 | Pinning only to `nip44.vectors.json` | Passes while missing the 2026-06-28 amendment the file predates | Check `44.md` prose and its inline vectors too. |
 | Using a QUIC varint for an MLS vector length | Agrees at every realistic size, then silently diverges past 2^30 | MLS allows 1/2/4 bytes only. `AppDataDictionary.WriteMlsLength` for MLS lengths, `ComponentCodec.WriteVarint` inside component payloads. |
 | Guessing a component id from its name | `0x8002` is the Blossom *image* component; encrypted-media v1 is `0x8008`. Freezing the wrong id would refuse a legal group and admit a frozen one | Read the constant out of `crates/traits/src/app_components/mod.rs`. Every id in `AppComponent` traces to a line there. |
+| Running a second `wn-agent` against the live compose volume | Two instances on one SQLite home corrupt it | Stop the compose container first, or use a separate volume. |
+| `bootstrap` timing out while `account_list` answers instantly | A wedged account worker; a restart from here fails `startup failed code=app_error` | `docker volume rm scramble_wn-agent-data` and restart. Not caused by our Welcome; the trigger is not isolated (§3l). |
 | Expecting `wn-agent` to fetch anything without a held subscription | Its relay connection sits at `sent: 0 events`; `subscribe_inbound` is streaming and the subscription dies with the connection | Hold it open, and keep the pipe's writer alive — `printf \| socat` half-closes at EOF. |
 | Polling `group_info` while holding a subscription | A held subscription starves the agent's small control pool and the query returns nothing at all | Read the stream while subscribed; query after releasing. |
 | Applying a commit before publishing it | Forks the committer into an epoch nobody else can reach; every message after is undecryptable by the group | Publish, then apply. Whichever step is unrecoverable goes second. |

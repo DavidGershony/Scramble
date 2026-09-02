@@ -64,18 +64,18 @@ public class GroupInviteInteropTests
     }
 
     [Fact(Skip =
-        "Does not pass yet, and is kept because the investigation is the value. " +
-        "Established: the Welcome we publish reaches the relay, correctly p-tagged " +
-        "and within the NIP-59 backwards-jitter window; the agent holds a relay " +
-        "connection the relay logs as 'sent: 0 events', so nothing is subscribed " +
-        "until a client holds subscribe_inbound open. Not established: whether a " +
-        "held subscription actually makes it fetch, because a held subscription " +
-        "starves the agent's control pool and the group query then returns nothing. " +
-        "Twice the agent's data volume was left unstartable (startup failed " +
-        "code=app_error) after a run — reproducible, but NOT cleanly attributable " +
-        "to our Welcome: manual probing killed subscriptions mid-stream in between, " +
-        "and that confound was never isolated. Next step is to read " +
-        "stream_inbound_events in agent-connector rather than to keep guessing.")]
+        "Does not pass yet. The failure is bounded, and everything on OUR side is " +
+        "ruled out: the Welcome reaches the relay correctly p-tagged and inside " +
+        "the NIP-59 backwards-jitter window; the agent's account is active and " +
+        "local-signing; it publishes kind-10002 and kind-10050 relay lists both " +
+        "naming our relay; and the ordering is not it (publishing before and " +
+        "after subscribing were both tried). What remains is inside the agent: " +
+        "with subscribe_inbound held open for 35s it opens ZERO relay " +
+        "connections, so it never fetches the Welcome. subscribe_inbound acks, " +
+        "its one-shot catch-up completes without error and without emitting " +
+        "anything. Next step is the account worker's relay plane - reconcile() " +
+        "spawns a worker per active account and sends it CatchUp; find out why " +
+        "that worker never dials. Do NOT re-investigate the publish side.")]
     public async Task TheReferenceAgentJoinsAGroupWeCreated()
     {
         var agent = new WnAgentDockerClient(_log.Add);
@@ -84,20 +84,6 @@ public class GroupInviteInteropTests
         AgentBootstrap bootstrap = await agent.BootstrapAsync();
         string groupIdHex;
         var relay = new InteropRelayClient(InteropRelayClient.DefaultRelayUrl);
-
-        // 0. Subscribe FIRST and hold it. The agent fetches nothing while nobody
-        //    is subscribed — the relay log shows its connection sitting at
-        //    "sent: 0 events" — so publishing before this point publishes into
-        //    silence.
-        //    Disposed in a finally, not a `using`: it has to be released before
-        //    step 5 can query, and a test that fails in between must not leave it
-        //    holding one of the agent's few control slots — that starves every
-        //    later request, including bootstrap, and reads as the agent hanging.
-        InboundSubscription inbound = agent.SubscribeInbound(bootstrap.AccountIdHex);
-        try
-        {
-            await Task.Delay(TimeSpan.FromSeconds(3));
-            Assert.True(inbound.IsAlive, "The inbound subscription died immediately.");
 
         // 1. Fetch the agent's KeyPackage and the event id that names it. The
         //    Welcome must cite the EVENT id — that is how the agent finds the
@@ -136,12 +122,26 @@ public class GroupInviteInteropTests
 
         await relay.PublishAsync(wrapped, RelayTimeout);
         staged.Applied();
+        groupIdHex = Convert.ToHexString(group.GroupId).ToLowerInvariant();
 
-        // 4. Watch the stream, not the socket. A held subscription starves the
-        //    agent's small control pool, so a concurrent group_info poll gets
-        //    nothing back — the stream is the only channel that reports anything
-        //    while it is open.
-            groupIdHex = Convert.ToHexString(group.GroupId).ToLowerInvariant();
+        // 4. Subscribe AFTER publishing, which is the whole trick. Reading
+        //    stream_inbound_events: a subscription's catch-up runs ONCE, at
+        //    subscription start — reconcile() spawns the account worker, then one
+        //    CatchUp command goes to each. Subscribing first and publishing after
+        //    means the catch-up already ran and found nothing, and nothing
+        //    re-fetches. Publishing first puts the Welcome where the catch-up
+        //    will look.
+        //
+        //    Disposed in a finally: a held subscription starves the agent's small
+        //    control pool, so a test that fails in between must not leave one
+        //    holding a slot — that breaks every later request, bootstrap
+        //    included, and reads as the agent hanging.
+        InboundSubscription inbound = agent.SubscribeInbound(bootstrap.AccountIdHex);
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(3));
+            Assert.True(inbound.IsAlive, "The inbound subscription died immediately.");
+
             await WaitForStreamActivityAsync(inbound);
 
             foreach (string line in inbound.Lines)
