@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
-**Updated:** 2026-09-02 (fourteenth revision) · **Branch:** `feat/dark-matter`
-· **Last commit at time of writing:** `b889092`
+**Updated:** 2026-09-02 (fifteenth revision) · **Branch:** `feat/dark-matter`
+· **Last commit at time of writing:** `fdea0ad`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -30,8 +30,8 @@ engine is entirely additive and nothing depends on it, so it cannot break the
 shipping product. Create-group landed on 2026-08-31 (§3i), the last two `dotnet-mls` gaps closed
 on 2026-09-01 (§3j), and **invite landed the same day (§3k)** — there is a
 two-party group with a member who joined through a Welcome. What remains of **P6** is join-from-Welcome, application messages, and the
-outbound interop direction — which is **started and stuck**, with the findings
-in §3l.
+outbound interop direction, which is **green as of 2026-09-02 (§3m)** — the
+reference client joins a group we create.
 
 ---
 
@@ -866,6 +866,66 @@ reading `stream_inbound_events`, and the reading took twenty minutes and
 immediately produced the one-shot-catch-up fact. §3e records the same lesson
 about the lifetime blocker. Read the peer first.
 
+### 3m. OUTBOUND INTEROP IS GREEN — and it found a real bug
+
+`fdea0ad`. **The Marmot reference client joins a group Scramble created**,
+unattended: it reads our Welcome off the relay, decodes our GroupContext,
+accepts, joins, and reports both accounts as members. This is the assertion the
+engine existed to reach.
+
+**Use the right peer. There are three and only one works:**
+
+| Peer | What it is | Verdict |
+|---|---|---|
+| `tests/whitenoise-docker` | `whitenoise-rs` | **Archived upstream** ("this repository is obsolete"), pins `mdk-core 0.8.0`. Legacy protocol only. Keep while `Scramble.Core` ships on it. |
+| `tests/wn-agent-docker` | the agent connector | Dark Matter, but a **gateway** — it connects to a relay only to publish and never subscribes, so an invite to it is never read. Fine for KeyPackage-shape checks. |
+| `tests/mdk-cli-docker` | **`mdk`'s own `crates/cli`** | **This one.** A full client: groups, invites, messages, sync. |
+
+**Three settings make it work headless**, and each replaces something the old
+image needed a source patch for:
+
+- `--secret-store file` — there is no OS keychain in a container.
+- `daemon start --discovery-relays / --default-account-relays` — no patching of
+  hardcoded relay defaults.
+- **`WN_ALLOW_LOOPBACK_RELAYS=1`** — without it *every* relay URL a container can
+  be given is rejected as `invalid_relay_url`. There is no CLI flag for this.
+
+Also: the CLI refuses to guess between identities once a peer has more than one
+(`multiple accounts exist; pass --account`), so the harness passes `--account` on
+every command.
+
+**The bug it found, immediately, which is the whole point of building it.** Our
+groups omitted the **Nostr routing component `0x8004`**. The reference client
+refused them outright:
+
+> `invalid Nostr routing component: group is missing marmot.transport.nostr.routing.v1`
+
+A peer reads the transport group id and the group's relays out of that component
+and **nowhere else**, so a group without it cannot be addressed at all. That is
+not a missing feature — it is an unusable group. **Every unit test we had passed
+while we emitted them**, because nothing but a real peer can judge what we
+produce. Creating a group now requires relays and seeds a routing component with
+a random 32-byte `nostr_group_id` — random rather than derived from the MLS group
+id, which would let a relay link the two.
+
+**Verified by mutation:** removing `0x8004` again turns the interop test red.
+
+**The lesson, and it is the one this whole phase keeps teaching.** Reading what
+we *consume* proves our decoders. Only a peer consuming what we *produce* proves
+anything else. Three separate correctness bugs — the unbounded lifetime, the
+deferred `0x800c`, and now `0x8004` — were all invisible to a green unit suite.
+
+**What P6 needs next:**
+
+1. **Application messages.** Send a kind-445 the peer can read, and read one it
+   sends. That makes it a messenger rather than a key-agreement demo, and the
+   peer has `messages send` ready to drive.
+2. **Join from a Welcome** — the inbound half.
+   `AppComponentIntegrity.ValidateStagedCommit` and `ValidateUpdateBatch` still
+   have no caller (§3c); **they must be called as a pair.**
+3. **Wire `mdk-cli` into `integration.yml`** so this is a merge gate, not a
+   local-only proof.
+
 ### 3d. Non-code items still open (not blocking)
 
 - **Open a PR for `feat/dark-matter`.** **65 commits** ahead of `master` and
@@ -980,6 +1040,8 @@ without the interop suite running).
 | Guessing a component id from its name | `0x8002` is the Blossom *image* component; encrypted-media v1 is `0x8008`. Freezing the wrong id would refuse a legal group and admit a frozen one | Read the constant out of `crates/traits/src/app_components/mod.rs`. Every id in `AppComponent` traces to a line there. |
 | Running a second `wn-agent` against the live compose volume | Two instances on one SQLite home corrupt it | Stop the compose container first, or use a separate volume. |
 | `bootstrap` timing out while `account_list` answers instantly | A wedged account worker; a restart from here fails `startup failed code=app_error` | `docker volume rm scramble_wn-agent-data` and restart. Not caused by our Welcome; the trigger is not isolated (§3l). |
+| Creating a group without the Nostr routing component `0x8004` | A peer reads the transport group id and relays from it and nowhere else, so the group cannot be addressed; the reference client refuses it | Seed it at creation with a random 32-byte `nostr_group_id`. A green unit suite will not catch this. |
+| Reaching for `whitenoise-rs` or `wn-agent` as the interop peer | The first is archived and legacy-only; the second never subscribes, so it cannot receive an invite | Use `tests/mdk-cli-docker` — mdk's own CLI. |
 | Expecting `wn-agent` to fetch anything without a held subscription | Its relay connection sits at `sent: 0 events`; `subscribe_inbound` is streaming and the subscription dies with the connection | Hold it open, and keep the pipe's writer alive — `printf \| socat` half-closes at EOF. |
 | Polling `group_info` while holding a subscription | A held subscription starves the agent's small control pool and the query returns nothing at all | Read the stream while subscribed; query after releasing. |
 | Applying a commit before publishing it | Forks the committer into an epoch nobody else can reach; every message after is undecryptable by the group | Publish, then apply. Whichever step is unrecoverable goes second. |
