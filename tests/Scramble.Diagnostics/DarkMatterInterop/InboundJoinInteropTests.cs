@@ -86,17 +86,7 @@ public class InboundJoinInteropTests : IDisposable
             NostrEnvelope.Write(template, id, Bip340.Sign(signer.Secret, id)), RelayTimeout);
     }
 
-    [Fact(Skip =
-        "One requirement left, and it is a product decision rather than a bug. " +
-        "Proposals and app components are now both satisfied. The peer's " +
-        "groups create enables the QUIC agent-text-stream component, whose " +
-        "default policy requires the RECEIVE role - MLS extension 0xf2d1 - of " +
-        "every member. We advertise the component (we can read and honour the " +
-        "policy) but not the role, because we have no QUIC transport. " +
-        "Advertising 0xf2d1 would claim we can be sent stream previews we " +
-        "cannot receive: a bounded degradation rather than a fork, but still a " +
-        "claim we cannot back. Decide whether to claim receive-only or build " +
-        "the transport.")]
+    [Fact]
     public async Task WeJoinAGroupTheReferenceClientCreated()
     {
         var peer = new MdkCliDockerClient(_log.Add);
@@ -156,6 +146,28 @@ public class InboundJoinInteropTests : IDisposable
         Assert.True(
             await WaitForMessageAsync(joined, text),
             $"We never read '{text}' in the group the peer created.\n{Log()}");
+
+        // 6. And it works in both directions from this seat. Sending from a
+        //    group we joined is not the path GroupInteropTests covers: there we
+        //    are the creator, holding state we built ourselves at leaf index 0.
+        //    Here every input came off the Welcome, so a wrong exporter secret,
+        //    transport id or sender index would show up only now.
+        string reply = $"from the invitee {Guid.NewGuid():N}";
+        await _relay.PublishAsync(
+            GroupMessages.Send(
+                joined.Group,
+                new NostrGroupPeeler(),
+                MarmotAppEvent.Chat(us.Hex, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), reply),
+                us.AccountPublicKey.Span),
+            RelayTimeout);
+
+        Assert.True(
+            await WaitForAsync(async () =>
+            {
+                await peer.SyncAsync();
+                return await peer.HasMessageAsync(groupIdHex, reply);
+            }),
+            $"The peer never read the reply we sent into its own group.\n{Log()}");
     }
 
     /// <summary>Polls for a gift wrap addressed to us that we can join from.</summary>

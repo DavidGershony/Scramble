@@ -48,6 +48,42 @@ public static class MarmotLeaf
     public const ushort SelfRemoveProposalType = 0x000a;
 
     /// <summary>
+    /// The three QUIC agent-text-stream role capabilities: receive, send and
+    /// fan-out (<c>0xf2d1</c>, <c>0xf2d2</c>, <c>0xf2d4</c>).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>These are markers, not a transport promise, and that is upstream's
+    /// definition rather than a convenient reading of it.</b> The reference
+    /// client builds its leaf in <c>capabilities.rs</c> <c>leaf_capabilities</c>
+    /// by walking its whole feature registry <i>"regardless of level — that's
+    /// what 'I support this' means at the leaf"</i>. All three roles are in that
+    /// registry, so every conformant client advertises all three; the same
+    /// binary run with <c>--no-quic</c> advertises them too. Whether frames can
+    /// actually flow is a separate runtime question, answered by
+    /// <c>feature_status</c>, not by the leaf.
+    /// </para>
+    /// <para>
+    /// Advertising them is what makes us invitable at all. <c>groups create</c>
+    /// attaches component <c>0x8006</c> unconditionally — no flag, no config —
+    /// with a policy whose <c>required_member_roles</c> is <c>receive</c>, and
+    /// every invitee KeyPackage is checked against it. So there is no such thing
+    /// as a group from the reference client that requires no role of us, and
+    /// carrying the policy without the roles would mean never being invited by
+    /// anyone.
+    /// </para>
+    /// <para>
+    /// All three rather than only <c>receive</c>, because we implement none of
+    /// the three either way: a narrower set would not be more truthful, only
+    /// differently arbitrary, and it would leave us refused by a group requiring
+    /// <c>send</c> where the reference client is admitted. Mirroring the
+    /// reference means we are refused exactly where it is refused.
+    /// </para>
+    /// </remarks>
+    public static readonly IReadOnlyList<ushort> AgentTextStreamRoleExtensionTypes =
+        new ushort[] { 0xf2d1, 0xf2d2, 0xf2d4 };
+
+    /// <summary>
     /// MLS extension types a Current-profile leaf advertises.
     /// </summary>
     /// <remarks>
@@ -57,7 +93,11 @@ public static class MarmotLeaf
     /// makes two publications of the same client byte-comparable.
     /// </remarks>
     public static readonly IReadOnlyList<ushort> ExtensionTypes =
-        new[] { RequiredCapabilitiesExtensionType, MarmotDictionary.ExtensionType };
+    [
+        RequiredCapabilitiesExtensionType,
+        MarmotDictionary.ExtensionType,
+        .. AgentTextStreamRoleExtensionTypes,
+    ];
 
     /// <summary>MLS proposal types a Current-profile leaf advertises.</summary>
     public static readonly IReadOnlyList<ushort> ProposalTypes =

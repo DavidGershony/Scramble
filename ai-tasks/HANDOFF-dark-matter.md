@@ -1046,6 +1046,78 @@ exist.
    `dotnet-mls` change.
 3. **Convergence (P8)**, once membership churn is real.
 
+### 3p. BOTH DIRECTIONS ARE GREEN — the suite has zero skips
+
+The inbound direction works. The reference client creates a group, invites us,
+we join from its Welcome, we read what it sends and it reads what we send back.
+`844` unit and `15` interop tests pass, **none skipped**.
+
+Three things had to be true, and §3o predicted only the first two.
+
+**1. SelfRemove (`0x000a`), released as `dotnet-mls v0.1.0-beta.11`.** The
+library could not decode the proposal type, so a commit carrying one stranded
+every other member at that epoch — a member leaving broke the group for
+everybody. Advertising `0x000a` is honest only since that release.
+
+**2. Components `0x8006` and `0x800b`.** Both implemented as policy codecs. The
+§3o framing — "either implement them or accept that only we can start
+conversations" — was the right call and the answer was implement.
+
+**3. The role capabilities `0xf2d1` / `0xf2d2` / `0xf2d4`, which §3o did not
+see coming, and which were nearly got wrong.** Supporting component `0x8006` is
+not enough. Its policy carries a `required_member_roles` mask, and each role is
+backed by a **separate MLS extension type** checked against every invitee's
+KeyPackage — `required_role_capabilities_from_request_components` in
+`cgka-engine/src/group_lifecycle.rs`, enforced per member and deliberately *not*
+folded into the group's RequiredCapabilities.
+
+`AgentTextStreamPolicy`'s doc comment argued at length that advertising a role
+without a QUIC transport would be dishonest, and that carrying the policy alone
+was "coherent and safe — we can be in a group that requires no roles of us".
+**Both halves were wrong**, and the second is checkable:
+
+- `create_group` in `crates/marmot-app/src/client/mod.rs` pushes `0x8006`
+  **unconditionally** — no flag, no config, no CLI option — with
+  `user_to_agent_default()`, whose `required_member_roles` is `receive`. There
+  is no group from the reference client that requires no role of us. Carrying
+  the policy without the roles means never being invited by anyone.
+- `leaf_capabilities` in `cgka-engine/src/capabilities.rs` builds the reference
+  client's own leaf by walking its **whole** feature registry *"regardless of
+  level — that's what 'I support this' means at the leaf"*. All three roles are
+  registered, so every conformant client advertises all three. The same binary
+  run with `--no-quic` advertises them too.
+
+So a role capability marks understanding, not a live endpoint; availability is
+answered separately by `feature_status`. We advertise all three, because we
+implement none of them either way — a narrower set would not be more truthful,
+only differently arbitrary, and would leave us refused where the reference is
+admitted. `KeyPackageInteropTests.TheReferenceAdvertisesAllThreeStreamRolesWith`
+`outAQuicTransport` pins that reasoning to the running peer, so a pin bump that
+falsifies it fails rather than rotting into a stale comment.
+
+**The generalisable lesson, which is now three-for-three.** Every interop bug
+this project has hit was a place where a difference from the reference had been
+*noticed* and then reasoned away in prose — the `app_components` tag in §3o, and
+now this. Reading upstream is how you form the hypothesis. Running against it is
+the only thing that settles it. When a comment explains why a divergence is
+fine, that comment is a test that has not been written yet.
+
+**Coverage now, in both directions:** discoverability (NIP-65 + NIP-17 +
+KeyPackage), group creation from either side, joining from either side, reading
+and sending from a **creator** seat and from an **invitee** seat (different
+paths: the invitee's exporter secret, transport id and sender index all come off
+the Welcome), multi-message, emoji, three-way groups, removals with transport
+key rotation, and cross-epoch conversations.
+
+**What P6 needs next:**
+
+1. **Convergence (P8)** — the natural next step now that membership churn is
+   real on both sides.
+2. **Keep the suite at zero skips.** `GroupInviteInteropTests` was deleted
+   rather than left skipped: it invited `wn-agent`, which never subscribes and
+   so could never complete. A permanently skipped test reads as coverage and is
+   not.
+
 ### 3d. Non-code items still open (not blocking)
 
 - **Open a PR for `feat/dark-matter`.** **65 commits** ahead of `master` and

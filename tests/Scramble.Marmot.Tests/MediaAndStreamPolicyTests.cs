@@ -97,17 +97,34 @@ public class MediaAndStreamPolicyTests
     }
 
     [Fact]
-    public void TheStreamComponentIsKnownButItsRolesAreNotAdvertised()
+    public void TheStreamComponentAndAllThreeOfItsRolesAreAdvertised()
     {
-        // Supporting the component means reading and honouring the policy. It is
-        // not a claim that we perform the streams: the per-role capabilities are
-        // separate MLS extension types, and a group requiring one correctly
-        // refuses us.
+        // The component says we can read and honour the policy; the three role
+        // capabilities are separate MLS extension types that say we understand
+        // the roles. Upstream advertises all three from its feature registry
+        // "regardless of level", and requires `receive` of every invitee, so
+        // this is the shape of a client that can be invited at all.
         Assert.Contains(AppComponent.AgentTextStreamQuic, CurrentProfile.KnownGroupComponents);
 
-        Assert.DoesNotContain((ushort)0xf2d1, Scramble.Marmot.Engine.KeyPackages.MarmotLeaf.ExtensionTypes);
-        Assert.DoesNotContain((ushort)0xf2d2, Scramble.Marmot.Engine.KeyPackages.MarmotLeaf.ExtensionTypes);
-        Assert.DoesNotContain((ushort)0xf2d4, Scramble.Marmot.Engine.KeyPackages.MarmotLeaf.ExtensionTypes);
+        Assert.Equal(
+            [(ushort)0xf2d1, (ushort)0xf2d2, (ushort)0xf2d4],
+            Scramble.Marmot.Engine.KeyPackages.MarmotLeaf.AgentTextStreamRoleExtensionTypes);
+
+        Assert.All(
+            Scramble.Marmot.Engine.KeyPackages.MarmotLeaf.AgentTextStreamRoleExtensionTypes,
+            role => Assert.Contains(role, Scramble.Marmot.Engine.KeyPackages.MarmotLeaf.ExtensionTypes));
+    }
+
+    [Fact]
+    public void TheRoleCapabilitiesAreExtensionTypesAndNotComponents()
+    {
+        // The two sets are read from different places in a leaf - the extension
+        // list and the component dictionary - so a role id appearing among the
+        // components would be advertised where nothing looks for it, and the
+        // requirement would still be unmet.
+        Assert.All(
+            Scramble.Marmot.Engine.KeyPackages.MarmotLeaf.AgentTextStreamRoleExtensionTypes,
+            role => Assert.DoesNotContain(role, CurrentProfile.KnownGroupComponents));
     }
 
     // ---- Encrypted media v2, 0x800b ----

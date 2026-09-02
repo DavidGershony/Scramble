@@ -36,18 +36,23 @@ public enum AgentTextStreamRoles : byte
 /// <b>Supporting this component is not the same as performing the streams.</b>
 /// The component is a policy: which roles the group requires and allows, and
 /// the frame, replay and padding limits. Being able to decode and honour it is
-/// what the <c>0x8006</c> advertisement means. Actually receiving or sending
-/// frames requires the per-role extension capabilities (<c>0xf2d1</c>,
-/// <c>0xf2d2</c>, <c>0xf2d4</c>), which are separate and which this
-/// implementation does not advertise.
+/// what the <c>0x8006</c> advertisement means. The per-role capabilities
+/// (<c>0xf2d1</c>, <c>0xf2d2</c>, <c>0xf2d4</c>) are separate MLS extension
+/// types, read from the leaf's extension list rather than its component
+/// dictionary, and a group requiring a role refuses a member who lacks it at
+/// invite time.
 /// </para>
 /// <para>
-/// That distinction is upstream's, not ours: <c>capabilities_of_leaf</c> reads
-/// app components from the leaf's dictionary and role capabilities from the MLS
-/// extension list, and a group requiring a role rejects a member who lacks it at
-/// invite time. So carrying the policy without the roles is coherent and safe —
-/// we can be in a group that requires no roles of us, and are correctly refused
-/// by one that does.
+/// We advertise all three — see
+/// <c>MarmotLeaf.AgentTextStreamRoleExtensionTypes</c> for why that is honest
+/// rather than a claim to a QUIC transport we do not have. The short version is
+/// that upstream builds its own leaf by walking every registered feature
+/// "regardless of level", so the role capabilities mark understanding, not a
+/// live endpoint. <b>This paragraph used to say the opposite</b>, and reasoned
+/// that carrying the policy without the roles was "coherent and safe — we can
+/// be in a group that requires no roles of us". There is no such group: the
+/// reference client attaches this component to every group it creates, with
+/// <c>receive</c> required. That reading cost us every inbound invitation.
 /// </para>
 /// <para>
 /// Exactly 12 bytes, big-endian, no framing.

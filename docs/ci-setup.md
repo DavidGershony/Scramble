@@ -154,10 +154,11 @@ integration suite, per
 invariant I2. The engine is protocol code; it must not be able to land
 without the interop suite having run.
 
-`DarkMatterInterop` is not yet in the filter union because no tests carry the
-category yet. The peer it needs, however, now exists: `docker-compose.test.yml`
-has a `wn-agent` service. Add the category to the filter in the same PR that
-adds the first test, per the rules above.
+**The suite must stay at zero skips.** It reached that on 2026-09-02, when the
+inbound-join test went green and the last permanently-skipped test
+(`GroupInviteInteropTests`, the `wn-agent` invite, which that peer can never
+complete) was deleted rather than left standing. A skip here reads as coverage
+and is not: prefer deleting a test the peer cannot run, or fixing it.
 
 ### The two interop peers
 

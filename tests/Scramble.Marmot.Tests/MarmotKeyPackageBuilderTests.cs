@@ -63,10 +63,17 @@ public class MarmotKeyPackageBuilderTests
         var bundle = await BuildAsync();
         var capabilities = bundle.KeyPackage.LeafNode.Capabilities;
 
-        // required_capabilities and app_data_dictionary. 0x8009 must NOT be
-        // here: it is an extension capability only in the Legacy profile, and
-        // advertising it is a Legacy tell.
-        Assert.Equal(new ushort[] { 0x0003, 0x0006 }, capabilities.Extensions.Order().ToArray());
+        // required_capabilities, app_data_dictionary, and the three
+        // agent-text-stream role markers. 0x8009 must NOT be here: it is an
+        // extension capability only in the Legacy profile, and advertising it is
+        // a Legacy tell.
+        //
+        // The roles are what make us invitable: the reference client attaches
+        // component 0x8006 to every group it creates, unconditionally, with
+        // `receive` required of every invitee.
+        Assert.Equal(
+            new ushort[] { 0x0003, 0x0006, 0xf2d1, 0xf2d2, 0xf2d4 },
+            capabilities.Extensions.Order().ToArray());
 
         // app_data_update and self_remove. The reference client requires both of
         // every member, and self_remove is 0x000a rather than 0x0009 — the two

@@ -160,10 +160,34 @@ public class KeyPackageInteropTests
         Assert.DoesNotContain(AccountIdentityProof.ComponentId, capabilities.Extensions);
 
         // Everything we advertise, the reference advertises too. The converse
-        // does not hold and is not asserted: the agent adds its feature-registry
-        // extensions and the SelfRemove proposal, which we cannot yet encode.
+        // is still not asserted: it registers features we have no id for.
         Assert.All(MarmotLeaf.ExtensionTypes, e => Assert.Contains(e, capabilities.Extensions));
         Assert.All(MarmotLeaf.ProposalTypes, p => Assert.Contains(p, capabilities.Proposals));
+    }
+
+    [Fact]
+    public async Task TheReferenceAdvertisesAllThreeStreamRolesWithoutAQuicTransport()
+    {
+        var fetched = await FetchAgentKeyPackageAsync();
+        Assert.SkipWhen(fetched is null, "The wn-agent interop peer is not running.");
+
+        var (_, keyPackage) = fetched!.Value;
+
+        // The evidence for advertising 0xf2d1/0xf2d2/0xf2d4 ourselves, and the
+        // reason it is not a claim to a transport we lack.
+        //
+        // This peer publishes with QUIC off. If a role capability meant "I have
+        // a live QUIC endpoint", it could advertise none of these. It advertises
+        // all three, because upstream's leaf_capabilities walks its whole
+        // feature registry regardless of level - the roles mark understanding,
+        // and feature_status answers availability separately.
+        //
+        // Should a bumped pin ever publish a leaf without them, this fails, and
+        // the comment on MarmotLeaf.AgentTextStreamRoleExtensionTypes becomes
+        // false with it. Re-derive rather than deleting the assertion.
+        Assert.All(
+            MarmotLeaf.AgentTextStreamRoleExtensionTypes,
+            role => Assert.Contains(role, keyPackage.LeafNode.Capabilities.Extensions));
     }
 
     [Fact]
