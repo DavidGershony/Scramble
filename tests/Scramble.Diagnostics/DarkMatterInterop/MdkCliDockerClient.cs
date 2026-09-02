@@ -114,6 +114,48 @@ public sealed class MdkCliDockerClient(Action<string> log)
     public Task AcceptInviteAsync(string groupIdHex) =>
         CliAsync("groups", "accept", groupIdHex);
 
+    /// <summary>
+    /// Whether the peer can resolve an account well enough to invite it.
+    /// </summary>
+    /// <remarks>
+    /// The peer needs relay lists <b>and</b> a fetchable KeyPackage. Asking it
+    /// directly turns "we are not discoverable" into a named failure instead of
+    /// a group that silently never arrives.
+    /// </remarks>
+    public async Task<bool> CanInviteAsync(string pubkeyHex)
+    {
+        try
+        {
+            JsonElement response = await CliJsonAsync("keys", "check", pubkeyHex);
+
+            // The peer answers with an explicit `available` flag. Read it rather
+            // than scanning the text: an earlier version searched for the word
+            // "missing" and matched the empty `missing: []` array that a
+            // perfectly resolvable account also carries.
+            if (response.TryGetProperty("result", out var result)
+                && result.TryGetProperty("available", out var available)
+                && available.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            {
+                if (!available.GetBoolean())
+                    log($"keys check says not available: {result}");
+
+                return available.GetBoolean();
+            }
+
+            log($"keys check gave no available flag: {response}");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            log($"keys check: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>Creates a group with the given members.</summary>
+    public Task CreateGroupAsync(string name, params string[] memberPubkeys) =>
+        CliAsync(["groups", "create", name, .. memberPubkeys]);
+
     /// <summary>Raw JSON of the account's groups.</summary>
     public Task<JsonElement> GroupsAsync() => CliJsonAsync("groups", "list");
 

@@ -35,7 +35,7 @@ public sealed class StagedInvite
     internal StagedInvite(
         MlsGroup group,
         PublicMessage commit,
-        Welcome welcome,
+        Welcome? welcome,
         IReadOnlyList<byte[]> addedAccounts)
     {
         // A class with an internal constructor rather than a positional record:
@@ -51,10 +51,21 @@ public sealed class StagedInvite
     /// <summary>The commit, framed as a PublicMessage.</summary>
     public PublicMessage Commit { get; }
 
-    /// <summary>The Welcome for the added members.</summary>
-    public Welcome Welcome { get; }
+    /// <summary>
+    /// The Welcome for the added members, or null when nobody was added.
+    /// </summary>
+    /// <remarks>
+    /// Null is the expected shape for a removal — nobody is being admitted, so
+    /// there is nothing to admit them with. For an add it is never null:
+    /// <see cref="MarmotGroupInvite.Add"/> refuses a commit that added members
+    /// and produced none, because those members would be in the tree and unable
+    /// to derive a single group secret.
+    /// </remarks>
+    public Welcome? Welcome { get; }
 
-    /// <summary>The account keys added, in the order given.</summary>
+    /// <summary>
+    /// The account keys this commit added or removed, in the order given.
+    /// </summary>
     public IReadOnlyList<byte[]> AddedAccounts { get; }
 
     /// <summary>
@@ -229,6 +240,89 @@ public static class MarmotGroupInvite
         }
 
         return new StagedInvite(group, commit, welcome, accounts);
+    }
+
+    /// <summary>
+    /// Builds a commit removing members by account key, without applying it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Staged like an add, and for the same reason: a removal applied before it
+    /// is published leaves the committer alone in an epoch the group never
+    /// reaches, and now believing someone is gone who is not.
+    /// </para>
+    /// <para>
+    /// Removing the last admin is <b>not</b> refused here. Admin authority is
+    /// group state, and whether a commit may drop it belongs with the commit
+    /// authorization rules rather than with the mechanics of building one —
+    /// putting a second, weaker copy of that rule here would let the two
+    /// disagree.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentException">
+    /// An account is not a member, or the list is empty, or it would empty the
+    /// group.
+    /// </exception>
+    public static StagedInvite Remove(
+        MlsGroup group, IReadOnlyList<byte[]> accounts)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+        ArgumentNullException.ThrowIfNull(accounts);
+
+        if (accounts.Count == 0)
+            throw new ArgumentException("There is nobody to remove.", nameof(accounts));
+
+        var members = group.GetMembers();
+        var proposals = new List<Proposal>(accounts.Count);
+        var removed = new List<byte[]>(accounts.Count);
+
+        foreach (byte[] account in accounts)
+        {
+            ArgumentNullException.ThrowIfNull(account);
+
+            uint? leafIndex = null;
+            foreach (var (index, identity) in members)
+            {
+                if (identity.AsSpan().SequenceEqual(account))
+                {
+                    leafIndex = index;
+                    break;
+                }
+            }
+
+            if (leafIndex is null)
+            {
+                throw new ArgumentException(
+                    $"Account {Convert.ToHexString(account).ToLowerInvariant()} is not a member.",
+                    nameof(accounts));
+            }
+
+            if (removed.Any(existing => existing.AsSpan().SequenceEqual(account)))
+            {
+                throw new ArgumentException(
+                    $"Account {Convert.ToHexString(account).ToLowerInvariant()} appears twice.",
+                    nameof(accounts));
+            }
+
+            proposals.Add(group.ProposeRemove(leafIndex.Value));
+            removed.Add(account);
+        }
+
+        if (removed.Count >= members.Count)
+        {
+            // An empty group cannot be committed to by anyone, so it can never
+            // be repaired or left cleanly. Disband is a separate operation with
+            // its own semantics.
+            throw new ArgumentException(
+                "Removing every member would leave a group nobody can commit to; disband it instead.",
+                nameof(accounts));
+        }
+
+        var (commit, welcome) = group.CommitPublic(proposals);
+
+        // A removal produces no Welcome — nobody is being admitted — so unlike
+        // Add, a null here is the expected shape rather than a failure.
+        return new StagedInvite(group, commit, welcome, removed);
     }
 
     /// <summary>

@@ -88,6 +88,28 @@ public static class MarmotLeaf
     }
 
     /// <summary>
+    /// The subset of an advertised set that belongs in the kind-30443
+    /// <c>app_components</c> tag.
+    /// </summary>
+    /// <remarks>
+    /// <b>Private-use ids only.</b> The tag must match the decoded leaf's
+    /// components <i>exactly</i> — a peer recomputes it and refuses the whole
+    /// publication on any difference ("app_components tag does not exactly match
+    /// decoded KeyPackage metadata") — but it recomputes it from the leaf list
+    /// filtered to <c>&gt;= 0x8000</c>. So <c>0x0001</c> and <c>0x0002</c> live
+    /// in the leaf dictionary and must <b>not</b> appear in the tag. Emitting
+    /// them makes the account unresolvable: no peer will invite it, and the
+    /// failure surfaces as a group that never arrives rather than as a rejected
+    /// publish.
+    /// </remarks>
+    public static IReadOnlySet<ushort> TaggedComponents(IReadOnlySet<ushort> advertised)
+    {
+        ArgumentNullException.ThrowIfNull(advertised);
+
+        return new SortedSet<ushort>(advertised.Where(AppComponent.IsPrivateUse));
+    }
+
+    /// <summary>
     /// Builds the leaf's <c>app_data_dictionary</c>.
     /// </summary>
     /// <remarks>

@@ -212,6 +212,7 @@ public static class MarmotKeyPackageBuilder
             CipherSuites: new[] { cs.Id },
             MlsExtensions: keyPackage.LeafNode.Capabilities.Extensions.ToArray(),
             MlsProposals: keyPackage.LeafNode.Capabilities.Proposals.ToArray(),
-            AppComponents: MarmotLeaf.AdvertisedComponents(supported).ToArray());
+            AppComponents: MarmotLeaf.TaggedComponents(
+                MarmotLeaf.AdvertisedComponents(supported)).ToArray());
     }
 }

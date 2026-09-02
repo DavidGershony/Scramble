@@ -320,6 +320,132 @@ public class MarmotGroupInviteTests
         Assert.Throws<ArgumentException>(() => MarmotGroupInvite.Add(group.Group, _cs, []));
     }
 
+    // ---- Removing members ----
+
+    [Fact]
+    public async Task RemovingAMemberAdvancesTheEpochAndDropsThem()
+    {
+        var group = await NewGroupAsync();
+        var first = await NewInviteeAsync();
+        var second = await NewInviteeAsync();
+
+        MarmotGroupInvite.Add(group.Group, _cs, [first.KeyPackage, second.KeyPackage]).Applied();
+        Assert.Equal(3, group.Group.GetMembers().Count);
+
+        var credential = Assert.IsType<BasicCredential>(first.KeyPackage.LeafNode.Credential);
+        StagedInvite staged = MarmotGroupInvite.Remove(group.Group, [credential.Identity]);
+
+        // Staged, like an add: a removal applied before it is published leaves
+        // the committer believing someone is gone who is not.
+        Assert.Equal(1UL, group.Group.Epoch);
+        staged.Applied();
+        Assert.Equal(2UL, group.Group.Epoch);
+
+        var remaining = group.Group.GetMembers()
+            .Select(m => Convert.ToHexString(m.identity).ToLowerInvariant())
+            .ToHashSet();
+
+        Assert.Equal(2, remaining.Count);
+        Assert.DoesNotContain(
+            Convert.ToHexString(credential.Identity).ToLowerInvariant(), remaining);
+    }
+
+    [Fact]
+    public async Task ARemovalProducesNoWelcome()
+    {
+        var group = await NewGroupAsync();
+        var invitee = await NewInviteeAsync();
+        MarmotGroupInvite.Add(group.Group, _cs, [invitee.KeyPackage]).Applied();
+
+        var credential = Assert.IsType<BasicCredential>(invitee.KeyPackage.LeafNode.Credential);
+        StagedInvite staged = MarmotGroupInvite.Remove(group.Group, [credential.Identity]);
+
+        // Nobody is being admitted, so there is nothing to admit them with.
+        // Null here is the expected shape rather than a failure.
+        Assert.Null(staged.Welcome);
+        staged.Applied();
+    }
+
+    [Fact]
+    public async Task ARemovedMemberCanNoLongerReadTheGroup()
+    {
+        var group = await NewGroupAsync();
+        var invitee = await NewInviteeAsync();
+
+        StagedInvite add = MarmotGroupInvite.Add(group.Group, _cs, [invitee.KeyPackage]);
+        add.Applied();
+
+        var joined = MlsGroup.ProcessWelcome(
+            _cs, add.Welcome!, invitee.KeyPackage,
+            invitee.PrivateMaterial.InitPrivateKey,
+            invitee.PrivateMaterial.LeafPrivateKey,
+            invitee.PrivateMaterial.SignaturePrivateKey);
+
+        byte[] before = Scramble.Marmot.Engine.Messages.GroupMessages.ExporterSecret(joined);
+
+        var credential = Assert.IsType<BasicCredential>(invitee.KeyPackage.LeafNode.Credential);
+        MarmotGroupInvite.Remove(group.Group, [credential.Identity]).Applied();
+
+        // The transport key moved with the epoch, so the removed member's copy
+        // no longer opens anything the group sends. That is forward secrecy at
+        // the outer layer, and it is the point of rotating on membership change.
+        Assert.NotEqual(
+            before, Scramble.Marmot.Engine.Messages.GroupMessages.ExporterSecret(group.Group));
+    }
+
+    [Fact]
+    public async Task RemovingSomebodyWhoIsNotAMemberIsRefused()
+    {
+        var group = await NewGroupAsync();
+        var stranger = new LocalSigner();
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => MarmotGroupInvite.Remove(group.Group, [stranger.AccountPublicKey.ToArray()]));
+
+        Assert.Contains("not a member", ex.Message);
+    }
+
+    [Fact]
+    public async Task RemovingEveryMemberIsRefused()
+    {
+        var group = await NewGroupAsync();
+
+        // An empty group cannot be committed to by anyone, so it can never be
+        // repaired or left cleanly. Disband is a different operation.
+        var creator = group.Group.GetMembers().Single().identity;
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => MarmotGroupInvite.Remove(group.Group, [creator]));
+
+        Assert.Contains("disband", ex.Message);
+    }
+
+    [Fact]
+    public async Task RemovingNobodyIsRefused()
+    {
+        var group = await NewGroupAsync();
+
+        Assert.Throws<ArgumentException>(() => MarmotGroupInvite.Remove(group.Group, []));
+    }
+
+    [Fact]
+    public async Task TheGroupStaysValidAfterAMembershipChange()
+    {
+        var group = await NewGroupAsync();
+        var first = await NewInviteeAsync();
+        var second = await NewInviteeAsync();
+
+        MarmotGroupInvite.Add(group.Group, _cs, [first.KeyPackage, second.KeyPackage]).Applied();
+
+        var credential = Assert.IsType<BasicCredential>(second.KeyPackage.LeafNode.Credential);
+        MarmotGroupInvite.Remove(group.Group, [credential.Identity]).Applied();
+
+        // The Current-profile invariants hold on every resulting epoch, not just
+        // at creation. A commit that quietly dropped the dictionary would leave
+        // a group every peer refuses.
+        Assert.Equal(group.Required, MarmotGroupBuilder.ValidateCreated(group.Group));
+    }
+
     // ---- The invitee actually joins ----
 
     [Fact]

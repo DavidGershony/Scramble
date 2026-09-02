@@ -88,18 +88,45 @@ public class MarmotKeyPackageBuilderTests
     }
 
     [Fact]
-    public async Task TheAdvertisedComponentListCarriesItsOwnIdAndTheProof()
+    public async Task TheLeafListCarriesItsOwnIdAndTheProof()
     {
         var bundle = await BuildAsync(supported: new HashSet<ushort> { AppComponent.GroupProfile });
 
+        MarmotDictionary dictionary = MarmotLeaf.ReadDictionary(bundle.KeyPackage.LeafNode)!;
+
         Assert.Equal(
-            new ushort[] { AppComponent.AppComponents, AppComponent.GroupProfile, AccountIdentityProof.ComponentId },
+            new ushort[]
+            {
+                AppComponent.AppComponents,
+                AppComponent.GroupProfile,
+                AccountIdentityProof.ComponentId,
+            },
+            dictionary.ComponentList()!.Order().ToArray());
+    }
+
+    [Fact]
+    public async Task TheEventTagCarriesOnlyPrivateUseIds()
+    {
+        var bundle = await BuildAsync(supported: new HashSet<ushort> { AppComponent.GroupProfile });
+
+        // The tag is NOT the leaf list. A peer recomputes it from the leaf
+        // filtered to >= 0x8000 and refuses the whole publication on any
+        // difference — "app_components tag does not exactly match decoded
+        // KeyPackage metadata" — which makes the account uninvitable. So
+        // 0x0001 and 0x0002 belong in the dictionary and never in the tag.
+        Assert.Equal(
+            new ushort[] { AppComponent.GroupProfile, AccountIdentityProof.ComponentId },
             bundle.AppComponents.ToArray());
 
-        // The event tag and the leaf dictionary must say the same thing; a peer
-        // reads the second and a relay filter reads the first.
+        Assert.DoesNotContain(AppComponent.AppComponents, bundle.AppComponents);
+        Assert.DoesNotContain(AppComponent.SafeAad, bundle.AppComponents);
+
+        // Every tag entry is private-use, and every private-use id in the leaf
+        // list is in the tag: an exact match, in both directions.
         MarmotDictionary dictionary = MarmotLeaf.ReadDictionary(bundle.KeyPackage.LeafNode)!;
-        Assert.Equal(bundle.AppComponents.ToArray(), dictionary.ComponentList()!.Order().ToArray());
+        Assert.Equal(
+            dictionary.ComponentList()!.Where(AppComponent.IsPrivateUse).Order().ToArray(),
+            bundle.AppComponents.Order().ToArray());
     }
 
     [Fact]
