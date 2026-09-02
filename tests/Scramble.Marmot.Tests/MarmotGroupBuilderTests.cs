@@ -27,6 +27,14 @@ public class MarmotGroupBuilderTests
     private readonly ICipherSuite _cs = new CipherSuite0x0001();
     private const ulong Now = 1_760_000_000;
 
+    /// <summary>Where a test group's messages would live.</summary>
+    /// <remarks>
+    /// A group must name at least one relay: the routing component is what a
+    /// peer reads the transport address out of, and a group without one cannot
+    /// be addressed at all.
+    /// </remarks>
+    private static readonly string[] TestRelays = ["wss://relay.example.com"];
+
     private sealed class LocalSigner : IAccountIdentityProofSigner
     {
         private readonly byte[] _secret;
@@ -50,7 +58,7 @@ public class MarmotGroupBuilderTests
         IReadOnlySet<ushort>? supported = null) =>
         MarmotGroupBuilder.CreateAsync(
             _cs, signer ?? new LocalSigner(), "Rakes", "For the raking of leaves",
-            Now, admins, supported);
+            Now, TestRelays, admins, supported);
 
     private static MarmotDictionary DictionaryOf(CreatedGroup created)
     {
@@ -78,15 +86,21 @@ public class MarmotGroupBuilderTests
     }
 
     [Fact]
-    public async Task TheGroupRequiresTheFourDefaultComponents()
+    public async Task TheGroupRequiresTheDefaultComponents()
     {
         var created = await CreateAsync();
 
+        // Nostr routing is in here because a peer reads the group's transport
+        // address out of it and nothing else. Leaving it out produced a group
+        // the reference client refused outright — "group is missing
+        // marmot.transport.nostr.routing.v1" — which is what the interop test
+        // caught and no unit test could have.
         Assert.Equal(
             new ushort[]
             {
                 AppComponent.GroupProfile,
                 AppComponent.GroupAdminPolicy,
+                AppComponent.NostrRouting,
                 AccountIdentityProof.ComponentId,
                 AppComponent.GroupLifecycle,
             }.Order().ToArray(),
@@ -105,6 +119,7 @@ public class MarmotGroupBuilderTests
                 AppComponent.AppComponents,
                 AppComponent.GroupProfile,
                 AppComponent.GroupAdminPolicy,
+                AppComponent.NostrRouting,
                 AppComponent.GroupLifecycle,
             },
             dictionary.ComponentIds.ToArray());

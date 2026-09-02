@@ -17,6 +17,10 @@ namespace Scramble.Marmot.Engine.Groups;
 /// <param name="GroupId">The MLS group id.</param>
 /// <param name="Required">The negotiated required-component set.</param>
 /// <param name="Admins">The initial admin account keys.</param>
+/// <param name="Routing">
+/// The group's transport address: the <c>nostr_group_id</c> its kind-445
+/// messages are published under, and the relays they go to.
+/// </param>
 /// <param name="SignaturePrivateKey">
 /// The creator's leaf signature private key. Held by the caller: the group
 /// cannot sign anything without it, and it is not recoverable from MLS state.
@@ -26,6 +30,7 @@ public sealed record CreatedGroup(
     byte[] GroupId,
     IReadOnlySet<ushort> Required,
     IReadOnlyList<byte[]> Admins,
+    NostrRouting Routing,
     byte[] SignaturePrivateKey)
 {
     /// <summary>Builds the durable Marmot-layer record beside the MLS state.</summary>
@@ -87,7 +92,16 @@ public static class MarmotGroupBuilder
     /// What this client can honour. Defaults to
     /// <see cref="MarmotLeaf.DefaultSupportedComponents"/>.
     /// </param>
+    /// <param name="relays">
+    /// Relays this group's messages live on. Required: a group with no relays
+    /// cannot be reached, and the routing component has nowhere to point.
+    /// </param>
     /// <param name="groupId">A specific group id, or null to generate one.</param>
+    /// <param name="transportGroupId">
+    /// The 32-byte <c>nostr_group_id</c>, or null to generate one. It is public
+    /// and must be random — deriving it from the MLS group id would let a relay
+    /// link the two.
+    /// </param>
     /// <exception cref="AppComponentException">
     /// The resulting group would not satisfy the Current-profile invariants.
     /// </exception>
@@ -97,9 +111,11 @@ public static class MarmotGroupBuilder
         string name,
         string description,
         ulong now,
+        IReadOnlyList<string>? relays = null,
         IEnumerable<byte[]>? additionalAdmins = null,
         IReadOnlySet<ushort>? supportedComponents = null,
         byte[]? groupId = null,
+        byte[]? transportGroupId = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(cs);
@@ -121,6 +137,12 @@ public static class MarmotGroupBuilder
             MarmotGroupProfile.DefaultComponents,
             [new MarmotGroupProfile.MemberComponents("creator", creatorAdvertised)]);
 
+        NostrRouting routing = NostrRouting.Create(
+            transportGroupId ?? System.Security.Cryptography.RandomNumberGenerator.GetBytes(
+                NostrRouting.TransportGroupIdLength),
+            relays ?? throw new ArgumentNullException(
+                nameof(relays), "A group must name at least one relay."));
+
         IReadOnlyList<byte[]> admins = BuildAdminSet(identity, additionalAdmins);
 
         // Every admin must be an account of a member of the group. Without this
@@ -138,7 +160,7 @@ public static class MarmotGroupBuilder
 
         MarmotDictionary leafDictionary = MarmotLeaf.BuildDictionary(supported, proof);
         MarmotDictionary groupDictionary = MarmotGroupProfile.BuildDictionary(
-            required, name, description, admins);
+            required, name, description, admins, routing);
 
         // Validated before the group exists, not after. Everything below is
         // irreversible from the caller's point of view — MLS state gets written
@@ -175,6 +197,7 @@ public static class MarmotGroupBuilder
             group.GroupId.ToArray(),
             required,
             admins,
+            routing,
             signaturePrivateKey);
     }
 

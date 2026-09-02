@@ -26,6 +26,14 @@ public class MarmotGroupInviteTests
     private readonly ICipherSuite _cs = new CipherSuite0x0001();
     private const ulong Now = 1_760_000_000;
 
+    /// <summary>Where a test group's messages would live.</summary>
+    /// <remarks>
+    /// A group must name at least one relay: the routing component is what a
+    /// peer reads the transport address out of, and a group without one cannot
+    /// be addressed at all.
+    /// </remarks>
+    private static readonly string[] TestRelays = ["wss://relay.example.com"];
+
     private sealed class LocalSigner : IAccountIdentityProofSigner
     {
         private readonly byte[] _secret;
@@ -44,7 +52,7 @@ public class MarmotGroupInviteTests
     }
 
     private Task<CreatedGroup> NewGroupAsync() =>
-        MarmotGroupBuilder.CreateAsync(_cs, new LocalSigner(), "Rakes", "", Now);
+        MarmotGroupBuilder.CreateAsync(_cs, new LocalSigner(), "Rakes", "", Now, TestRelays);
 
     private Task<MarmotKeyPackageBundle> NewInviteeAsync(
         IReadOnlySet<ushort>? supported = null) =>

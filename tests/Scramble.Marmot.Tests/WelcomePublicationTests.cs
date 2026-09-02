@@ -50,7 +50,8 @@ public class WelcomePublicationTests
         var inviter = new LocalSigner();
         var invitee = new LocalSigner();
 
-        var group = await MarmotGroupBuilder.CreateAsync(_cs, inviter, "Rakes", "", Now);
+        var group = await MarmotGroupBuilder.CreateAsync(
+            _cs, inviter, "Rakes", "", Now, ["wss://relay.example.com"]);
         var bundle = await MarmotKeyPackageBuilder.CreateAsync(_cs, invitee, Now);
 
         var staged = MarmotGroupInvite.Add(group.Group, _cs, [bundle.KeyPackage]);

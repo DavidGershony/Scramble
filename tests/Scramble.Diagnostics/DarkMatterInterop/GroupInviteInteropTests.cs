@@ -102,7 +102,7 @@ public class GroupInviteInteropTests
         //    leaf we did not build, which is the part no unit test can cover.
         var inviter = new LocalSigner();
         var group = await MarmotGroupBuilder.CreateAsync(
-            _cs, inviter, "Interop", "Scramble invites wn-agent", Now());
+            _cs, inviter, "Interop", "Scramble invites wn-agent", Now(), [AgentRelay]);
 
         StagedInvite staged = MarmotGroupInvite.Add(group.Group, _cs, [agentKeyPackage]);
 

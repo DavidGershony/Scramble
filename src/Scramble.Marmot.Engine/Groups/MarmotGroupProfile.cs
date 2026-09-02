@@ -35,6 +35,7 @@ public static class MarmotGroupProfile
         {
             AppComponent.GroupProfile,
             AppComponent.GroupAdminPolicy,
+            AppComponent.NostrRouting,
             AppComponent.GroupLifecycle,
             AccountIdentityProof.ComponentId,
         };
@@ -132,14 +133,21 @@ public static class MarmotGroupProfile
     /// <param name="name">Group name, for <c>0x8001</c>.</param>
     /// <param name="description">Group description, for <c>0x8001</c>.</param>
     /// <param name="admins">Admin account keys, for <c>0x8003</c>.</param>
+    /// <param name="routing">
+    /// Transport routing, for <c>0x8004</c>: the <c>nostr_group_id</c> every
+    /// kind-445 message for this group is addressed to, and the relays it lives
+    /// on.
+    /// </param>
     public static MarmotDictionary BuildDictionary(
         IReadOnlySet<ushort> required,
         string name,
         string description,
-        IEnumerable<byte[]> admins)
+        IEnumerable<byte[]> admins,
+        NostrRouting routing)
     {
         ArgumentNullException.ThrowIfNull(required);
         ArgumentNullException.ThrowIfNull(admins);
+        ArgumentNullException.ThrowIfNull(routing);
 
         var dictionary = new MarmotDictionary();
         dictionary.SetComponentList(required);
@@ -149,6 +157,14 @@ public static class MarmotGroupProfile
 
         if (required.Contains(AppComponent.GroupAdminPolicy))
             dictionary.Set(AppComponent.GroupAdminPolicy, AdminPolicy.Create(admins).Encode());
+
+        // Not optional, and its absence is not a missing feature. A peer reads
+        // the transport group id and relays out of this component and nothing
+        // else, so a group without it cannot be addressed at all — the reference
+        // client refuses it outright with "group is missing
+        // marmot.transport.nostr.routing.v1".
+        if (required.Contains(AppComponent.NostrRouting))
+            dictionary.Set(AppComponent.NostrRouting, routing.Encode());
 
         if (required.Contains(AppComponent.GroupLifecycle))
         {
