@@ -192,6 +192,137 @@ public class GroupMessagesTests
         Assert.Equal(target, received.Event.FirstTagValue(MarmotAppEvent.EventRefTag));
     }
 
+    // ---- Across membership changes ----
+
+    [Fact]
+    public async Task ConversationSurvivesAMemberBeingAdded()
+    {
+        var (aliceSigner, alice, _, bob) = await PairAsync();
+        var peeler = Peeler();
+
+        // Before.
+        string first = GroupMessages.Send(
+            alice.Group, peeler, MarmotAppEvent.Chat(aliceSigner.Hex, (long)Now, "before"),
+            aliceSigner.AccountPublicKey.Span);
+        Assert.Equal("before", GroupMessages.Receive(
+            bob, peeler.Peel(first, _ => GroupMessages.ExporterSecret(bob)).MlsBytes).Event.Content);
+
+        // A third member joins, which advances the epoch and rotates every key.
+        var carolSigner = new LocalSigner();
+        var carolBundle = await MarmotKeyPackageBuilder.CreateAsync(_cs, carolSigner, Now);
+        StagedInvite staged = MarmotGroupInvite.Add(alice.Group, _cs, [carolBundle.KeyPackage]);
+        staged.Applied();
+        bob.ProcessCommit(staged.Commit);
+
+        var carol = DotnetMls.Group.MlsGroup.ProcessWelcome(
+            _cs, staged.Welcome!, carolBundle.KeyPackage,
+            carolBundle.PrivateMaterial.InitPrivateKey,
+            carolBundle.PrivateMaterial.LeafPrivateKey,
+            carolBundle.PrivateMaterial.SignaturePrivateKey);
+
+        // After: everyone is at the same epoch and still reads each other. A
+        // conversation that stops working when somebody joins is the failure
+        // this rules out, and no single-epoch test can see it.
+        string second = GroupMessages.Send(
+            alice.Group, peeler, MarmotAppEvent.Chat(aliceSigner.Hex, (long)Now + 1, "after"),
+            aliceSigner.AccountPublicKey.Span);
+
+        Assert.Equal("after", GroupMessages.Receive(
+            bob, peeler.Peel(second, _ => GroupMessages.ExporterSecret(bob)).MlsBytes).Event.Content);
+        Assert.Equal("after", GroupMessages.Receive(
+            carol, peeler.Peel(second, _ => GroupMessages.ExporterSecret(carol)).MlsBytes).Event.Content);
+    }
+
+    [Fact]
+    public async Task EveryMemberOfAThreeWayGroupReadsEveryOther()
+    {
+        var (aliceSigner, alice, bobSigner, bob) = await PairAsync();
+        var peeler = Peeler();
+
+        var carolSigner = new LocalSigner();
+        var carolBundle = await MarmotKeyPackageBuilder.CreateAsync(_cs, carolSigner, Now);
+        StagedInvite staged = MarmotGroupInvite.Add(alice.Group, _cs, [carolBundle.KeyPackage]);
+        staged.Applied();
+        bob.ProcessCommit(staged.Commit);
+
+        var carol = DotnetMls.Group.MlsGroup.ProcessWelcome(
+            _cs, staged.Welcome!, carolBundle.KeyPackage,
+            carolBundle.PrivateMaterial.InitPrivateKey,
+            carolBundle.PrivateMaterial.LeafPrivateKey,
+            carolBundle.PrivateMaterial.SignaturePrivateKey);
+
+        // Each sender in turn, read by both others, with the MLS-authenticated
+        // sender checked every time — a group where one member's messages are
+        // attributed to another is worse than one where they do not arrive.
+        var senders = new[]
+        {
+            (Name: "alice", Group: alice.Group, Signer: aliceSigner),
+            (Name: "bob", Group: bob, Signer: bobSigner),
+            (Name: "carol", Group: carol, Signer: carolSigner),
+        };
+
+        long at = (long)Now;
+        foreach (var sender in senders)
+        {
+            string envelope = GroupMessages.Send(
+                sender.Group, peeler,
+                MarmotAppEvent.Chat(sender.Signer.Hex, at++, $"hello from {sender.Name}"),
+                sender.Signer.AccountPublicKey.Span);
+
+            foreach (var reader in senders.Where(r => r.Name != sender.Name))
+            {
+                ReceivedGroupMessage received = GroupMessages.Receive(
+                    reader.Group,
+                    peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(reader.Group)).MlsBytes);
+
+                Assert.Equal($"hello from {sender.Name}", received.Event.Content);
+                Assert.Equal(
+                    sender.Signer.AccountPublicKey.ToArray(), received.SenderIdentity);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ARemovedMemberCannotReadWhatTheGroupSendsAfterwards()
+    {
+        var (aliceSigner, alice, bobSigner, bob) = await PairAsync();
+        var peeler = Peeler();
+
+        var carolSigner = new LocalSigner();
+        var carolBundle = await MarmotKeyPackageBuilder.CreateAsync(_cs, carolSigner, Now);
+        StagedInvite added = MarmotGroupInvite.Add(alice.Group, _cs, [carolBundle.KeyPackage]);
+        added.Applied();
+        bob.ProcessCommit(added.Commit);
+
+        // Carol is removed; her copy of the group stays at the old epoch.
+        StagedInvite removed = MarmotGroupInvite.Remove(
+            alice.Group, [carolSigner.AccountPublicKey.ToArray()]);
+        removed.Applied();
+        bob.ProcessCommit(removed.Commit);
+
+        string after = GroupMessages.Send(
+            alice.Group, peeler, MarmotAppEvent.Chat(aliceSigner.Hex, (long)Now + 2, "private now"),
+            aliceSigner.AccountPublicKey.Span);
+
+        // Bob, still a member, reads it.
+        Assert.Equal("private now", GroupMessages.Receive(
+            bob, peeler.Peel(after, _ => GroupMessages.ExporterSecret(bob)).MlsBytes).Event.Content);
+
+        // Carol cannot even peel the outer wrap: the transport key moved with
+        // the epoch she was removed at. Forward secrecy is not only an MLS
+        // property here — the relay-visible layer rotates too.
+        var carol = DotnetMls.Group.MlsGroup.ProcessWelcome(
+            _cs, added.Welcome!, carolBundle.KeyPackage,
+            carolBundle.PrivateMaterial.InitPrivateKey,
+            carolBundle.PrivateMaterial.LeafPrivateKey,
+            carolBundle.PrivateMaterial.SignaturePrivateKey);
+
+        Assert.Throws<PeelFailedException>(
+            () => peeler.Peel(after, _ => GroupMessages.ExporterSecret(carol)));
+
+        _ = bobSigner;
+    }
+
     // ---- What is refused ----
 
     [Fact]

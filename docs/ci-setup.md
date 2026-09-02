@@ -121,10 +121,29 @@ Two things about it are worth knowing before touching either:
 - **The suite skips when the container is absent**, so a build failure would
   otherwise turn it green-but-empty. The workflow's explicit readiness check is
   what prevents that, and it must not be removed as redundant.
-- **It is the slowest step in the workflow**, because the peer is built from a
+- **It is the slowest step in the workflow**, because the peers are built from a
   pinned mdk ref with a cargo release build. If that becomes the reason PRs are
   slow, move the suite to a nightly *Ubuntu* workflow rather than dropping it —
-  the existing nightly is Windows and cannot run the container at all.
+  the existing nightly is Windows and cannot run the containers at all.
+
+**There are three peer images and they are not interchangeable.** Reaching for
+the wrong one costs a day, so:
+
+| Image | What it is | Use it for |
+|---|---|---|
+| `tests/mdk-cli-docker` | **mdk's own `wn`/`wnd` CLI** | **Everything.** A full client — groups, invites, messages, sync. This is what the interop suite drives. |
+| `tests/wn-agent-docker` | the agent connector | KeyPackage-shape checks only. It connects to a relay solely to publish and never subscribes, so it can never receive an invite. |
+| `tests/whitenoise-docker` | `whitenoise-rs` | The **legacy** protocol only. Upstream archived that repository and it pins `mdk-core 0.8.0`. Keep while `Scramble.Core` still ships on it. |
+
+Two settings on the `mdk-cli` service are load-bearing rather than tidy:
+`WN_ALLOW_LOOPBACK_RELAYS=1`, without which every relay URL a container can be
+given is rejected as `invalid_relay_url` (there is no CLI flag for it), and
+`network_mode: host`, because the stack accepts a plaintext `ws://` relay only
+for a literal loopback address.
+
+Every interop test class must join `DarkMatterInteropCollection`. They share one
+peer container, xUnit runs classes in parallel, and two at once corrupts its
+SQLite outright.
 
 What *is* wired into `integration.yml` is the **path trigger**: changes under
 `src/Scramble.Marmot.Abstractions/**`, `src/Scramble.Marmot.Storage.Sqlite/**`,

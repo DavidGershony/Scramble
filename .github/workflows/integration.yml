@@ -112,6 +112,27 @@ jobs:
     # The interop tests SKIP when this container is absent, so a failure to
     # build here turns the suite green-but-empty. The explicit readiness check
     # below is what stops that from passing silently.
+    # The Marmot reference CLI - the peer that can actually complete an invite
+    # and exchange messages. Built from the same pinned mdk ref as the agent.
+    # See tests/mdk-cli-docker/Dockerfile for why the other two peers cannot do
+    # this job.
+    #
+    # The interop tests SKIP when this container is absent, so a failed build
+    # would turn the suite green-but-empty. The readiness check below is what
+    # stops that passing silently, and must not be removed as redundant.
+    - name: Build and start the mdk-cli interop peer
+      run: |
+        docker compose -f docker-compose.test.yml up -d --build mdk-cli
+        for i in {1..40}; do
+          if docker exec mdk-cli-interop wn --version >/dev/null 2>&1; then
+            echo "mdk-cli ready"; exit 0
+          fi
+          sleep 3
+        done
+        echo "mdk-cli never came up" >&2
+        docker compose -f docker-compose.test.yml logs mdk-cli
+        exit 1
+
     - name: Build and start the wn-agent interop peer
       run: |
         docker compose -f docker-compose.test.yml up -d --build wn-agent
@@ -192,6 +213,12 @@ jobs:
     - name: Dump wn-agent logs on failure
       if: failure()
       run: docker compose -f docker-compose.test.yml logs wn-agent
+
+    - name: Dump mdk-cli logs on failure
+      if: failure()
+      run: |
+        docker compose -f docker-compose.test.yml logs mdk-cli
+        docker exec mdk-cli-interop sh -c 'cat /logs/wnd.log 2>/dev/null | tail -200' || true
 
     - name: Stop containers
       if: always()
