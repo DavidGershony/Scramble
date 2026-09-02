@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
-**Updated:** 2026-09-02 (sixteenth revision) · **Branch:** `feat/dark-matter`
-· **Last commit at time of writing:** `73b18f0`
+**Updated:** 2026-09-02 (seventeenth revision) · **Branch:** `feat/dark-matter`
+· **Last commit at time of writing:** `eccecdc`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -39,7 +39,7 @@ reference client joins a group we create.
 
 Seven new projects, all standalone (no reference to `marmot-cs`), all in
 `Scramble.sln` and `Scramble.Desktop.slnf`, all running in the fast unit gate.
-**803 tests in `Scramble.Marmot.Tests`**, plus **13 passing and 1 skipped in the
+**823 tests in `Scramble.Marmot.Tests`**, plus **13 passing and 2 skipped in the
 live `DarkMatterInterop` suite** (`tests/Scramble.Diagnostics/DarkMatterInterop/`),
 all passing.
 
@@ -990,6 +990,62 @@ join `DarkMatterInteropCollection`.
 3. **Wire `mdk-cli` into `integration.yml`** so all of this is a merge gate
    rather than a local proof.
 
+### 3o. Join, membership changes, and a second interop bug
+
+`e5060bd`, `eccecdc`. Coverage now spans the message and membership scenarios,
+`mdk-cli` is wired into `integration.yml`, and a second real bug turned up.
+
+**The bug, and the lesson attached to it.** Our kind-30443 `app_components` tag
+listed `0x0001` and `0x0002`. A peer recomputes that tag from the decoded leaf
+**filtered to private-use ids (`>= 0x8000`)** and refuses the whole publication
+on any difference — *"app_components tag does not exactly match decoded
+KeyPackage metadata"*. The account was therefore unresolvable: no peer would
+invite it, and the failure surfaced as an invite that never arrived rather than
+as a rejected publish. **§3g had already recorded this exact difference and
+dismissed it as "expected and NOT a bug".** It was a bug. Noticing a divergence
+from the reference and reasoning it away is not the same as testing it.
+
+**What is covered now** — 823 unit, 13 interop passing:
+
+- **Join from a Welcome** — same group and epoch, the group works afterwards,
+  the inviter comes from the verified seal, and the KeyPackage is marked
+  consumed only on success. Refusals: a KeyPackage we never published, one whose
+  material is erased, and someone else's wrap.
+- **Removals** — epoch advances, the member is dropped, no Welcome is produced,
+  and the transport key rotates so a removed member cannot peel the outer wrap.
+  Refused: removing a non-member, everyone, or nobody.
+- **Across epochs** — a conversation survives a member joining; a three-way
+  group has every member reading every other with the sender authenticated each
+  time.
+- **Relay lists** — NIP-65 and NIP-17. **Publishing a KeyPackage is not enough
+  to be invitable**; the peer resolves an account from both and refuses to
+  invite one it cannot look up.
+
+**The inbound direction is committed skipped, and not because of a defect.**
+Discoverability works — the peer resolves us — and it then refuses to create a
+group with us because its `groups create` requires **proposal `0x000a`
+(SelfRemove) and components `0x8006` (agent-text-stream QUIC) and `0x800b`
+(encrypted media v2)**. We advertise none of the three: SelfRemove is not
+expressible until `dotnet-mls` grows the type (P7), and the other two are
+deferred to P12.
+
+**This is a scoping fact, not a detail.** Those deferrals were made on the
+assumption they were optional. They are optional for *creating* groups and
+mandatory for *being invited to one* by the reference client. Advertising them
+unimplemented would be a lie that lands us in a group whose mandatory state we
+then mishandle — exactly what `KnownGroupComponents` exists to prevent. The
+requirement is written into the test's skip reason; un-skip when the three
+exist.
+
+**What P6 needs next:**
+
+1. **Decide on `0x8006` and `0x800b`.** They are the difference between "a peer
+   can join our groups" and "we are a full participant". Either implement them
+   or accept that only we can start conversations.
+2. **SelfRemove (P7)** — the third of the same set, and the one that needs a
+   `dotnet-mls` change.
+3. **Convergence (P8)**, once membership churn is real.
+
 ### 3d. Non-code items still open (not blocking)
 
 - **Open a PR for `feat/dark-matter`.** **65 commits** ahead of `master` and
@@ -1104,6 +1160,8 @@ without the interop suite running).
 | Guessing a component id from its name | `0x8002` is the Blossom *image* component; encrypted-media v1 is `0x8008`. Freezing the wrong id would refuse a legal group and admit a frozen one | Read the constant out of `crates/traits/src/app_components/mod.rs`. Every id in `AppComponent` traces to a line there. |
 | Running a second `wn-agent` against the live compose volume | Two instances on one SQLite home corrupt it | Stop the compose container first, or use a separate volume. |
 | `bootstrap` timing out while `account_list` answers instantly | A wedged account worker; a restart from here fails `startup failed code=app_error` | `docker volume rm scramble_wn-agent-data` and restart. Not caused by our Welcome; the trigger is not isolated (§3l). |
+| Putting non-private-use ids in the kind-30443 `app_components` tag | A peer recomputes the tag from the leaf filtered to `>= 0x8000` and refuses the publication; the account becomes uninvitable | `0x0001`/`0x0002` belong in the leaf dictionary, never in the tag. |
+| Publishing a KeyPackage and expecting to be invitable | The peer resolves an account from its relay lists too and refuses one it cannot look up | Publish kind-10002 and kind-10050 as well. |
 | Hashing the struct-order payload JSON to get an app event id | The id is the NIP-01 *array* hash; the JSON is only the transport shape | Two different serialisations. Peers reject a mismatched id. |
 | Adding an interop test class without joining `DarkMatterInteropCollection` | xUnit runs classes in parallel against one shared peer and corrupts its SQLite | One collection for all of them. |
 | Creating a group without the Nostr routing component `0x8004` | A peer reads the transport group id and relays from it and nowhere else, so the group cannot be addressed; the reference client refuses it | Seed it at creation with a random 32-byte `nostr_group_id`. A green unit suite will not catch this. |
