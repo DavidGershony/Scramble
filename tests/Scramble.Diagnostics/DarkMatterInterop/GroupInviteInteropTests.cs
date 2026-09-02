@@ -64,18 +64,19 @@ public class GroupInviteInteropTests
     }
 
     [Fact(Skip =
-        "Does not pass yet. The failure is bounded, and everything on OUR side is " +
-        "ruled out: the Welcome reaches the relay correctly p-tagged and inside " +
-        "the NIP-59 backwards-jitter window; the agent's account is active and " +
-        "local-signing; it publishes kind-10002 and kind-10050 relay lists both " +
-        "naming our relay; and the ordering is not it (publishing before and " +
-        "after subscribing were both tried). What remains is inside the agent: " +
-        "with subscribe_inbound held open for 35s it opens ZERO relay " +
-        "connections, so it never fetches the Welcome. subscribe_inbound acks, " +
-        "its one-shot catch-up completes without error and without emitting " +
-        "anything. Next step is the account worker's relay plane - reconcile() " +
-        "spawns a worker per active account and sends it CatchUp; find out why " +
-        "that worker never dials. Do NOT re-investigate the publish side.")]
+        "Does not pass yet. Our side is ruled out and the peer side is located. " +
+        "OURS: the Welcome reaches the relay correctly p-tagged and inside the " +
+        "NIP-59 jitter window; the account is active and local-signing; both " +
+        "publish orders were tried. THEIRS: the agent connects to the relay only " +
+        "to PUBLISH. Every connection it makes is 'recv: N, sent: 0' - a pure " +
+        "publish - and no connection it opens ever receives an event or stays " +
+        "open. It never issues a subscription, so it never sees the Welcome. " +
+        "Hardcoded relays are NOT the cause: DEFAULT_RELAYS does hardcode the " +
+        "public WhiteNoise relays, but --relay overrides it and the agent's own " +
+        "published kind-10002/10050 lists both name our local relay. Next step: " +
+        "raise the relay container's log level to see whether the agent ever " +
+        "sends a REQ, then the account worker's sync path. Do NOT re-investigate " +
+        "our publish side or the relay configuration; both are settled.")]
     public async Task TheReferenceAgentJoinsAGroupWeCreated()
     {
         var agent = new WnAgentDockerClient(_log.Add);

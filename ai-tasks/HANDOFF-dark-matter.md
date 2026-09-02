@@ -814,15 +814,28 @@ directly, not inferred:
 - **Ordering is not it.** Publishing before and after subscribing were both
   tried.
 
-**What remains is inside the agent, and it is precisely bounded: with
-`subscribe_inbound` held open for 35 seconds it opens ZERO relay connections.**
-The subscription acks, the catch-up completes without error and without emitting
-anything, and the relay logs no connection at all. It never dials, so it never
-fetches.
+**Hardcoded relays were the obvious suspect. They are real, and they are not the
+cause.** `bootstrap.rs` hardcodes
+`DEFAULT_RELAYS = [wss://relay.eu.whitenoise.chat, wss://relay.us.whitenoise.chat]`
+and falls back to them. But `--relay` overrides it: it is threaded into
+`AgentConnectorConfig.relays` → `MarmotApp::with_relays_…`, and
+`ensure_agent_account_relay_lists` seeds the account's lists from it. **Proof it
+took effect: the agent publishes kind-10002 and kind-10050 that both name
+`ws://127.0.0.1:7777`.** The peer knows exactly where to listen.
 
-**The next step is the account worker's relay plane** — why a worker spawned by
-`reconcile()` and handed `relay_plane` never connects. **Do not re-investigate
-the publish side; it is settled.**
+**The failure, located: the agent connects to the relay only to PUBLISH.**
+Read off the relay's own connection log for a whole day's runs — every
+connection the agent opens is `recv: N events, sent: 0 events`, a pure publish.
+**Not one connection it makes ever receives an event, and none stays open.** It
+never issues a subscription, so the Welcome sits on the relay unread. (An
+earlier revision said "zero relay connections"; that was measured in too narrow
+a log window and was wrong — it connects, it just never subscribes.)
+
+**Next step, in order:** raise the relay container's log level to confirm whether
+the agent ever sends a `REQ` at all; then the account worker's sync path —
+`sync_with_startup_stage_telemetry` in `runtime/account_worker.rs`, which runs
+once at worker spawn and is what should be dialing. **Do not re-investigate our
+publish side or the relay configuration; both are settled.**
 
 **The process lesson, twice learned now.** Four runs were spent guessing before
 reading `stream_inbound_events`, and the reading took twenty minutes and
