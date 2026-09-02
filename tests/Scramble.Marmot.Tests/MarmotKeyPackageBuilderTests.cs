@@ -67,7 +67,11 @@ public class MarmotKeyPackageBuilderTests
         // here: it is an extension capability only in the Legacy profile, and
         // advertising it is a Legacy tell.
         Assert.Equal(new ushort[] { 0x0003, 0x0006 }, capabilities.Extensions.Order().ToArray());
-        Assert.Equal(new ushort[] { 0x0008 }, capabilities.Proposals.ToArray());
+
+        // app_data_update and self_remove. The reference client requires both of
+        // every member, and self_remove is 0x000a rather than 0x0009 — the two
+        // draft proposal types are not adjacent.
+        Assert.Equal(new ushort[] { 0x0008, 0x000a }, capabilities.Proposals.Order().ToArray());
         Assert.DoesNotContain((ushort)0x8009, capabilities.Extensions);
     }
 

@@ -37,6 +37,16 @@ public static class MarmotLeaf
     /// <summary>The <c>app_data_update</c> proposal, draft-ietf-mls-extensions.</summary>
     public const ushort AppDataUpdateProposalType = 0x0008;
 
+    /// <summary>The <c>self_remove</c> proposal, draft-ietf-mls-extensions.</summary>
+    /// <remarks>
+    /// <c>0x000a</c>, not <c>0x0009</c> — the two draft proposal types are not
+    /// adjacent. Advertised because the reference client requires it of every
+    /// member, and honestly so only since <c>v0.1.0-beta.11</c>: before that the
+    /// library could not decode the type, so a commit carrying one would have
+    /// stranded us at that epoch.
+    /// </remarks>
+    public const ushort SelfRemoveProposalType = 0x000a;
+
     /// <summary>
     /// MLS extension types a Current-profile leaf advertises.
     /// </summary>
@@ -51,7 +61,7 @@ public static class MarmotLeaf
 
     /// <summary>MLS proposal types a Current-profile leaf advertises.</summary>
     public static readonly IReadOnlyList<ushort> ProposalTypes =
-        new[] { AppDataUpdateProposalType };
+        new[] { AppDataUpdateProposalType, SelfRemoveProposalType };
 
     /// <summary>
     /// The app components this implementation can honour, before the two that

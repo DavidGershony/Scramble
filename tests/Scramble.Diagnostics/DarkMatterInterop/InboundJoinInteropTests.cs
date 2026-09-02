@@ -87,14 +87,16 @@ public class InboundJoinInteropTests : IDisposable
     }
 
     [Fact(Skip =
-        "One blocker left, and it is a dotnet-mls gap rather than ours. " +
-        "Components 0x8006 and 0x800b are now implemented and the peer accepts " +
-        "our component set; discoverability works. What remains is proposal " +
-        "0x000a (SelfRemove): required={8,10}, had={8}. dotnet-mls ProposalType " +
-        "stops at AppDataUpdate=8 and throws on an unknown type, so advertising " +
-        "0x000a would be a claim we cannot honour - a commit carrying one would " +
-        "strand us at that epoch. Un-skip once the library can decode and apply " +
-        "it.")]
+        "One requirement left, and it is a product decision rather than a bug. " +
+        "Proposals and app components are now both satisfied. The peer's " +
+        "groups create enables the QUIC agent-text-stream component, whose " +
+        "default policy requires the RECEIVE role - MLS extension 0xf2d1 - of " +
+        "every member. We advertise the component (we can read and honour the " +
+        "policy) but not the role, because we have no QUIC transport. " +
+        "Advertising 0xf2d1 would claim we can be sent stream previews we " +
+        "cannot receive: a bounded degradation rather than a fork, but still a " +
+        "claim we cannot back. Decide whether to claim receive-only or build " +
+        "the transport.")]
     public async Task WeJoinAGroupTheReferenceClientCreated()
     {
         var peer = new MdkCliDockerClient(_log.Add);
