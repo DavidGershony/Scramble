@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
-**Updated:** 2026-09-02 (fifteenth revision) · **Branch:** `feat/dark-matter`
-· **Last commit at time of writing:** `fdea0ad`
+**Updated:** 2026-09-02 (sixteenth revision) · **Branch:** `feat/dark-matter`
+· **Last commit at time of writing:** `73b18f0`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -39,7 +39,7 @@ reference client joins a group we create.
 
 Seven new projects, all standalone (no reference to `marmot-cs`), all in
 `Scramble.sln` and `Scramble.Desktop.slnf`, all running in the fast unit gate.
-**791 tests in `Scramble.Marmot.Tests`**, plus **8 passing and 1 skipped in the
+**803 tests in `Scramble.Marmot.Tests`**, plus **13 passing and 1 skipped in the
 live `DarkMatterInterop` suite** (`tests/Scramble.Diagnostics/DarkMatterInterop/`),
 all passing.
 
@@ -926,6 +926,70 @@ deferred `0x800c`, and now `0x8004` — were all invisible to a green unit suite
 3. **Wire `mdk-cli` into `integration.yml`** so this is a merge gate, not a
    local-only proof.
 
+### 3n. Messages work, both directions, against the reference client
+
+`73b18f0`. **The reference implementation reads what Scramble sends and Scramble
+reads what it sends** — plain text, emoji, and bursts. Four interop tests, and
+they are real gates: mutating either half of the exporter derivation turns all
+four red.
+
+**Why these had to be interop tests.** Joining a group proved the GroupContext
+was acceptable and *nothing about messages*. The exporter label, the kind-445
+wrap, the MLS application framing and the payload encoding are four separate
+agreements. **A wrong exporter context alone would leave both sides silently
+unable to read each other while every unit test stayed green.**
+
+**Three layers, each authenticating something different**, and it is worth
+keeping them straight:
+
+- **MLS** encrypts the payload and authenticates *which member* sent it.
+- **The kind-445 wrap** encrypts the whole MLS message again under
+  `MLS-Exporter("marmot", "group-event", 32)` — verified against
+  `transport-nostr-peeler`'s own constant — so a relay cannot tell one group's
+  traffic from another's. It rotates with the epoch, which is what makes the
+  transport layer forward-secret too.
+- **The payload names an author**, checked against the MLS sender. This is the
+  one with no MLS equivalent and the one that stops a member writing in someone
+  else's name. Both send and receive refuse a mismatch, and a test builds the
+  forgery by bypassing `Send` to prove the receiver catches it alone.
+
+**The payload format, and its one trap.** It is a Nostr-shaped event carrying
+**no signature**, deliberately — MLS already authenticates the sender, so a
+signature would only restate it. The **id is not taken on trust**: it is
+recomputed as the canonical NIP-01 hash and a mismatch refused, because an id
+taken on faith lets a sender label one message as another and every id-keyed
+thing downstream — replies, reactions, dedup — then resolves to the wrong event.
+**The trap: the payload travels as struct-order JSON (`id, pubkey, created_at,
+kind, tags, content`) while its id is the NIP-01 *array* hash.** Confusing the
+two produces an event every peer rejects.
+
+**A harness rule, learned the hard way.** All interop classes now share one
+xUnit collection. They drive a **single peer container**, and xUnit runs classes
+in parallel — two of them creating identities at once corrupted its SQLite
+outright (`backend failure: file is not a database`). Any new interop class must
+join `DarkMatterInteropCollection`.
+
+**Where interop stands now — 13 passing, 1 skipped:**
+
+| Direction | Status |
+|---|---|
+| We read their KeyPackage | ✅ byte-exact, incl. a real production one |
+| They join a group we create | ✅ |
+| They read our messages | ✅ incl. emoji and bursts |
+| We read their messages | ✅ with MLS-authenticated sender |
+| We join a group *they* create | ❌ not built — the inbound half |
+
+**What P6 needs next:**
+
+1. **Join a group the peer creates.** The last untested direction, and the one
+   that exercises `AppComponentIntegrity.ValidateStagedCommit` /
+   `ValidateUpdateBatch`, which still have no caller (§3c) — **they must be
+   called as a pair.** The peer has `groups create` and can invite us.
+2. **Membership changes:** add a third member, remove one, and confirm both
+   sides agree on the resulting epoch and member list.
+3. **Wire `mdk-cli` into `integration.yml`** so all of this is a merge gate
+   rather than a local proof.
+
 ### 3d. Non-code items still open (not blocking)
 
 - **Open a PR for `feat/dark-matter`.** **65 commits** ahead of `master` and
@@ -1040,6 +1104,8 @@ without the interop suite running).
 | Guessing a component id from its name | `0x8002` is the Blossom *image* component; encrypted-media v1 is `0x8008`. Freezing the wrong id would refuse a legal group and admit a frozen one | Read the constant out of `crates/traits/src/app_components/mod.rs`. Every id in `AppComponent` traces to a line there. |
 | Running a second `wn-agent` against the live compose volume | Two instances on one SQLite home corrupt it | Stop the compose container first, or use a separate volume. |
 | `bootstrap` timing out while `account_list` answers instantly | A wedged account worker; a restart from here fails `startup failed code=app_error` | `docker volume rm scramble_wn-agent-data` and restart. Not caused by our Welcome; the trigger is not isolated (§3l). |
+| Hashing the struct-order payload JSON to get an app event id | The id is the NIP-01 *array* hash; the JSON is only the transport shape | Two different serialisations. Peers reject a mismatched id. |
+| Adding an interop test class without joining `DarkMatterInteropCollection` | xUnit runs classes in parallel against one shared peer and corrupts its SQLite | One collection for all of them. |
 | Creating a group without the Nostr routing component `0x8004` | A peer reads the transport group id and relays from it and nowhere else, so the group cannot be addressed; the reference client refuses it | Seed it at creation with a random 32-byte `nostr_group_id`. A green unit suite will not catch this. |
 | Reaching for `whitenoise-rs` or `wn-agent` as the interop peer | The first is archived and legacy-only; the second never subscribes, so it cannot receive an invite | Use `tests/mdk-cli-docker` — mdk's own CLI. |
 | Expecting `wn-agent` to fetch anything without a held subscription | Its relay connection sits at `sent: 0 events`; `subscribe_inbound` is streaming and the subscription dies with the connection | Hold it open, and keep the pipe's writer alive — `printf \| socat` half-closes at EOF. |
