@@ -283,14 +283,18 @@ public class ComponentCodecTests
         Assert.Equal("marmot.group.message-retention.v1", AppComponent.SchemaOf(AppComponent.MessageRetention));
         Assert.Equal("marmot.member.account-identity-proof.v2", AppComponent.SchemaOf(AppComponent.AccountIdentityProof));
         Assert.Equal("marmot.group.lifecycle.v1", AppComponent.SchemaOf(AppComponent.GroupLifecycle));
+        Assert.Equal(
+            "marmot.group.agent-text-stream.quic.v1",
+            AppComponent.SchemaOf(AppComponent.AgentTextStreamQuic));
+        Assert.Equal(
+            "marmot.group.encrypted-media.v2",
+            AppComponent.SchemaOf(AppComponent.EncryptedMediaV2));
     }
 
     [Theory]
     [InlineData((ushort)0x8002)] // blossom image
-    [InlineData((ushort)0x8006)] // agent text stream over QUIC
     [InlineData((ushort)0x8007)] // avatar url
-    [InlineData((ushort)0x8008)] // encrypted media v1
-    [InlineData((ushort)0x800b)] // encrypted media v2
+    [InlineData((ushort)0x8008)] // encrypted media v1, frozen
     public void ADeferredComponentHasNoSchemaName(ushort id)
     {
         // Deliberately unknown. Naming a component we have no codec for would

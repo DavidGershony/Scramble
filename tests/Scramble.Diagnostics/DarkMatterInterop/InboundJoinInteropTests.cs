@@ -87,19 +87,14 @@ public class InboundJoinInteropTests : IDisposable
     }
 
     [Fact(Skip =
-        "Blocked on features we have deliberately not built, not on a defect. " +
-        "Discoverability now works - the peer resolves our relay lists and " +
-        "KeyPackage - and it then refuses to create a group with us because its " +
-        "`groups create` requires proposal 0x000a (SelfRemove) and app " +
-        "components 0x8006 (agent-text-stream QUIC) and 0x800b (encrypted media " +
-        "v2). We advertise none of the three: SelfRemove is not expressible " +
-        "until dotnet-mls grows the proposal type (P7), and 0x8006/0x800b are " +
-        "deferred to P12. Advertising them without implementing them would be a " +
-        "lie that lands us in a group whose mandatory state we then mishandle. " +
-        "Everything up to that point is verified and the test is kept for it. " +
-        "Un-skip when those three exist; the exact requirement is in the " +
-        "failure: required proposals {8,10}, app_components {0x8004, 0x8006, " +
-        "0x8009, 0x800b}.")]
+        "One blocker left, and it is a dotnet-mls gap rather than ours. " +
+        "Components 0x8006 and 0x800b are now implemented and the peer accepts " +
+        "our component set; discoverability works. What remains is proposal " +
+        "0x000a (SelfRemove): required={8,10}, had={8}. dotnet-mls ProposalType " +
+        "stops at AppDataUpdate=8 and throws on an unknown type, so advertising " +
+        "0x000a would be a claim we cannot honour - a commit carrying one would " +
+        "strand us at that epoch. Un-skip once the library can decode and apply " +
+        "it.")]
     public async Task WeJoinAGroupTheReferenceClientCreated()
     {
         var peer = new MdkCliDockerClient(_log.Add);

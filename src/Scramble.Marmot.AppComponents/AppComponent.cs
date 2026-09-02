@@ -97,12 +97,38 @@ public static class AppComponent
     /// </remarks>
     public const ushort GroupLifecycle = 0x800c;
 
+    /// <summary>
+    /// <c>marmot.group.agent-text-stream.quic.v1</c> — the group's policy for
+    /// QUIC-backed agent text streams.
+    /// </summary>
+    /// <remarks>
+    /// Supporting this component means being able to read and honour the
+    /// policy. It is <b>not</b> a claim that this client performs the streams:
+    /// the per-role capabilities (<c>0xf2d1</c>/<c>0xf2d2</c>/<c>0xf2d4</c>) are
+    /// separate MLS extension types and we advertise none of them, so a group
+    /// requiring a role correctly refuses us.
+    /// </remarks>
+    public const ushort AgentTextStreamQuic = 0x8006;
+
+    /// <summary>
+    /// <c>marmot.group.encrypted-media.v2</c> — where the group's encrypted
+    /// media may live.
+    /// </summary>
+    /// <remarks>
+    /// Live, unlike the frozen v1 at <see cref="EncryptedMediaV1Frozen"/>. The
+    /// two are not versions of one supported thing: v1 may neither be required
+    /// nor carried, while v2 is ordinary group state.
+    /// </remarks>
+    public const ushort EncryptedMediaV2 = 0x800b;
+
     public const string GroupProfileSchema = "marmot.group.profile.v1";
     public const string GroupAdminPolicySchema = "marmot.group.admin-policy.v1";
     public const string NostrRoutingSchema = "marmot.transport.nostr.routing.v1";
     public const string MessageRetentionSchema = "marmot.group.message-retention.v1";
     public const string AccountIdentityProofSchema = "marmot.member.account-identity-proof.v2";
     public const string GroupLifecycleSchema = "marmot.group.lifecycle.v1";
+    public const string AgentTextStreamQuicSchema = "marmot.group.agent-text-stream.quic.v1";
+    public const string EncryptedMediaV2Schema = "marmot.group.encrypted-media.v2";
 
     /// <summary>Whether an id falls in the private-use range.</summary>
     public static bool IsPrivateUse(ushort id) => id >= PrivateUseStart;
@@ -123,6 +149,8 @@ public static class AppComponent
         MessageRetention => MessageRetentionSchema,
         AccountIdentityProof => AccountIdentityProofSchema,
         GroupLifecycle => GroupLifecycleSchema,
+        AgentTextStreamQuic => AgentTextStreamQuicSchema,
+        EncryptedMediaV2 => EncryptedMediaV2Schema,
         _ => null,
     };
 }

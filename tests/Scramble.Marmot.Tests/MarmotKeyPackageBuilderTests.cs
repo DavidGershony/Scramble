@@ -134,7 +134,10 @@ public class MarmotKeyPackageBuilderTests
     {
         var bundle = await BuildAsync();
 
-        foreach (ushort deferred in new ushort[] { 0x8002, 0x8006, 0x8007, 0x8008, 0x800b })
+        // 0x8008 is frozen rather than deferred, and the rest are genuinely not
+        // built. 0x8006 and 0x800b left this list when being invitable turned
+        // out to depend on them.
+        foreach (ushort deferred in new ushort[] { 0x8002, 0x8007, 0x8008 })
             Assert.DoesNotContain(deferred, bundle.AppComponents);
     }
 

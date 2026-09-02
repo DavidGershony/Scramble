@@ -105,6 +105,8 @@ public static class CurrentProfile
             AppComponent.GroupAdminPolicy,
             AppComponent.NostrRouting,
             AppComponent.MessageRetention,
+            AppComponent.AgentTextStreamQuic,
+            AppComponent.EncryptedMediaV2,
             AppComponent.GroupLifecycle,
         };
 
@@ -246,6 +248,12 @@ public static class CurrentProfile
                 break;
             case AppComponent.GroupLifecycle:
                 GroupLifecycle.Decode(data);
+                break;
+            case AppComponent.AgentTextStreamQuic:
+                AgentTextStreamPolicy.Decode(data);
+                break;
+            case AppComponent.EncryptedMediaV2:
+                EncryptedMediaPolicy.Decode(data);
                 break;
             case AppComponent.SafeAad:
                 // Known, and refused. The draft gives the component no

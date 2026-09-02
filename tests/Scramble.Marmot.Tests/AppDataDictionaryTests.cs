@@ -276,7 +276,7 @@ public class AppDataDictionaryTests
             {
                 AppComponent.GroupAdminPolicy,
                 AppComponent.AccountIdentityProof,
-                0x8006, // agent text stream over QUIC, deferred to P12
+                0x8007, // avatar url, still deferred to P12
             });
         });
 
