@@ -1345,6 +1345,68 @@ KeyPackage shape, component ids, role capabilities and Current-profile floor are
 unchanged, and all eleven KeyPackage tests passed on the first run at 0.9.17 —
 including against the stale volume that failed everything else.
 
+### 3u. P8 has started — the policy pin and branch selector
+
+910 unit tests pass. This is P8's first slice: `ConvergencePolicy`,
+`BranchSelection` and `BranchSelectionAudit` in
+`src/Scramble.Marmot.Engine/Convergence/`. The materializer — the L-sized piece
+— is not started.
+
+**Why this slice first.** Everything else in P8 feeds the selector, and the
+selector is pure: candidates in, one winner out, no MLS and no storage. It is
+the only part of convergence that can be got exactly right before any of the
+machinery around it exists.
+
+**The constants are pinned by value, and that is the whole design.** A fork
+resolves by every member independently computing the same answer, so a member
+running different constants is not slightly out of tune — it computes a
+different function, and it disagrees precisely when a fork makes agreement
+matter. `RequireAcceptable` fails closed on any deviation, mirroring upstream's
+`ensure_pinned_v1`. There is no negotiation and no per-group override until one
+arrives behind a required capability.
+
+**`RequireWindowMatches` is the tie back to §4a.** The app-message window and
+the MLS `max_past_epochs` window answer the same question from two sides — how
+far back a message is still readable, and how far back one still counts as a
+witness. Whichever is larger, the mismatch changes a branch's score, so two
+members with different pairings score the same branch differently.
+
+**Three tie-break rules compare *reversed*, and this was the trap.**
+`tip_priority`, `tip_committer` and `tip_digest` all favour the
+lexicographically **lower** value in upstream's `compare_scores`. Written the
+intuitive way round, the selector agrees with the reference on every case except
+the tied ones — which are the only cases a tie-break exists for. All three have
+a test, and all three were confirmed to fail against the flipped direction
+before this landed. **An ordinary tip outranks a privileged one at equal
+depth**, which reads like a bug and is not.
+
+**`BranchSelectionAudit` exists because the vectors assert on it.**
+`convergence-committer-selected.v1.json` expects
+`{"decisive_rule": "tip_committer", "witness_quorum_met": false}`, so the rule
+names are wire values rather than labels. The trace is a pure function of the
+candidate set — candidates ordered by id, witnesses aggregated into sets — and
+two tests pin that across every permutation of the input.
+
+**The upstream vectors are still not runnable.** They are *scenario* vectors:
+step lists (`create_group`, `deliver_all`, `tick`, `acknowledge_outbound`) that
+drive a whole engine, in
+`crates/cgka-conformance-simulator/vectors/convergence-*.v1.json`. Running them
+needs the harness P8 has not built. What is here is shaped to receive them: when
+the harness exists, a vector's `decisive_rule` maps straight onto
+`RuleEvaluation.RuleName`.
+
+**What P8 needs next:**
+
+1. **Across-epoch retention** — the `max_past_epochs` window in `dotnet-mls`,
+   the second half of §4a. Approved to land with P8. Same retention idea one
+   level up from the sender-chain window already shipped in `beta.14`, and
+   `RequireWindowMatches` is already waiting for it.
+2. **`CanonicalizationPipeline`** — the settlement pass around the selector,
+   with `V1_SETTLEMENT_QUIESCENCE_MS` and `V1_MAX_CONVERGENCE_PASS_MS`.
+3. **`CandidateMaterializer`** — the L-sized piece: candidate-path BFS, DoS
+   replay budget, own-commit replay workaround, crash-safe two-level reorg
+   apply.
+
 ### 3d. Non-code items still open (not blocking)
 
 - **Open a PR for `feat/dark-matter`.** **65 commits** ahead of `master` and
