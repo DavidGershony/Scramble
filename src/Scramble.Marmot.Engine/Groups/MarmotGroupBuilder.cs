@@ -180,7 +180,7 @@ public static class MarmotGroupBuilder
             signaturePublicKey,
             groupId,
             groupExtensions,
-            config: null,
+            config: MarmotGroupSettings.Create(),
             leafExtensions: [MarmotLeaf.ToExtension(leafDictionary)],
             supportedExtensionTypes: MarmotLeaf.ExtensionTypes.ToArray(),
             supportedProposalTypes: MarmotLeaf.ProposalTypes.ToArray());

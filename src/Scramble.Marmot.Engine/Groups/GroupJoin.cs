@@ -133,7 +133,8 @@ public static class GroupJoin
                 keyPackage,
                 material.InitPrivateKey,
                 material.LeafPrivateKey,
-                material.SignaturePrivateKey);
+                material.SignaturePrivateKey,
+                config: MarmotGroupSettings.Create());
         }
         catch (Exception ex) when (ex is InvalidOperationException or TlsDecodingException)
         {

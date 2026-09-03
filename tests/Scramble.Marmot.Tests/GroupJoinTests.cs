@@ -269,4 +269,39 @@ public class GroupJoinTests : IDisposable
         Assert.Equal(
             joined.Required, MarmotGroupBuilder.ValidateCreated(joined.Group, "joined group"));
     }
+
+    [Fact]
+    public async Task AJoinedGroupCarriesTheMarmotReorderingWindow()
+    {
+        // The window has to match on both sides. Two members with different
+        // windows disagree about which messages are deliverable, and the
+        // disagreement surfaces as one of them missing history the other has --
+        // so a group we join must be configured like one we create, and only
+        // the real join path can show that.
+        var (inviter, group, invitee, _, _, envelope) = await InviteAsync();
+
+        JoinedGroup joined = await GroupJoin.JoinFromEnvelopeAsync(
+            _cs, envelope, invitee.Secret, Storage);
+
+        var peeler = new NostrGroupPeeler();
+
+        // Sized above the library default, so a group joined on the defaults
+        // fails here while one carrying Marmot's window passes.
+        int batch = DotnetMls.Group.MlsGroupConfig.DefaultOutOfOrderTolerance + 20;
+        Assert.True(batch <= MarmotGroupSettings.OutOfOrderTolerance);
+
+        var sent = Enumerable.Range(0, batch).Select(i => GroupMessages.Send(
+            group.Group, peeler,
+            MarmotAppEvent.Chat(inviter.Hex, (long)Now, $"m{i}"),
+            inviter.AccountPublicKey.Span)).ToList();
+
+        var read = Enumerable.Reverse(sent)
+            .Select(e => GroupMessages.Receive(
+                joined.Group,
+                peeler.Peel(e, _ => GroupMessages.ExporterSecret(joined.Group)).MlsBytes)
+                .Event.Content)
+            .ToList();
+
+        Assert.Equal(Enumerable.Range(0, batch).Reverse().Select(i => $"m{i}"), read);
+    }
 }

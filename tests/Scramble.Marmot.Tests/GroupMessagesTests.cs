@@ -1,5 +1,6 @@
 using System.Text;
 using DotnetMls.Crypto;
+using DotnetMls.Group;
 using Scramble.Marmot.AppComponents;
 using Scramble.Marmot.Engine.Groups;
 using Scramble.Marmot.Engine.KeyPackages;
@@ -62,13 +63,17 @@ public class GroupMessagesTests
         StagedInvite staged = MarmotGroupInvite.Add(alice.Group, _cs, [bundle.KeyPackage]);
         staged.Applied();
 
+        // Configured like GroupJoin does it. A helper that joined on the
+        // library defaults would give every test in this class a member with a
+        // smaller reordering window than any real one has.
         var bob = DotnetMls.Group.MlsGroup.ProcessWelcome(
             _cs,
             staged.Welcome,
             bundle.KeyPackage,
             bundle.PrivateMaterial.InitPrivateKey,
             bundle.PrivateMaterial.LeafPrivateKey,
-            bundle.PrivateMaterial.SignaturePrivateKey);
+            bundle.PrivateMaterial.SignaturePrivateKey,
+            config: MarmotGroupSettings.Create());
 
         return (aliceSigner, alice, bobSigner, bob);
     }
@@ -448,4 +453,96 @@ public class GroupMessagesTests
 
         Assert.Contains("MLSMessage", ex.Message);
     }
+
+    // ---- Delivery order ----
+
+    [Fact]
+    public async Task AMessageOvertakenOnTheRelayIsStillReadable()
+    {
+        // Nostr relays promise nothing about order, so this is the ordinary
+        // case rather than an edge one. Before the sender chain retained passed
+        // generations, the earlier message here was not delayed but lost.
+        var (aliceSigner, alice, _, bob) = await PairAsync();
+        var peeler = Peeler();
+
+        string first = GroupMessages.Send(
+            alice.Group, peeler, MarmotAppEvent.Chat(aliceSigner.Hex, (long)Now, "first"),
+            aliceSigner.AccountPublicKey.Span);
+
+        string second = GroupMessages.Send(
+            alice.Group, peeler, MarmotAppEvent.Chat(aliceSigner.Hex, (long)Now, "second"),
+            aliceSigner.AccountPublicKey.Span);
+
+        // The relay hands them over backwards.
+        Assert.Equal("second", GroupMessages.Receive(
+            bob, peeler.Peel(second, _ => GroupMessages.ExporterSecret(bob)).MlsBytes).Event.Content);
+
+        Assert.Equal("first", GroupMessages.Receive(
+            bob, peeler.Peel(first, _ => GroupMessages.ExporterSecret(bob)).MlsBytes).Event.Content);
+    }
+
+    [Fact]
+    public async Task AnOfflineBacklogArrivesBackwardsAndIsReadInFull()
+    {
+        // What a client that has been away actually sees: the whole backlog at
+        // once, newest first. Reading N newest-first needs N-1 retained keys, so
+        // the tolerance is also the largest backlog that survives this.
+        var (aliceSigner, alice, _, bob) = await PairAsync();
+        var peeler = Peeler();
+
+        var sent = Enumerable.Range(0, 40).Select(i => GroupMessages.Send(
+            alice.Group, peeler, MarmotAppEvent.Chat(aliceSigner.Hex, (long)Now, $"m{i}"),
+            aliceSigner.AccountPublicKey.Span)).ToList();
+
+        var read = Enumerable.Reverse(sent)
+            .Select(envelope => GroupMessages.Receive(
+                bob, peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(bob)).MlsBytes)
+                .Event.Content)
+            .ToList();
+
+        Assert.Equal(Enumerable.Range(0, 40).Reverse().Select(i => $"m{i}"), read);
+    }
+
+    [Fact]
+    public async Task TheGroupsCreatorReadsABackwardsBacklogToo()
+    {
+        // The mirror of the above, and not redundant: a member's own window is
+        // what governs what it can *receive*, so the sending direction above
+        // exercises only the joiner's. This is the only test that would notice
+        // a creator built on the library defaults.
+        var (_, alice, bobSigner, bob) = await PairAsync();
+        var peeler = Peeler();
+
+        var sent = Enumerable.Range(0, 40).Select(i => GroupMessages.Send(
+            bob, peeler, MarmotAppEvent.Chat(bobSigner.Hex, (long)Now, $"m{i}"),
+            bobSigner.AccountPublicKey.Span)).ToList();
+
+        var read = Enumerable.Reverse(sent)
+            .Select(envelope => GroupMessages.Receive(
+                alice.Group,
+                peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(alice.Group)).MlsBytes)
+                .Event.Content)
+            .ToList();
+
+        Assert.Equal(Enumerable.Range(0, 40).Reverse().Select(i => $"m{i}"), read);
+    }
+
+    [Fact]
+    public async Task ARelayedDuplicateIsStillRefused()
+    {
+        // Tolerating reordering must not amount to tolerating replay: a
+        // retained key is removed when it is used.
+        var (aliceSigner, alice, _, bob) = await PairAsync();
+        var peeler = Peeler();
+
+        string envelope = GroupMessages.Send(
+            alice.Group, peeler, MarmotAppEvent.Chat(aliceSigner.Hex, (long)Now, "once"),
+            aliceSigner.AccountPublicKey.Span);
+
+        byte[] mlsBytes = peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(bob)).MlsBytes;
+        GroupMessages.Receive(bob, mlsBytes);
+
+        Assert.Throws<InvalidOperationException>(() => GroupMessages.Receive(bob, mlsBytes));
+    }
+
 }
