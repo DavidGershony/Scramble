@@ -2,6 +2,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 
+using Scramble.Marmot.Engine.KeyPackages;
 namespace Scramble.Diagnostics.DarkMatterInterop;
 
 /// <summary>
@@ -162,4 +163,21 @@ public sealed class InteropRelayClient(string relayUrl)
             },
             timeout,
             ct);
+}
+
+/// <summary>Adapts the interop relay client to the KeyPackage publisher's seam.</summary>
+/// <remarks>
+/// Reports every accepted publish as <see cref="KeyPackagePublishOutcome.Accepted"/>:
+/// the publisher's three-outcome contract exists so a client can tell a refusal
+/// from a timeout, and a test relay that took the event has, by definition,
+/// accepted it.
+/// </remarks>
+internal sealed class RelayPublisher(InteropRelayClient relay, TimeSpan timeout) : IKeyPackageRelay
+{
+    public async Task<KeyPackagePublishOutcome> PublishAsync(
+        string envelope, CancellationToken ct = default)
+    {
+        await relay.PublishAsync(envelope, timeout, ct);
+        return KeyPackagePublishOutcome.Accepted;
+    }
 }

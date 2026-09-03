@@ -105,7 +105,7 @@ public class InboundJoinInteropTests : IDisposable
         await PublishAsync(us, RelayListEvent.BuildNip65(us.Hex, [PeerRelay], now));
         await PublishAsync(us, RelayListEvent.BuildMessageRelays(us.Hex, [PeerRelay], now));
 
-        var publisher = new KeyPackagePublisher(_cs, us, _storage, new RelayPublisher(_relay));
+        var publisher = new KeyPackagePublisher(_cs, us, _storage, new RelayPublisher(_relay, RelayTimeout));
         PublishedKeyPackage published = await publisher.PublishAsync((ulong)now);
         _log.Add($"our key package event {published.EventIdHex}");
 
@@ -272,15 +272,4 @@ public class InboundJoinInteropTests : IDisposable
     }
 
     private string Log() => string.Join('\n', _log);
-
-    /// <summary>Adapts the interop relay client to the publisher's seam.</summary>
-    private sealed class RelayPublisher(InteropRelayClient relay) : IKeyPackageRelay
-    {
-        public async Task<KeyPackagePublishOutcome> PublishAsync(
-            string envelope, CancellationToken ct = default)
-        {
-            await relay.PublishAsync(envelope, RelayTimeout, ct);
-            return KeyPackagePublishOutcome.Accepted;
-        }
-    }
 }

@@ -154,6 +154,13 @@ integration suite, per
 invariant I2. The engine is protocol code; it must not be able to land
 without the interop suite having run.
 
+`LeaveInteropTests` is the only place either side's **handshake** framing is
+checked against the other. Everything else bootstraps a group from a Welcome and
+then exchanges application messages, which never puts a commit or a proposal on
+the wire — so if it is ever deleted or left skipped, our `PublicMessage` framing
+and our kind-445 wrap of a handshake go back to being untested against the
+reference while the suite still reports green.
+
 **The suite must stay at zero skips.** It reached that on 2026-09-02, when the
 inbound-join test went green and the last permanently-skipped test
 (`GroupInviteInteropTests`, the `wn-agent` invite, which that peer can never

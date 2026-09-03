@@ -163,6 +163,16 @@ public sealed class MdkCliDockerClient(Action<string> log)
     public Task<JsonElement> MembersAsync(string groupIdHex) =>
         CliJsonAsync("groups", "members", groupIdHex);
 
+    /// <summary>Leaves a group.</summary>
+    /// <remarks>
+    /// Publishes a SelfRemove proposal and nothing more: the peer cannot commit
+    /// its own departure, so it stays a member until another member does. Its
+    /// own view flips to "left" immediately regardless, which is why the
+    /// interesting assertions are on our side of the wire.
+    /// </remarks>
+    public Task LeaveGroupAsync(string groupIdHex) =>
+        CliAsync("groups", "leave", groupIdHex);
+
     /// <summary>Sends a message to a group.</summary>
     public Task SendMessageAsync(string groupIdHex, string text) =>
         CliAsync("messages", "send", "--group", groupIdHex, text);
@@ -187,6 +197,21 @@ public sealed class MdkCliDockerClient(Action<string> log)
 
     /// <summary>The CLI version, for the test log.</summary>
     public async Task<string> VersionAsync() => (await ExecAsync("wn", "--version")).Trim();
+
+    /// <summary>Runs one due-maintenance pass.</summary>
+    /// <remarks>
+    /// Whether committing another member's pending departure is sync work or
+    /// maintenance work is not documented, so both are driven while waiting.
+    /// </remarks>
+    public Task RunMaintenanceAsync() => CliAsync("groups", "run-maintenance");
+
+    /// <summary>Whether any pubkey under <paramref name="json"/> matches.</summary>
+    /// <remarks>
+    /// The same whole-document search as <see cref="ContainsGroupId"/>, named
+    /// separately because the two answer different questions at call sites.
+    /// </remarks>
+    public static bool ContainsPubkey(JsonElement json, string pubkeyHex) =>
+        ContainsGroupId(json, pubkeyHex);
 
     /// <summary>
     /// Whether any group id under <paramref name="json"/> matches.

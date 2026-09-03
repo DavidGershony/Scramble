@@ -1118,6 +1118,82 @@ key rotation, and cross-epoch conversations.
    so could never complete. A permanently skipped test reads as coverage and is
    not.
 
+### 3q. P7 IS DONE — leaving works both ways, and the wire grew a new message
+
+A member can leave a group in either direction against the reference client.
+`845` unit, `363` dotnet-mls and `17` interop tests pass, none skipped.
+
+**P7 was the right next step over P8, and not only by size.** We had shipped
+SelfRemove into `dotnet-mls` to satisfy a *capability* requirement and never
+built the lifecycle that uses it — so we advertised `0x000a` while having no
+way to leave or to let anyone else leave. P8 also still depends on the
+unresolved past-epoch-secrets question (§4 item (d)).
+
+**The gap nobody had noticed: no handshake message had ever been on the wire.**
+Both interop directions bootstrapped a group from a Welcome and then exchanged
+application messages. No commit and no proposal had ever crossed between the two
+implementations — so our `PublicMessage` framing, our kind-445 wrap of a
+handshake, and our reading of one were all completely untested against the
+reference despite the suite being green. `GroupHandshake` is that transport, and
+`LeaveInteropTests` is the first evidence it agrees with upstream.
+
+**Three `dotnet-mls` gaps, all released.**
+
+1. **`v0.1.0-beta.12` — commit-to-stored-proposals.** The proposal cache was
+   write-only from the local group's point of view: `CacheProposal` filled it and
+   only an *incoming* commit ever read it. So a peer's proposal could be received,
+   verified, and never acted on — and `self_remove` in particular was unusable,
+   being illegal inline and inexpressible by anyone but its sender. A member
+   could ask to leave and no member could let them. This half of item (b) was
+   named in the plan (*"generic store/remove/commit-to-stored-proposals"*) and
+   simply not built with the first half.
+2. **`v0.1.0-beta.12` — the commit proposal-ordering bug**, found by testing the
+   above. `BuildCommit` applied proposals in list order while `ProcessCommitCore`
+   applies by type, removes before adds. An add and a removal in one commit
+   therefore placed the new leaf in *different slots* on the two sides, and the
+   commit was unprocessable by anyone. **This predates commit-by-reference and
+   was reachable through the ordinary inline API** — it has its own regression
+   test with no references in it, and both ordering tests were confirmed to fail
+   against the old order before the fix landed.
+3. **`v0.1.0-beta.13` — a member's own removal is reported, not stumbled over.**
+   A removed member cannot process the commit that removes them: an UpdatePath
+   encrypts path secrets only to remaining members. So the one message that tells
+   them they are out is the one they cannot apply. It used to surface several
+   steps later as `cannot find decryptable path secret for leaf N` — an ordinary,
+   expected event described as though the message were corrupt. Now
+   `RemovedFromGroupException`, thrown after the sender's signature verifies and
+   before any tree change, so the group is left where it was rather than
+   half-advanced.
+
+**A design error worth recording, because the review that caught it was a test
+run and not a reading.** `CommitDepartures` refused to commit the last other
+member's departure, on the theory that a group of one is degenerate. That
+refusal broke *the most common leave there is* — the other person in a
+two-person conversation walking away — and it only surfaced because the interop
+test used a two-member group. The rule was invented, not derived: nothing in
+RFC 9420 or upstream forbids a group of one, the committer always remains so a
+commit can never empty the group, and the remaining member can still invite
+someone or abandon it. **Guard rules that sound prudent still need a reason that
+survives being asked for.**
+
+**What is deliberately not here.** No scheduling and no jitter. Which remaining
+member commits a departure, and after how long, needs the clock and a view of
+the other members; `MarmotGroupLeave` provides the two mechanisms that policy
+composes and nothing above them. The reference client does auto-commit ours —
+`TheReferenceClientCommitsOurDeparture` proves it — during sync or maintenance.
+
+**What P6/P7 needs next:**
+
+1. **Wire the durable `LeaveRequest` to the re-proposal loop.** The record and
+   its storage exist from P0 and nothing writes them yet. A proposal is
+   epoch-bound and the intent is not: a leave overtaken by anyone else's commit
+   vanishes from the group's view, and without the durable record the member is
+   silently still in a group they asked to leave. Upstream keeps re-proposing
+   until a commit removes them (`groups.rs`, `leave_requested_at_ms`).
+2. **The leaving send-gate**, and the removed-copy gates around a group whose
+   `RemovedByCommit` has arrived.
+3. **Convergence (P8)**, once the past-epoch-secrets question is settled.
+
 ### 3d. Non-code items still open (not blocking)
 
 - **Open a PR for `feat/dark-matter`.** **65 commits** ahead of `master` and
