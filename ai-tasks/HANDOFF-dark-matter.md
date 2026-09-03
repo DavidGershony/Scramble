@@ -1237,6 +1237,56 @@ policy belongs above them.
 2. **P9 hardening** — session-open hydration would be the natural home for
    calling `ReproposeIfStaleAsync` across every group on start-up.
 
+### 3s. Item (d) is settled, and it found a live bug — read before P8
+
+Full write-up in `scramble-marmot-phased-plan-2026-08.md` §4a. The short form:
+
+**Two application messages from one sender, arriving in the other order, lose
+the earlier one permanently.** Not delayed — undecryptable:
+
+```
+Generation 0 has already been consumed. Current generation is 2.
+```
+
+A Nostr relay is under no obligation to preserve order, so this is reachable in
+ordinary use today. It is a **P6 bug**, despite item (d) having been filed as
+"blocks P8, not P6".
+
+**Why the suite is green anyway.** Every test we have, unit and interop,
+produces and consumes messages in order. `SeveralMessagesAllArrive` polls the
+relay and reads them as they come, which on a quiet local relay is creation
+order. Nothing has ever delivered message N+1 before message N.
+
+**The mechanism, settled from source.** The plan asked whether to persist an
+advanced ratchet back or re-derive per message. **Neither.** OpenMLS's
+`DecryptionRatchet` keeps `past_secrets: VecDeque<Option<RatchetKeyMaterial>>`
+truncated to `out_of_order_tolerance`, each entry `take`n on use. It retains and
+never rewinds, so the snapshot concern in the original note does not arise.
+
+**Three things make ours worse than merely missing.** `Message/SenderRatchet.cs`
+implements the tolerance window and **is never constructed** — dead code.
+`MlsGroupConfig.OutOfOrderTolerance` and `MaxForwardDistance` are serialised and
+read by nothing. So the library advertises a configurable tolerance whose real
+value is zero.
+
+**Upstream hit this after our pin.** `DEFAULT_OUT_OF_ORDER_TOLERANCE = 100` and
+`DEFAULT_MAXIMUM_FORWARD_DISTANCE = 1000` are new between `v0.9.10` and
+`v0.9.17`, reasoned in `wire_format.rs` as *"Marmot transports do not provide
+total ordering, so the OpenMLS default of 5 is too small for ordinary relay
+reordering and offline catch-up floods."* Match those, plus
+`max_past_epochs = 5`.
+
+**Drift is otherwise clean.** `v0.9.10..v0.9.17` over app components,
+capabilities, agent-text-stream, engine capabilities and key_package is an
+**empty diff** — everything §3g–§3r established still holds at 0.9.17.
+
+**This needs a `dotnet-mls` permission grant** and is a *new* item, not the one
+§4 originally wrote. Two parts: within-epoch retention (P6 severity, fixes the
+bug above) and across-epoch retention (P8 severity, the `max_past_epochs`
+window, which upstream forces to equal the convergence app-message window via
+`ensure_app_window_matches` — we must enforce the same equality or diverge
+silently on deliverability).
+
 ### 3d. Non-code items still open (not blocking)
 
 - **Open a PR for `feat/dark-matter`.** **65 commits** ahead of `master` and

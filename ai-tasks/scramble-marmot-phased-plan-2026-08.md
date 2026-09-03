@@ -185,6 +185,87 @@ list, in the order the build needs them.
 | **5** | **(f) Staged-commit introspection.** Generic read access to a staged commit's queued proposals, projected `GroupContext`, and export-from-staged. 🟡 **verify against `dotnet-mls` source before proposing** — `Mdk.cs` usage suggests it is absent, but that is inference, not a read. | M | Needed by the ingest validation chain and by `publish.rs`'s ordering-stamp capture. Workaround exists (`Export()`/`Import()` probe), so this is an efficiency/clarity ask, not a blocker. |
 | **6** | **Per-leaf accessor check (step-4 §4 🔴).** *Not a proposal — a read-only check.* Confirm `dotnet-mls` exposes `LeafNode.Extensions` + `SignatureKey` for (i) every ratchet-tree leaf post-Welcome and (ii) leaves inside a staged commit's Add/Update proposals. Expected present. | XS | **Do this first, before any of the above** — it costs an hour, needs no permission, and any gap turns into a trivially generic read-only accessor ask that would otherwise surface mid-P2. |
 
+### 4a. Item (d) SETTLED — 2026-09-03, and it is a P6 bug not a P8 one
+
+**The question as posed had a false premise.** It asked whether decrypting from a
+restored snapshot should persist the advanced SecretTree state back, or re-derive
+per message. OpenMLS does neither. `DecryptionRatchet` (fork `59e7d3b`,
+`openmls/src/tree/sender_ratchet.rs`) holds
+`past_secrets: VecDeque<Option<RatchetKeyMaterial>>`, truncated to
+`out_of_order_tolerance`, with each entry `take`n when used — so a used
+generation key is consumed exactly once and older ones stay available. It
+**retains**; it never rewinds. Snapshot round-tripping is therefore not the
+mechanism and the concern does not arise in the form it was written.
+
+**And the scope was wrong.** This was filed as "blocks P8, not P6". The
+across-epoch half does block P8. The **within-epoch** half is broken right now:
+
+```
+System.InvalidOperationException :
+  Generation 0 has already been consumed. Current generation is 2.
+```
+
+That is two application messages from one sender arriving in the other order —
+which a Nostr relay is under no obligation to prevent. The earlier message is
+**permanently undecryptable**, not delayed. `SecretTree.GetKeyAndNonceForGeneration`
+fast-forwards, `Array.Clear`s each intermediate secret, and throws on anything
+below the head.
+
+Three things in `dotnet-mls` make this worse than a missing feature:
+
+- **`Message/SenderRatchet.cs` is dead code.** It implements exactly the
+  seen-generation window that would tolerate reordering, and **nothing ever
+  constructs it**.
+- **`MlsGroupConfig.OutOfOrderTolerance` and `MaxForwardDistance` are inert.**
+  They are serialised by `Export`/`Import` and read by nothing.
+- So the library presents a configurable out-of-order tolerance that has no
+  effect, and the real behaviour is a tolerance of zero.
+
+**Upstream hit this after our pin and their fix is the mechanism we lack.**
+`DEFAULT_OUT_OF_ORDER_TOLERANCE = 100` and `DEFAULT_MAXIMUM_FORWARD_DISTANCE =
+1000` are **new between `wn-agent-v0.9.10` and `v0.9.17`**, with the reason
+stated in `cgka-engine/src/wire_format.rs`: *"Marmot transports do not provide
+total ordering, so the OpenMLS default of 5 is too small for ordinary relay
+reordering and offline catch-up floods."* Their comment for the knob is explicit
+about the semantics — *"Number of prior within-epoch application-message
+generations **retained** for out-of-order delivery."*
+
+**The ask this produces**, and it is a new permission-gated `dotnet-mls` item
+rather than the one originally written:
+
+1. **Within-epoch retention (P6 severity).** Give `SecretTree` a bounded
+   per-leaf ring of past generation keys, single-use, sized by
+   `OutOfOrderTolerance`; wire the config through; either use or delete
+   `SenderRatchet`. Generic RFC 9420 work, no Marmot constants.
+2. **Across-epoch retention (P8 severity).** The `max_past_epochs` window, which
+   is the same retention idea one level up. Upstream pins it to
+   `V1_APP_MESSAGE_PAST_EPOCH_LIMIT` and `ensure_app_window_matches` refuses any
+   engine whose two windows disagree — so whatever we build must enforce that
+   equality too, or we silently diverge on which messages are deliverable.
+
+**Values to match: `out_of_order_tolerance = 100`, `maximum_forward_distance =
+1000`, `max_past_epochs = 5`.** Our current defaults of 5 and 1000 in
+`MlsGroupConfig` are the stock OpenMLS ones and are not what Marmot runs.
+
+### Upstream drift check — 2026-09-03
+
+Pinned at `wn-agent-v0.9.10`; upstream is at **`v0.9.17`**. What matters for us:
+
+- **Nothing we have built has moved.** `git diff v0.9.10..v0.9.17` over
+  `traits/src/app_components.rs`, `traits/src/capabilities.rs`,
+  `traits/src/agent_text_stream.rs`, `cgka-engine/src/capabilities.rs` and
+  `cgka-engine/src/key_package.rs` is **empty**. KeyPackage shape, component
+  ids, the role capabilities and the Current-profile floor are all unchanged, so
+  every interop conclusion from §3g–§3r still holds at 0.9.17.
+- **The sender-ratchet defaults are new**, as above. This is the one change that
+  demands work.
+- **Convergence observability is new**: `DeferredMessage`,
+  `DeferredMessageReason` (`NonSelectedEligibleBranch`, `MissingCandidateParent`)
+  and `replay_probe_count` in `traits`. Relevant to P8's canonicalization
+  contract, nothing to do before it.
+- `traits/src/transport_adapter.rs` (+789) and `traits/src/message.rs` (+685)
+  grew substantially. Not yet reviewed; neither is on the P8 path.
+
 ### Safe-export: RESOLVED, and dropped from v1 🟢 (2026-08-10)
 
 The 🔴 on `safe_export_secret(component_id)` is closed. Two findings, the second
@@ -243,7 +324,7 @@ to one:
 | Item | Verdict | Basis |
 |---|---|---|
 | **(b) SelfRemove** | **Real. Ask for it, at P7.** | `ProposalType` runs `Add=1 … GroupContextExtensions=7, AppDataUpdate=8`. SelfRemove is `0x000a` and is simply not expressible — there is no workaround for a proposal type that cannot be encoded. Blocks P7, not P6. |
-| **(d) Retained past-epochs** | **Probably avoidable. Do not ask yet.** | `Export()` serialises the key schedule *and* the SecretTree, so a per-epoch snapshot yields exactly the `(KeyScheduleEpoch, SecretTree)` pair this asks for — and P0 already built epoch-anchored snapshots. ⚠ **Unsettled:** decrypting from a restored snapshot advances SecretTree ratchet state that mdk keeps live in memory. Either persist the advance back or re-derive per message. Resolve that before deciding; it blocks P8, so there is time. |
+| **(d) Retained past-epochs** | ~~Probably avoidable. Do not ask yet.~~ **SETTLED 2026-09-03 — it is real, it is bigger than stated, and it is not a P8 item. See §4a.** | The original note asked whether to persist ratchet advances back or re-derive per message. **Neither: OpenMLS retains.** And the within-epoch half of this is a live P6 bug, not a P8 blocker. |
 | **(f) Staged-commit introspection** | **Not a blocker — as this document already said.** | The `Export()`/`Import()` probe works: snapshot, `ProcessCommit`, inspect the resulting dictionary, re-`Import` if Marmot-invalid. Confirmed in source: dotnet-mls has no *inbound* staging at all (`ProcessCommit` applies directly), and `PendingCommitState` is `internal`. A throw inside `ProcessCommit` is already safe — it assigns only at the end — so rollback is needed only for commits that are MLS-valid but Marmot-invalid. |
 
 **The `Export()` round-trip is lossy in exactly two places**, and both were
