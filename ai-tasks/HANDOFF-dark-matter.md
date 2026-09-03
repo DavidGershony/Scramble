@@ -1287,6 +1287,64 @@ window, which upstream forces to equal the convergence app-message window via
 `ensure_app_window_matches` — we must enforce the same equality or diverge
 silently on deliverability).
 
+### 3t. Pinned to v0.9.17 — and the bump found an upstream regression
+
+Interop is 17/17 at `wn-agent-v0.9.17`, zero skips. Two things came out of the
+bump that reading the diff could not have produced.
+
+**1. The reference client no longer auto-commits an inbound `self_remove`.**
+Reproduced with two mdk accounts and **no Scramble code**, over ~80 seconds and
+12 `sync` + `run-maintenance` rounds:
+
+```
+wn create-identity                              # A and B
+wn --account B keys publish
+wn --account A groups create "leave probe" <B>
+wn --account B groups accept <group>
+wn --account B groups leave  <group>
+wn --account A sync; wn --account A groups run-maintenance
+wn --account A groups members <group>           # B is STILL listed
+```
+
+It worked at `v0.9.10` — the assertion that broke passed there — so it regressed
+somewhere in the seven releases between. The auto-commit **policy**
+(`cgka-engine/src/auto_committer.rs`) is a **byte-identical empty diff** across
+that range, and the jitter is `SELF_REMOVE_AUTO_COMMIT_JITTER_MIN_MS = 10` /
+`SPAN = 40`, so neither explains it. The cause is in the ingest path, which was
+substantially reworked (`DeferredPeelSweep`, deferred-capacity refusals,
+reshuffled rejection categories). **Which release, and why, is not isolated** —
+that needs a bisect with a Rust rebuild per step.
+
+`LeaveInteropTests.TheReferenceClientDoesNotYetCommitOurDeparture` is a
+**characterisation test**: it asserts the peer's current broken behaviour and
+**fails when upstream fixes it**, with the instruction to restore the stronger
+assertion in its own doc comment. That is deliberate, and it was chosen over the
+alternative of pinning back to `v0.9.10` — which would have made the suite green
+by testing against a peer that no longer resembles what users run. Green bought
+that way is the same error as a skip.
+
+**What it costs in production is bounded, and only because §3r landed first.** A
+leaver stays in the group until *some* member commits, so against an unfixed
+peer they stay. `LeaveCoordinator` re-proposes against each new epoch rather
+than treating the first unanswered proposal as done, so the member is released
+as soon as **any** conforming member commits — including one on a fixed build.
+The other direction is unaffected: `WeCommitTheReferenceClientsDeparture` still
+passes.
+
+**2. Bumping the pin means wiping the peer's data volume.** A newer binary
+opening a home written by an older one fails with `backend failure: file is not
+a database` — which reads like corruption and is not. The signature is
+distinctive: **every group test fails while every KeyPackage test passes**,
+because only the former needs the peer's own persisted state. Commands are in
+`docs/ci-setup.md`. Note the same message has a second, unrelated cause (two
+peer processes sharing one home, which corrupts it for real); the distinguishing
+question is whether the pin has just moved.
+
+**Everything else about the bump was uneventful**, as §4a's diff predicted: the
+KeyPackage shape, component ids, role capabilities and Current-profile floor are
+unchanged, and all eleven KeyPackage tests passed on the first run at 0.9.17 —
+including against the stale volume that failed everything else.
+
 ### 3d. Non-code items still open (not blocking)
 
 - **Open a PR for `feat/dark-matter`.** **65 commits** ahead of `master` and

@@ -188,9 +188,25 @@ changes. Bump it deliberately, together with the reference pin recorded in
 
 ```powershell
 # Build against a different upstream ref without editing the compose file
-$env:MDK_REF = "wn-agent-v0.9.11"
+$env:MDK_REF = "wn-agent-v0.9.18"
 docker compose -f docker-compose.test.yml build wn-agent
 ```
+
+⚠ **Bumping the pin means wiping the peer's data volume.** Its home is a
+SQLite database written by the binary that created it, and a newer binary
+opening an older one fails with `backend failure: file is not a database` —
+which reads like corruption and is not. Every group test fails while every
+KeyPackage test passes, because only the former needs the peer's own state:
+
+```powershell
+docker compose -f docker-compose.test.yml rm -sf mdk-cli
+docker volume rm scramble_mdk-cli-data scramble_mdk-cli-logs
+docker compose -f docker-compose.test.yml up -d mdk-cli
+```
+
+Note that the same error message has a second, unrelated cause: two peer
+processes sharing one home corrupts it for real. The distinguishing question is
+whether the pin has just moved.
 
 Its control plane is a Unix socket inside the container, so tests drive it with
 `docker exec` rather than over the network — the same shape

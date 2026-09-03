@@ -31,7 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 ARG MDK_REPO_URL=https://github.com/marmot-protocol/mdk.git
-ARG MDK_REF=wn-agent-v0.9.10
+ARG MDK_REF=wn-agent-v0.9.17
 
 WORKDIR /build
 RUN git clone --filter=blob:none --no-checkout "${MDK_REPO_URL}" . \

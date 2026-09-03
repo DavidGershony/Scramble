@@ -34,7 +34,7 @@ services:
       context: ./tests/wn-agent-docker
       dockerfile: Dockerfile
       args:
-        MDK_REF: ${MDK_REF:-wn-agent-v0.9.10}
+        MDK_REF: ${MDK_REF:-wn-agent-v0.9.17}
     container_name: wn-agent-interop
     # Host networking is required, not a shortcut. The agent accepts plaintext
     # ws:// relays only for a literal loopback host and rejects private ranges,
@@ -69,7 +69,7 @@ services:
       context: ./tests/mdk-cli-docker
       dockerfile: Dockerfile
       args:
-        MDK_REF: ${MDK_REF:-wn-agent-v0.9.10}
+        MDK_REF: ${MDK_REF:-wn-agent-v0.9.17}
     image: scramble-mdk-cli:latest
     container_name: mdk-cli-interop
     # Host networking for the same reason as wn-agent: the stack accepts a
