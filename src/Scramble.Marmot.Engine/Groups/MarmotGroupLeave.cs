@@ -42,6 +42,14 @@ public static class MarmotGroupLeave
     /// somebody commits the proposal. A client that hides the group at this
     /// point is showing an outcome that has not happened.
     /// </remarks>
+    /// <remarks>
+    /// <b>The proposal is cached on our own group before it is returned</b>, and
+    /// that is not bookkeeping. The commit that grants the request cites the
+    /// proposal <i>by hash</i>, so a leaver who did not keep a copy cannot
+    /// resolve what that commit does — the one message telling them they are out
+    /// fails with "unknown proposal reference" instead. Committing it remains
+    /// impossible for us, and <see cref="CommitDepartures"/> skips it.
+    /// </remarks>
     /// <exception cref="InvalidOperationException">
     /// The group has only one member, so nobody could ever commit the request.
     /// </exception>
@@ -59,7 +67,10 @@ public static class MarmotGroupLeave
                 "A sole member cannot leave; nobody remains to commit the request.");
         }
 
-        return group.ProposePublic(new SelfRemoveProposal());
+        PublicMessage proposal = group.ProposePublic(new SelfRemoveProposal());
+        group.CacheProposal(proposal);
+
+        return proposal;
     }
 
     /// <summary>
@@ -72,11 +83,10 @@ public static class MarmotGroupLeave
     /// <see cref="StagedInvite.Applied"/> is called.
     /// </para>
     /// <para>
-    /// Our own cached request is skipped rather than refused. It is there in the
-    /// ordinary case — we cache proposals as they arrive, including a copy of
-    /// our own — and committing it is the one thing RFC 9420 forbids, so
-    /// treating its presence as an error would make our own pending departure
-    /// block everyone else's.
+    /// Our own cached request is skipped rather than refused. It is always there
+    /// when we are leaving — <see cref="Request"/> caches it deliberately — and
+    /// committing it is the one thing RFC 9420 forbids, so treating its presence
+    /// as an error would make our own pending departure block everyone else's.
     /// </para>
     /// </remarks>
     /// <param name="group">The group to commit against.</param>

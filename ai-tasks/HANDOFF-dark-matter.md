@@ -1182,17 +1182,60 @@ the other members; `MarmotGroupLeave` provides the two mechanisms that policy
 composes and nothing above them. The reference client does auto-commit ours —
 `TheReferenceClientCommitsOurDeparture` proves it — during sync or maintenance.
 
-**What P6/P7 needs next:**
+**What P6/P7 needs next:** see §3r — items 1 and 2 are now done.
 
-1. **Wire the durable `LeaveRequest` to the re-proposal loop.** The record and
-   its storage exist from P0 and nothing writes them yet. A proposal is
-   epoch-bound and the intent is not: a leave overtaken by anyone else's commit
-   vanishes from the group's view, and without the durable record the member is
-   silently still in a group they asked to leave. Upstream keeps re-proposing
-   until a commit removes them (`groups.rs`, `leave_requested_at_ms`).
-2. **The leaving send-gate**, and the removed-copy gates around a group whose
-   `RemovedByCommit` has arrived.
-3. **Convergence (P8)**, once the past-epoch-secrets question is settled.
+### 3r. The durable leave intent is wired — P7 is complete
+
+`LeaveCoordinator` closes the two gaps §3q left open. 875 unit tests pass.
+
+**The failure it exists to prevent is silent, which is why it needed building
+rather than noting.** A `self_remove` proposal is valid only in the epoch it was
+framed against, and every member drops its cached proposals on *any* commit —
+someone joining, someone else leaving, a routine key rotation. So a departure
+request that is overtaken is discarded everywhere with **nobody rejecting it and
+nothing reporting a failure**. The member stays in the group; their client shows
+them as gone. Nothing about that is visible without the durable record.
+
+So `LeaveRequest` is written **before** the proposal is handed to the caller —
+the reverse order loses the intent to a crash between publishing and writing,
+which is the exact failure — and `ReproposeIfStaleAsync` re-sends against each
+new epoch until a commit resolves it. `ObserveAsync` clears the intent and marks
+the group `Removed` on `RemovedByCommit`, for an eviction as much as a
+departure: the two reach the same end.
+
+**A real gap the first test run found: a leaver must cache their own proposal.**
+The commit that grants a departure cites the proposal **by hash**, so a leaver
+who kept no copy cannot resolve what that commit does — the one message telling
+them they are out fails with *"unknown proposal reference"* instead of reporting
+their removal. `MarmotGroupLeave.Request` now caches it on the local group.
+Committing it stays impossible for us and `CommitDepartures` skips it, so the
+only thing the copy buys is the ability to understand our own removal.
+
+Worth knowing: **`LeaveInteropTests` passed before this fix**, so the reference
+client resolves our SelfRemove into an inline Remove rather than referencing our
+proposal. Our own implementation references it, so both shapes now work — but
+that difference was invisible until a unit test drove our own commit path.
+
+**The send gate covers two different states and only one is a correctness rule.**
+A removed member cannot send anything the group could read; that half is
+mechanical. Gating a *pending* departure is a product decision — the send would
+work, and a member who has asked to leave has said they are done. **Receiving is
+deliberately never gated**: a leaver remains a member until someone commits, and
+the commit that finally releases them arrives during exactly that window.
+
+**Still not here, and still deliberate:** no schedule and no jitter. Which
+remaining member commits a departure, and when to call `ReproposeIfStaleAsync`,
+needs the clock and a view of the other members. The mechanisms are here; the
+policy belongs above them.
+
+**What is next:**
+
+1. **P8 convergence** — the remaining phase before hardening, and the
+   past-epoch-secrets question (§4 item (d)) has to be settled first: whether
+   decrypting from a restored snapshot needs the advanced SecretTree persisted
+   back or re-derived per message.
+2. **P9 hardening** — session-open hydration would be the natural home for
+   calling `ReproposeIfStaleAsync` across every group on start-up.
 
 ### 3d. Non-code items still open (not blocking)
 
