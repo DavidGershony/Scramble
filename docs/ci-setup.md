@@ -253,6 +253,28 @@ observed to exit 0 when it could not reach the daemon or the registry at all.
 
 ## Local reproduction
 
+⚠ **Check the peers are up before believing a local interop run.** With the
+containers stopped every test in the suite *skips*, and the run still exits
+successfully — `Skipped! - Failed: 0, Passed: 0, Skipped: 17`. Grepping for
+`Passed!` or `Failed!` misses that line entirely, so an empty run reads as
+either a pass or an unexplained failure depending on how you looked. CI is
+protected by an explicit readiness step; a local shell is not.
+
+**Both peers, not one.** The suite drives two: `mdk-cli` for everything about
+groups, messages and leaving, and `wn-agent` for the nine KeyPackage tests.
+Starting only the first gives `Passed: 8, Skipped: 9`, which reads as a pass at a
+glance. Check each one answers:
+
+```powershell
+docker compose -f docker-compose.test.yml up -d nostr-relay mdk-cli wn-agent
+docker exec mdk-cli-interop wn --version
+docker exec wn-agent-interop wn-agent bootstrap `
+  --home /data/marmot-agent --socket /run/marmot-agent/wn-agent.sock --no-quic --json
+```
+
+Then require `Skipped: 0` in the result, rather than the absence of failures.
+A run that skips everything reports success.
+
 ```powershell
 # Boot the relay container
 docker compose -f docker-compose.test.yml up -d nostr-relay
