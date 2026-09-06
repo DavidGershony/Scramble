@@ -157,6 +157,13 @@ than average.
   `src/Scramble.Mobile.Android/`. See I1-M.
 - **Don't defer regression tests.** If you're writing a `fix:`, the test
   that proves the fix is part of the fix, not a follow-up. See I3.
+- **Check a test fails before trusting it.** A test written alongside the
+  code it checks inherits the same misreading, and reads convincingly
+  either way. Break the implementation deliberately and confirm the test
+  notices — a survivor means the test covers nothing, whatever its name
+  says. For protocol code, where a mistake stays silent until a peer
+  disagrees, use the `split-and-mutate` skill: the implementer and the test
+  author work from a shared contract and not from each other.
 
 ### Dark Matter cutover rules (decided 2026-08-09)
 
