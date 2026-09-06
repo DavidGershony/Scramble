@@ -1407,6 +1407,76 @@ the harness exists, a vector's `decisive_rule` maps straight onto
    replay budget, own-commit replay workaround, crash-safe two-level reorg
    apply.
 
+### 3v. The scenario harness runs — and it is weaker than hoped, precisely
+
+916 unit tests pass. `tests/Scramble.Marmot.Tests/Convergence/` runs both of
+upstream's convergence scenarios end-to-end through our engine: real MLS state,
+real commits and Welcomes, a simulated network that can withhold and release.
+
+**It earned its keep immediately — three real bugs, one of them a design
+error.**
+
+1. **Reading before converging.** A client decrypted application messages before
+   resolving which branch it was on, so it dropped exactly the traffic addressed
+   to the branch it was about to adopt. In a scenario where that traffic is the
+   witness evidence, this silently changes which branch wins.
+2. **Dropping undecryptable messages.** They are now deferred and retried, since
+   a message may belong to a branch the member has not been shown yet.
+3. **Witness attribution was member-local, and that cannot converge.** Witnesses
+   were recorded as "messages I saw while sitting on branch X". Two members who
+   were on different branches when the same message arrived then count different
+   witnesses for the same branch and select differently — which the agreement
+   check caught as a genuine four-way split. **Upstream computes them by
+   replaying stored application messages against each materialized branch**
+   (`openmls_projection.rs`: *"App ids re-admitted for witness scoring only"*),
+   so every member holding the same messages gets the same answer. Own sends
+   count too. Rewritten to match.
+
+**A member invited on the losing branch is stranded, and that is correct.** Eve
+joins by bob's Welcome; the group converges onto alice's branch; eve holds a
+group that never happened and must be re-invited. `EveryoneStillInTheGroupAgrees`
+distinguishes that from a divergence — a member *in* the surviving history who
+disagrees about it is the bug.
+
+**Now the important part: what the vectors do NOT verify.** Five mutations of
+`BranchSelection`, run against the vectors alone:
+
+| Mutation | Caught by the vectors? |
+|---|---|
+| Flip the `tip_committer` direction | **No** |
+| Remove the witness depth boost | **No** |
+| Ignore the rewind horizon | **No** |
+| Stop deduplicating witnesses per epoch | **No** |
+| Always report no quorum | Yes |
+
+**Why.** In `convergence-committer-selected` the two branches tie on every rule
+until `tip_committer`, and both tip at epoch 2 with four members — so
+`selected_tip_epoch`, `decisive_rule`, `witness_quorum_met` and `member_count`
+are **identical whichever branch wins**. Nothing upstream records distinguishes
+them. The horizon and dedup mutations survive because neither scenario creates
+the conditions (no branch forks beyond five, no epoch repeats a sender). And a
+uniformly wrong rule can never be caught by cross-member agreement, because
+every member applies it identically and they still agree.
+
+All four are caught by the **unit** tests in `ConvergencePolicyTests` — but
+those encode our reading of upstream's source, which is the thing that wanted
+independent confirmation. **So the tie-break direction remains verified by
+reading, not by fixture.** That is the residual risk on this phase, and it is
+not closable with the vectors upstream currently ships.
+
+**What P8 needs next:**
+
+1. **Across-epoch retention** (§4a part two) — the `max_past_epochs` window,
+   approved to land with P8; `RequireWindowMatches` is waiting for it.
+2. **A vector that distinguishes a tie-break winner**, which means either asking
+   upstream for one or generating one against their simulator. Until then, treat
+   `tip_priority` / `tip_committer` / `tip_digest` direction as the least
+   verified thing in the engine.
+3. **`CanonicalizationPipeline`** and then the real `CandidateMaterializer` — the
+   harness's `Materialize` is a working sketch of it (restore a snapshot, apply,
+   score) and shows the shape, but has no DoS replay budget, no crash-safe reorg
+   apply, and no storage.
+
 ### 3d. Non-code items still open (not blocking)
 
 - **Open a PR for `feat/dark-matter`.** **65 commits** ahead of `master` and
