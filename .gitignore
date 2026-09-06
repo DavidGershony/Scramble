@@ -25,8 +25,11 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
-# Claude Code
-.claude/
+# Claude Code. Skills are shared working knowledge and belong in the repo;
+# everything else here is per-machine state (settings.local.json records the
+# permissions this checkout has granted, which are nobody else's business).
+.claude/*
+!.claude/skills/
 
 # Android keystore (stored as GitHub secret, never committed)
 *.keystore
