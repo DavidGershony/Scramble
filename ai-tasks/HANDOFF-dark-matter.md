@@ -1477,6 +1477,61 @@ not closable with the vectors upstream currently ships.
    score) and shows the shape, but has no DoS replay budget, no crash-safe reorg
    apply, and no storage.
 
+### 3w. Across-epoch retention is done — item (d) is fully closed
+
+`dotnet-mls v0.1.0-beta.15`, plus `MarmotGroupSettings.MaxPastEpochs = 5`.
+917 unit and 384 library tests pass. §4a's second half is landed; the first
+(within-epoch) shipped in `beta.14`.
+
+**What retention actually needs, which the plan understated.** §4 described the
+ask as an `(KeyScheduleEpoch, SecretTree)` window. That is not enough.
+`DecryptApplicationMessage` also resolves the sender's leaf and verifies the
+signature against the group context, and **both are epoch-relative**. A retained
+epoch therefore keeps four things: its secret tree, its sender-data secret, its
+leaves' signature *public* keys, and its serialized group context.
+
+**The sharp case is leaf reuse, and it is a security bug rather than an
+inconvenience.** A removed member's slot is taken by the next member added —
+the receiver applies removes before adds, so the newcomer lands in the freed
+leaf. Verify a past message against today's tree and it is checked against
+whoever holds that leaf *now*, crediting one member's words to another.
+`ASenderWhoseLeafHasBeenReusedIsStillTheOriginalSender` pins it.
+
+**A retained epoch is history, not a second present.** It holds no private keys,
+no key schedule and no ratchet tree, so it cannot send or commit even by
+mistake. The handshake ratchets come along unavoidably (same secret tree), so
+the past-epoch path additionally refuses any content type but Application — a
+superseded commit decrypted out of history is the first half of letting a stale
+commit rewind a group that has moved on.
+
+**`MarmotGroupSettings.MaxPastEpochs` is a consensus value, not a transport
+allowance**, unlike the reordering window beside it. Convergence scores a branch
+on the messages that witness it, and a member only witnesses what it can
+decrypt — so two members retaining different depths count different witnesses
+and can select different branches. It is defined as
+`ConvergencePolicy.V1AppMessagePastEpochLimit`, and `RequireWindowMatches` now
+has a real counterpart to check rather than the constant compared to itself.
+
+**On the split-agent experiment.** Implementation and tests were written
+separately without reference to each other. That worked, and mutation testing
+afterwards is what showed how well: **two of my ten tests did not test what they
+claimed.** The handshake guard was exercised with a `PublicMessage` commit —
+which is not encrypted and never reaches a retained epoch at all — and the
+sender-identity test removed a member whose leaf nobody reused. Both passed
+against a deliberately broken implementation. Fixed, and both now fail against
+the mutation.
+
+The limit of the method is worth recording: the tests still encode *our* reading
+of upstream, so a green run means the implementation matches the spec, not that
+the spec matches Marmot. Splitting the work catches implementation slips, not
+specification errors.
+
+**Known and accepted:** `Export()` does not persist within-epoch reordering
+windows, for retained epochs or the current one — after a restart a message
+older than its chain head is unrecoverable. Pre-existing, inherited rather than
+introduced, and it needs `RatchetState` to expose its retained keys. Worth a
+follow-up only if persistence across restarts becomes load-bearing.
+
 ### 3d. Non-code items still open (not blocking)
 
 - **Open a PR for `feat/dark-matter`.** **65 commits** ahead of `master` and

@@ -48,6 +48,28 @@ public static class MarmotGroupSettings
     /// </remarks>
     public const int MaxForwardDistance = 1000;
 
+    /// <summary>
+    /// How many past epochs stay readable, for delayed application messages.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Not a transport allowance like the reordering window — this one is a
+    /// <b>consensus</b> value. Convergence scores a branch partly on the
+    /// application messages that witness it, and a member can only witness a
+    /// message it can decrypt. Two members retaining different depths therefore
+    /// count different witnesses for the same branch and can select different
+    /// branches, which is the one thing branch selection may not do.
+    /// </para>
+    /// <para>
+    /// So it must equal
+    /// <see cref="Convergence.ConvergencePolicy.V1AppMessagePastEpochLimit"/>,
+    /// and <see cref="Convergence.ConvergencePolicy.RequireWindowMatches"/>
+    /// exists to refuse the pairing where it does not. Upstream ties the same
+    /// two together with <c>ensure_app_window_matches</c>.
+    /// </para>
+    /// </remarks>
+    public const int MaxPastEpochs = (int)Convergence.ConvergencePolicy.V1AppMessagePastEpochLimit;
+
     /// <summary>The configuration every Marmot group is built and joined with.</summary>
     /// <remarks>
     /// A new instance each time: the type is immutable in the properties that
@@ -58,5 +80,6 @@ public static class MarmotGroupSettings
     {
         OutOfOrderTolerance = OutOfOrderTolerance,
         MaxForwardDistance = MaxForwardDistance,
+        MaxPastEpochs = MaxPastEpochs,
     };
 }

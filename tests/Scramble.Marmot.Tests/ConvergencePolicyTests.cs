@@ -1,5 +1,6 @@
 using Scramble.Marmot.AppComponents;
 using Scramble.Marmot.Engine.Convergence;
+using Scramble.Marmot.Engine.Groups;
 using Xunit;
 
 namespace Scramble.Marmot.Tests;
@@ -123,13 +124,26 @@ public class ConvergencePolicyTests
     [Fact]
     public void TheAppWindowMatchesTheWindowMarmotGroupsRunWith()
     {
-        // The MLS side of the same equality. If MarmotGroupSettings and the
-        // convergence policy ever disagree, every group we create fails
-        // acceptance -- which is the intended outcome, and this says so before
-        // a group has to.
+        // The MLS side of the same equality, and now it has a real counterpart
+        // rather than comparing the constant to itself. If MarmotGroupSettings
+        // and the convergence policy ever disagree, members retain different
+        // depths, count different witnesses for the same branch, and can select
+        // different branches -- so acceptance is meant to refuse the pairing,
+        // and this says so before a group has to.
         Assert.Equal(
-            ConvergencePolicy.V1AppMessagePastEpochLimit,
-            ConvergencePolicy.V1.AppMessagePastEpochLimit);
+            (int)ConvergencePolicy.V1.AppMessagePastEpochLimit,
+            MarmotGroupSettings.MaxPastEpochs);
+
+        ConvergencePolicy.V1.RequireAcceptable((ulong)MarmotGroupSettings.MaxPastEpochs);
+    }
+
+    [Fact]
+    public void TheGroupsWeBuildCarryThatWindow()
+    {
+        // The constant agreeing with itself proves nothing if the config we
+        // hand MLS says something else. This is the value groups actually run.
+        Assert.Equal(
+            MarmotGroupSettings.MaxPastEpochs, MarmotGroupSettings.Create().MaxPastEpochs);
     }
 }
 
