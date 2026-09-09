@@ -180,15 +180,26 @@ at once:
 The `whitenoise` service stays until the old protocol is retired. Neither
 replaces the other.
 
-`wn-agent` is **pinned to a tag** (`wn-agent-v0.9.10`), not a branch. Upstream
-lands roughly eight commits a day, so an unpinned build would silently
-retarget every interop test between runs — including through wire-format
-changes. Bump it deliberately, together with the reference pin recorded in
-`ai-tasks/scramble-marmot-phased-plan-2026-08.md`, and re-run the drift diff:
+Both peers **track upstream's moving `wn-agent-latest` tag** (decided
+2026-09-09), so what we test against is what Marmot is actually shipping.
+
+The trade is explicit. Marmot asked for interop testing now, which makes finding
+their regressions early the *point* of these images rather than noise in them —
+a peer frozen at a tag we chose tests a version nobody runs. What it costs is
+attribution: **a red interop run may be upstream's change rather than ours.**
+Read the version the readiness check prints before assuming the fault is local,
+and report genuine upstream breakage back to them.
+
+Two findings already came from this, both invisible from the pinned side:
+`v0.9.17` stopped auto-committing an inbound `self_remove` (characterised in
+`LeaveInteropTests`, reproducible peer-to-peer with no Scramble code), and
+`v0.9.19` stopped advertising RFC 9420 §7.2 default extension types.
+
+To reproduce a specific build, override the ref:
 
 ```powershell
 # Build against a different upstream ref without editing the compose file
-$env:MDK_REF = "wn-agent-v0.9.18"
+$env:MDK_REF = "wn-agent-v0.9.20"
 docker compose -f docker-compose.test.yml build wn-agent
 ```
 

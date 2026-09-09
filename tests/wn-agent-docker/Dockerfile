@@ -4,10 +4,19 @@
 # whitenoise-rs daemon. That one stays for as long as we test against the old
 # protocol; this one is what the Scramble.Marmot engine is verified against.
 #
-# Upstream moves fast (roughly 8 commits a day through mid-2026), so the ref is
-# pinned rather than tracking a branch. Bump MDK_REF deliberately, together with
-# the reference pin recorded in ai-tasks/scramble-marmot-phased-plan-2026-08.md
-# — an unpinned build here would silently retarget every interop test.
+# Upstream moves fast (roughly 8 commits a day through mid-2026), and this image
+# TRACKS its moving `wn-agent-latest` tag rather than a fixed release.
+#
+# That is a deliberate trade, made 2026-09-09. Marmot asked for interop testing
+# now, so finding their regressions early is the point of this image rather than
+# noise in it -- a peer frozen at a tag we chose tests a version nobody runs.
+# The cost is that a red interop run may be upstream's change rather than ours,
+# so read the version the readiness check prints before assuming the fault is
+# local, and report what you find back to them.
+#
+# To reproduce a specific build, override the ref:
+#   $env:MDK_REF = "wn-agent-v0.9.20"
+#   docker compose -f docker-compose.test.yml build wn-agent
 
 FROM rust:1.91-bookworm AS builder
 
@@ -19,7 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 ARG MDK_REPO_URL=https://github.com/marmot-protocol/mdk.git
-ARG MDK_REF=wn-agent-v0.9.17
+ARG MDK_REF=wn-agent-latest
 
 WORKDIR /build
 RUN git clone --filter=blob:none --no-checkout "${MDK_REPO_URL}" . \
