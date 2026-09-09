@@ -43,11 +43,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG MDK_REPO_URL=https://github.com/marmot-protocol/mdk.git
 ARG MDK_REF=wn-agent-latest
 
+# The commit MDK_REF resolved to when the build was launched.
+#
+# Without this the build is WRONG rather than merely stale: MDK_REF is a moving
+# tag, so the clone below keys its cache on the unchanged string
+# "wn-agent-latest" and Docker happily reuses a checkout from weeks ago.
+# Passing the resolved commit makes the cache key move exactly when upstream
+# does -- an unchanged commit reuses everything, a new one rebuilds from here.
+#
+# scripts/build-marmot-peers.ps1 resolves and passes it. Building by hand
+# without it gets "unresolved", which caches on that literal and has the same
+# staleness problem, so use the script.
+ARG MDK_COMMIT=unresolved
+
 WORKDIR /build
 RUN git clone --filter=blob:none --no-checkout "${MDK_REPO_URL}" . \
     && git fetch --depth 1 origin "${MDK_REF}" \
     && git checkout FETCH_HEAD \
     && git log -1 --oneline
+
+# Fails the build if the tag moved between resolving it and cloning it, so a
+# race produces an error rather than an image mislabelled with a commit it does
+# not contain.
+RUN actual=$(git rev-parse HEAD); \
+    echo "MDK_REF=${MDK_REF} requested=${MDK_COMMIT} actual=${actual}"; \
+    if [ "${MDK_COMMIT}" != "unresolved" ] && [ "${actual}" != "${MDK_COMMIT}" ]; then \
+      echo "The tag moved mid-build. Re-run."; exit 1; \
+    fi
 
 # --locked keeps the dependency graph exactly as upstream tagged it.
 RUN cargo build --locked --release -p wn-cli --bin wn --bin wnd
@@ -61,6 +83,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /build/target/release/wn /usr/local/bin/wn
 COPY --from=builder /build/target/release/wnd /usr/local/bin/wnd
+
+ARG MDK_COMMIT
+LABEL mdk.commit="${MDK_COMMIT}"
 
 RUN mkdir -p /data /logs
 

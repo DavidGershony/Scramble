@@ -27,10 +27,20 @@ namespace Scramble.Marmot.Engine.Groups;
 /// or <see cref="Discard"/> if publishing failed for good. Leaving it unfinished
 /// leaves a pending commit on the group, which blocks the next one.
 /// </para>
+/// <para>
+/// <b>Dispose it.</b> Between staging and publishing, the code crosses
+/// transport and storage boundaries, and an exception in there used to strand
+/// the commit — blocking every later commit on that group, including whatever
+/// retry the caller attempted. A <c>using</c> closes that window. Once
+/// <see cref="Publishing"/> is called disposal stops cleaning up, because from
+/// that point a peer may hold the commit and clearing it locally is what causes
+/// a fork rather than what prevents one.
+/// </para>
 /// </remarks>
-public sealed class StagedCommit
+public sealed class StagedCommit : IDisposable
 {
     private readonly MlsGroup _group;
+    private State _state = State.Staged;
 
     internal StagedCommit(
         MlsGroup group,
@@ -77,7 +87,11 @@ public sealed class StagedCommit
     /// Applies the commit, advancing the group to the new epoch.
     /// </summary>
     /// <remarks>Call only once the commit is durably published.</remarks>
-    public void Applied() => _group.MergePendingCommit();
+    public void Applied()
+    {
+        _group.MergePendingCommit();
+        _state = State.Resolved;
+    }
 
     /// <summary>
     /// Abandons the commit, leaving the group where it was.
@@ -87,7 +101,69 @@ public sealed class StagedCommit
     /// is the wrong move: a peer that received it has advanced, and this group
     /// would be the one left behind.
     /// </remarks>
-    public void Discard() => _group.ClearPendingCommit();
+    public void Discard()
+    {
+        _group.ClearPendingCommit();
+        _state = State.Resolved;
+    }
+
+    /// <summary>
+    /// Declares that publishing has begun, so disposal will no longer clean up.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Call this immediately before handing the commit to a relay.</b> Up to
+    /// that moment the commit exists only here and clearing it is free; after
+    /// it, a peer may already hold it, and clearing it locally is the one move
+    /// that guarantees a fork — everyone else advances and we stay behind,
+    /// convinced nothing happened.
+    /// </para>
+    /// <para>
+    /// So this narrows what disposal is allowed to assume. A commit abandoned
+    /// after this point is deliberately left staged rather than tidied away,
+    /// because a stranded pending commit is recoverable and a silent fork is
+    /// not.
+    /// </para>
+    /// </remarks>
+    public void Publishing() => _state = State.Publishing;
+
+    /// <summary>
+    /// Clears the commit if it was staged and never went anywhere.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The window this closes: between staging and the publish attempt the code
+    /// crosses transport and storage boundaries, and an exception there used to
+    /// leave the group holding a pending commit forever — which blocks every
+    /// later commit on that group, including the retry.
+    /// </para>
+    /// <para>
+    /// It deliberately does nothing once <see cref="Publishing"/> has been
+    /// called, and nothing after <see cref="Applied"/> or
+    /// <see cref="Discard"/>. Disposal is a safety net for the case where
+    /// nobody could have seen the commit, not a substitute for deciding what
+    /// happened to one that might have been published.
+    /// </para>
+    /// </remarks>
+    public void Dispose()
+    {
+        if (_state == State.Staged)
+            _group.ClearPendingCommit();
+
+        _state = State.Resolved;
+    }
+
+    private enum State
+    {
+        /// <summary>Staged locally; nobody else can have seen it.</summary>
+        Staged,
+
+        /// <summary>Handed to a relay; its fate is the caller's to determine.</summary>
+        Publishing,
+
+        /// <summary>Applied or discarded. Nothing left to clean up.</summary>
+        Resolved,
+    }
 }
 
 /// <summary>
