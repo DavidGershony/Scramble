@@ -79,8 +79,8 @@ public static class MarmotGroupLeave
     /// <remarks>
     /// <para>
     /// Publish-before-apply, like every other commit: the returned
-    /// <see cref="StagedInvite"/> leaves the group at its current epoch until
-    /// <see cref="StagedInvite.Applied"/> is called.
+    /// <see cref="StagedCommit"/> leaves the group at its current epoch until
+    /// <see cref="StagedCommit.Applied"/> is called.
     /// </para>
     /// <para>
     /// Our own cached request is skipped rather than refused. It is always there
@@ -91,7 +91,7 @@ public static class MarmotGroupLeave
     /// </remarks>
     /// <param name="group">The group to commit against.</param>
     /// <returns>The staged commit, or null when nobody has asked to leave.</returns>
-    public static StagedInvite? CommitDepartures(MlsGroup group)
+    public static StagedCommit? CommitDepartures(MlsGroup group)
     {
         ArgumentNullException.ThrowIfNull(group);
 
@@ -121,7 +121,7 @@ public static class MarmotGroupLeave
         // here can never empty the group.
         var (commit, welcome) = group.CommitPublic(referencedProposals: references);
 
-        return new StagedInvite(group, commit, welcome, departing);
+        return new StagedCommit(group, commit, welcome, departing);
     }
 
     /// <summary>

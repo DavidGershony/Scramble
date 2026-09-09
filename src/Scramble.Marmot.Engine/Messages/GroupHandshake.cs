@@ -59,7 +59,7 @@ public static class GroupHandshake
     /// Wraps a staged commit for the wire, under the epoch it is sent from.
     /// </summary>
     /// <remarks>
-    /// Call this <i>before</i> <see cref="StagedInvite.Applied"/>: that is both
+    /// Call this <i>before</i> <see cref="StagedCommit.Applied"/>: that is both
     /// the publish-before-apply rule and, here, a hard requirement, because
     /// applying first would change the key this must be wrapped under.
     /// </remarks>

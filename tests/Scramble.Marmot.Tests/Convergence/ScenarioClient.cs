@@ -17,7 +17,7 @@ namespace Scramble.Marmot.Tests.Convergence;
 /// <summary>A staged commit awaiting its publication acknowledgement.</summary>
 /// <param name="Label">The scenario's publication label.</param>
 /// <param name="Staged">The staged commit, not yet applied.</param>
-public sealed record PendingPublication(string Label, StagedInvite Staged);
+public sealed record PendingPublication(string Label, StagedCommit Staged);
 
 /// <summary>
 /// One simulated member, holding real MLS state.
@@ -140,7 +140,7 @@ public sealed class ScenarioClient
     }
 
     /// <summary>Applies our own staged commit once its publication is confirmed.</summary>
-    public void ApplyOwn(StagedInvite staged, byte[] commitBytes)
+    public void ApplyOwn(StagedCommit staged, byte[] commitBytes)
     {
         Snapshot();
         staged.Applied();

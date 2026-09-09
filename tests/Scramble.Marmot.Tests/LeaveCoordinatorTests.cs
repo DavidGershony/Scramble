@@ -67,7 +67,7 @@ public class LeaveCoordinatorTests : IDisposable
         var bobBundle = await MarmotKeyPackageBuilder.CreateAsync(_cs, new LocalSigner(), Now);
         var carolBundle = await MarmotKeyPackageBuilder.CreateAsync(_cs, new LocalSigner(), Now);
 
-        StagedInvite staged = MarmotGroupInvite.Add(
+        StagedCommit staged = MarmotGroupInvite.Add(
             alice.Group, _cs, [bobBundle.KeyPackage, carolBundle.KeyPackage]);
         staged.Applied();
 
@@ -379,7 +379,7 @@ public class LeaveCoordinatorTests : IDisposable
         Deliver(trio.Bob, trio.Alice.Group, request);
         Deliver(trio.Bob, trio.Carol, request);
 
-        StagedInvite staged = MarmotGroupLeave.CommitDepartures(trio.Alice.Group)!;
+        StagedCommit staged = MarmotGroupLeave.CommitDepartures(trio.Alice.Group)!;
         var peeler = Peeler();
         string envelope = GroupHandshake.Wrap(trio.Alice.Group, peeler, staged.Commit);
         staged.Applied();

@@ -228,7 +228,7 @@ public sealed class MessageInteropFixture : IAsyncLifetime
 
             GroupIdHex = Convert.ToHexString(_group.GroupId).ToLowerInvariant();
 
-            StagedInvite staged = MarmotGroupInvite.Add(_group.Group, _cs, [peerKeyPackage]);
+            StagedCommit staged = MarmotGroupInvite.Add(_group.Group, _cs, [peerKeyPackage]);
 
             string wrapped = WelcomePublication.Wrap(
                 _scramble.Secret,

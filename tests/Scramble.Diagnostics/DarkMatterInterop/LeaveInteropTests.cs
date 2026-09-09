@@ -114,12 +114,12 @@ public class LeaveInteropTests : IDisposable
         Assert.True(request is not null, $"No departure request arrived.\n{Log()}");
 
         // Ours to commit, because theirs cannot be.
-        StagedInvite staged = Assert.IsType<StagedInvite>(
+        StagedCommit staged = Assert.IsType<StagedCommit>(
             MarmotGroupLeave.CommitDepartures(group.Group));
 
         Assert.Equal(
             peerPubkey,
-            Convert.ToHexString(Assert.Single(staged.AddedAccounts)).ToLowerInvariant());
+            Convert.ToHexString(Assert.Single(staged.AffectedAccounts)).ToLowerInvariant());
 
         // Publish-before-apply, wrapped under the epoch the peer is still at.
         await _relay.PublishAsync(
@@ -241,7 +241,7 @@ public class LeaveInteropTests : IDisposable
         CreatedGroup group = await MarmotGroupBuilder.CreateAsync(
             _cs, us, "Leave interop", "", Now(), [PeerRelay]);
 
-        StagedInvite staged = MarmotGroupInvite.Add(group.Group, _cs, [peerKeyPackage]);
+        StagedCommit staged = MarmotGroupInvite.Add(group.Group, _cs, [peerKeyPackage]);
         string groupIdHex = Convert.ToHexString(group.GroupId).ToLowerInvariant();
 
         await _relay.PublishAsync(

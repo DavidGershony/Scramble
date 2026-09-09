@@ -74,7 +74,7 @@ public class MessageIngestTests : IDisposable
             _cs, aliceSigner, "Rakes", "", Now, Relays);
 
         var bundle = await MarmotKeyPackageBuilder.CreateAsync(_cs, new LocalSigner(), Now);
-        StagedInvite staged = MarmotGroupInvite.Add(alice.Group, _cs, [bundle.KeyPackage]);
+        StagedCommit staged = MarmotGroupInvite.Add(alice.Group, _cs, [bundle.KeyPackage]);
         staged.Applied();
 
         MlsGroup bob = MlsGroup.ProcessWelcome(

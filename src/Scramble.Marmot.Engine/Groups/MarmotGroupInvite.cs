@@ -9,7 +9,7 @@ using MarmotDictionary = Scramble.Marmot.AppComponents.AppDataDictionary;
 namespace Scramble.Marmot.Engine.Groups;
 
 /// <summary>
-/// A commit that adds members, staged but not yet applied.
+/// Any commit, staged but not yet applied.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -28,15 +28,15 @@ namespace Scramble.Marmot.Engine.Groups;
 /// leaves a pending commit on the group, which blocks the next one.
 /// </para>
 /// </remarks>
-public sealed class StagedInvite
+public sealed class StagedCommit
 {
     private readonly MlsGroup _group;
 
-    internal StagedInvite(
+    internal StagedCommit(
         MlsGroup group,
         PublicMessage commit,
         Welcome? welcome,
-        IReadOnlyList<byte[]> addedAccounts)
+        IReadOnlyList<byte[]> affectedAccounts)
     {
         // A class with an internal constructor rather than a positional record:
         // a record's primary constructor is public, and one built through it
@@ -45,7 +45,7 @@ public sealed class StagedInvite
         _group = group;
         Commit = commit;
         Welcome = welcome;
-        AddedAccounts = addedAccounts;
+        AffectedAccounts = affectedAccounts;
     }
 
     /// <summary>The commit, framed as a PublicMessage.</summary>
@@ -55,8 +55,9 @@ public sealed class StagedInvite
     /// The Welcome for the added members, or null when nobody was added.
     /// </summary>
     /// <remarks>
-    /// Null is the expected shape for a removal — nobody is being admitted, so
-    /// there is nothing to admit them with. For an add it is never null:
+    /// Null is the expected shape for a removal or a self-update — nobody is
+    /// being admitted, so there is nothing to admit them with. For an add it is
+    /// never null:
     /// <see cref="MarmotGroupInvite.Add"/> refuses a commit that added members
     /// and produced none, because those members would be in the tree and unable
     /// to derive a single group secret.
@@ -64,9 +65,13 @@ public sealed class StagedInvite
     public Welcome? Welcome { get; }
 
     /// <summary>
-    /// The account keys this commit added or removed, in the order given.
+    /// The account keys this commit adds or removes, in the order given.
     /// </summary>
-    public IReadOnlyList<byte[]> AddedAccounts { get; }
+    /// <remarks>
+    /// Empty for a commit that changes no membership — a self-update rotates
+    /// the committer's own leaf and affects nobody else.
+    /// </remarks>
+    public IReadOnlyList<byte[]> AffectedAccounts { get; }
 
     /// <summary>
     /// Applies the commit, advancing the group to the new epoch.
@@ -198,7 +203,7 @@ public static class MarmotGroupInvite
     /// </remarks>
     /// <exception cref="AppComponentException">An invitee cannot join.</exception>
     /// <exception cref="ArgumentException">The list is empty, or names the same account twice.</exception>
-    public static StagedInvite Add(
+    public static StagedCommit Add(
         MlsGroup group, ICipherSuite cs, IReadOnlyList<KeyPackage> invitees)
     {
         ArgumentNullException.ThrowIfNull(group);
@@ -239,7 +244,7 @@ public static class MarmotGroupInvite
                 "The commit added members but produced no Welcome.");
         }
 
-        return new StagedInvite(group, commit, welcome, accounts);
+        return new StagedCommit(group, commit, welcome, accounts);
     }
 
     /// <summary>
@@ -263,7 +268,7 @@ public static class MarmotGroupInvite
     /// An account is not a member, or the list is empty, or it would empty the
     /// group.
     /// </exception>
-    public static StagedInvite Remove(
+    public static StagedCommit Remove(
         MlsGroup group, IReadOnlyList<byte[]> accounts)
     {
         ArgumentNullException.ThrowIfNull(group);
@@ -322,7 +327,7 @@ public static class MarmotGroupInvite
 
         // A removal produces no Welcome — nobody is being admitted — so unlike
         // Add, a null here is the expected shape rather than a failure.
-        return new StagedInvite(group, commit, welcome, removed);
+        return new StagedCommit(group, commit, welcome, removed);
     }
 
     /// <summary>

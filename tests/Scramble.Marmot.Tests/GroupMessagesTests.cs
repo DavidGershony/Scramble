@@ -60,7 +60,7 @@ public class GroupMessagesTests
             _cs, aliceSigner, "Rakes", "", Now, Relays);
 
         var bundle = await MarmotKeyPackageBuilder.CreateAsync(_cs, bobSigner, Now);
-        StagedInvite staged = MarmotGroupInvite.Add(alice.Group, _cs, [bundle.KeyPackage]);
+        StagedCommit staged = MarmotGroupInvite.Add(alice.Group, _cs, [bundle.KeyPackage]);
         staged.Applied();
 
         // Configured like GroupJoin does it. A helper that joined on the
@@ -215,7 +215,7 @@ public class GroupMessagesTests
         // A third member joins, which advances the epoch and rotates every key.
         var carolSigner = new LocalSigner();
         var carolBundle = await MarmotKeyPackageBuilder.CreateAsync(_cs, carolSigner, Now);
-        StagedInvite staged = MarmotGroupInvite.Add(alice.Group, _cs, [carolBundle.KeyPackage]);
+        StagedCommit staged = MarmotGroupInvite.Add(alice.Group, _cs, [carolBundle.KeyPackage]);
         staged.Applied();
         bob.ProcessCommit(staged.Commit);
 
@@ -246,7 +246,7 @@ public class GroupMessagesTests
 
         var carolSigner = new LocalSigner();
         var carolBundle = await MarmotKeyPackageBuilder.CreateAsync(_cs, carolSigner, Now);
-        StagedInvite staged = MarmotGroupInvite.Add(alice.Group, _cs, [carolBundle.KeyPackage]);
+        StagedCommit staged = MarmotGroupInvite.Add(alice.Group, _cs, [carolBundle.KeyPackage]);
         staged.Applied();
         bob.ProcessCommit(staged.Commit);
 
@@ -295,12 +295,12 @@ public class GroupMessagesTests
 
         var carolSigner = new LocalSigner();
         var carolBundle = await MarmotKeyPackageBuilder.CreateAsync(_cs, carolSigner, Now);
-        StagedInvite added = MarmotGroupInvite.Add(alice.Group, _cs, [carolBundle.KeyPackage]);
+        StagedCommit added = MarmotGroupInvite.Add(alice.Group, _cs, [carolBundle.KeyPackage]);
         added.Applied();
         bob.ProcessCommit(added.Commit);
 
         // Carol is removed; her copy of the group stays at the old epoch.
-        StagedInvite removed = MarmotGroupInvite.Remove(
+        StagedCommit removed = MarmotGroupInvite.Remove(
             alice.Group, [carolSigner.AccountPublicKey.ToArray()]);
         removed.Applied();
         bob.ProcessCommit(removed.Commit);

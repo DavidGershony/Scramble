@@ -44,7 +44,7 @@ public class WelcomePublicationTests
             Task.FromResult(Bip340.Sign(Secret, template.ComputeId()));
     }
 
-    private async Task<(LocalSigner Inviter, LocalSigner Invitee, MarmotKeyPackageBundle Bundle, StagedInvite Staged)>
+    private async Task<(LocalSigner Inviter, LocalSigner Invitee, MarmotKeyPackageBundle Bundle, StagedCommit Staged)>
         InviteAsync()
     {
         var inviter = new LocalSigner();
@@ -162,7 +162,7 @@ public class WelcomePublicationTests
         Assert.NotEqual(AuthorOf(first), AuthorOf(second));
     }
 
-    private string Wrap(LocalSigner inviter, LocalSigner invitee, StagedInvite staged) =>
+    private string Wrap(LocalSigner inviter, LocalSigner invitee, StagedCommit staged) =>
         WelcomePublication.Wrap(
             inviter.Secret,
             inviter.AccountPublicKey.Span,

@@ -82,7 +82,7 @@ public class MarmotGroupInviteTests
 
         Assert.NotNull(staged.Commit);
         Assert.NotNull(staged.Welcome);
-        Assert.Single(staged.AddedAccounts);
+        Assert.Single(staged.AffectedAccounts);
 
         // Still at the old epoch. A commit applied before it is published forks
         // the committer into an epoch nobody else can reach.
@@ -134,7 +134,7 @@ public class MarmotGroupInviteTests
         var staged = MarmotGroupInvite.Add(group.Group, _cs, [first.KeyPackage, second.KeyPackage]);
         staged.Applied();
 
-        Assert.Equal(2, staged.AddedAccounts.Count);
+        Assert.Equal(2, staged.AffectedAccounts.Count);
         Assert.Equal(1UL, group.Group.Epoch);
     }
 
@@ -333,7 +333,7 @@ public class MarmotGroupInviteTests
         Assert.Equal(3, group.Group.GetMembers().Count);
 
         var credential = Assert.IsType<BasicCredential>(first.KeyPackage.LeafNode.Credential);
-        StagedInvite staged = MarmotGroupInvite.Remove(group.Group, [credential.Identity]);
+        StagedCommit staged = MarmotGroupInvite.Remove(group.Group, [credential.Identity]);
 
         // Staged, like an add: a removal applied before it is published leaves
         // the committer believing someone is gone who is not.
@@ -358,7 +358,7 @@ public class MarmotGroupInviteTests
         MarmotGroupInvite.Add(group.Group, _cs, [invitee.KeyPackage]).Applied();
 
         var credential = Assert.IsType<BasicCredential>(invitee.KeyPackage.LeafNode.Credential);
-        StagedInvite staged = MarmotGroupInvite.Remove(group.Group, [credential.Identity]);
+        StagedCommit staged = MarmotGroupInvite.Remove(group.Group, [credential.Identity]);
 
         // Nobody is being admitted, so there is nothing to admit them with.
         // Null here is the expected shape rather than a failure.
@@ -372,7 +372,7 @@ public class MarmotGroupInviteTests
         var group = await NewGroupAsync();
         var invitee = await NewInviteeAsync();
 
-        StagedInvite add = MarmotGroupInvite.Add(group.Group, _cs, [invitee.KeyPackage]);
+        StagedCommit add = MarmotGroupInvite.Add(group.Group, _cs, [invitee.KeyPackage]);
         add.Applied();
 
         var joined = MlsGroup.ProcessWelcome(

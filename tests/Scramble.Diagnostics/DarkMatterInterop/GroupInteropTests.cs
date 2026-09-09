@@ -98,7 +98,7 @@ public class GroupInteropTests
         var group = await MarmotGroupBuilder.CreateAsync(
             _cs, inviter, "Scramble interop", "Created by Scramble", Now(), [PeerRelay]);
 
-        StagedInvite staged = MarmotGroupInvite.Add(group.Group, _cs, [peerKeyPackage]);
+        StagedCommit staged = MarmotGroupInvite.Add(group.Group, _cs, [peerKeyPackage]);
         string groupIdHex = Convert.ToHexString(group.GroupId).ToLowerInvariant();
         _log.Add($"group {groupIdHex}");
 

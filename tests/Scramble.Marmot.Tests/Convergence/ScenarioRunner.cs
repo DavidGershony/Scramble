@@ -187,7 +187,7 @@ public sealed class ScenarioRunner
         if (invitees.Count == 0)
             return;
 
-        StagedInvite staged = MarmotGroupInvite.Add(
+        StagedCommit staged = MarmotGroupInvite.Add(
             created.Group, _cs, [.. invitees.Select(i => i.Bundle!.KeyPackage)]);
 
         string publication = step.StringOrNull("pending") ?? "create";
@@ -201,7 +201,7 @@ public sealed class ScenarioRunner
         ScenarioClient inviter = _clients[step.String("inviter")];
         var invitees = step.Strings("invitees").Select(name => _clients[name]).ToList();
 
-        StagedInvite staged = MarmotGroupInvite.Add(
+        StagedCommit staged = MarmotGroupInvite.Add(
             inviter.Group!, _cs, [.. invitees.Select(i => i.Bundle!.KeyPackage)]);
 
         string publication = step.StringOrNull("pending") ?? step.String("inviter");
@@ -224,7 +224,7 @@ public sealed class ScenarioRunner
 
     private void PublishWelcomes(
         ScenarioClient sender,
-        StagedInvite staged,
+        StagedCommit staged,
         IReadOnlyList<ScenarioClient> invitees,
         string publication)
     {

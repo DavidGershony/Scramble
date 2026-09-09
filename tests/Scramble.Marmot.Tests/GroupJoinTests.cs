@@ -74,7 +74,7 @@ public class GroupJoinTests : IDisposable
             bundle.ToRecord(KeyPackageEvent.NewSlotId(), DateTimeOffset.UnixEpoch));
         await Storage.MarkPublishedAsync(bundle.KeyPackageRefHex, eventIdHex);
 
-        StagedInvite staged = MarmotGroupInvite.Add(group.Group, _cs, [bundle.KeyPackage]);
+        StagedCommit staged = MarmotGroupInvite.Add(group.Group, _cs, [bundle.KeyPackage]);
         staged.Applied();
 
         string envelope = WelcomePublication.Wrap(
@@ -182,7 +182,7 @@ public class GroupJoinTests : IDisposable
 
         // Same Welcome, an event id nothing was published under. Accepting it
         // would mean joining with a key we cannot show is ours.
-        StagedInvite staged = MarmotGroupInvite.Add(
+        StagedCommit staged = MarmotGroupInvite.Add(
             group.Group, _cs,
             [(await MarmotKeyPackageBuilder.CreateAsync(_cs, new LocalSigner(), Now)).KeyPackage]);
 

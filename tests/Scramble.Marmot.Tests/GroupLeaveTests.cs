@@ -73,7 +73,7 @@ public class GroupLeaveTests
         var bobBundle = await MarmotKeyPackageBuilder.CreateAsync(_cs, bobSigner, Now);
         var carolBundle = await MarmotKeyPackageBuilder.CreateAsync(_cs, carolSigner, Now);
 
-        StagedInvite staged = MarmotGroupInvite.Add(
+        StagedCommit staged = MarmotGroupInvite.Add(
             alice.Group, _cs, [bobBundle.KeyPackage, carolBundle.KeyPackage]);
         staged.Applied();
 
@@ -145,10 +145,10 @@ public class GroupLeaveTests
         Assert.Equal(HandshakeOutcome.ProposalCached, Deliver(bob, alice.Group, request).Outcome);
         Assert.Equal(HandshakeOutcome.ProposalCached, Deliver(bob, carol, request).Outcome);
 
-        StagedInvite staged = Assert.IsType<StagedInvite>(
+        StagedCommit staged = Assert.IsType<StagedCommit>(
             MarmotGroupLeave.CommitDepartures(alice.Group));
 
-        Assert.Equal(bobAccount, Assert.Single(staged.AddedAccounts));
+        Assert.Equal(bobAccount, Assert.Single(staged.AffectedAccounts));
         Assert.Null(staged.Welcome);
 
         // Publish-before-apply: wrapped while the commit is still pending, so it
@@ -181,7 +181,7 @@ public class GroupLeaveTests
         Deliver(bob, carol, request);
         Deliver(bob, bob, request);
 
-        StagedInvite staged = MarmotGroupLeave.CommitDepartures(alice.Group)!;
+        StagedCommit staged = MarmotGroupLeave.CommitDepartures(alice.Group)!;
         var peeler = Peeler();
         string envelope = GroupHandshake.Wrap(alice.Group, peeler, staged.Commit);
         staged.Applied();
@@ -212,7 +212,7 @@ public class GroupLeaveTests
         Deliver(bob, alice.Group, request);
         Deliver(bob, carol, request);
 
-        StagedInvite staged = MarmotGroupLeave.CommitDepartures(alice.Group)!;
+        StagedCommit staged = MarmotGroupLeave.CommitDepartures(alice.Group)!;
         var peeler = Peeler();
         GroupHandshake.Wrap(alice.Group, peeler, staged.Commit);
         staged.Applied();
@@ -232,9 +232,9 @@ public class GroupLeaveTests
 
         Deliver(carol, alice.Group, MarmotGroupLeave.Request(carol));
 
-        StagedInvite staged = MarmotGroupLeave.CommitDepartures(alice.Group)!;
+        StagedCommit staged = MarmotGroupLeave.CommitDepartures(alice.Group)!;
 
-        Assert.Equal(carolSigner.AccountPublicKey.ToArray(), Assert.Single(staged.AddedAccounts));
+        Assert.Equal(carolSigner.AccountPublicKey.ToArray(), Assert.Single(staged.AffectedAccounts));
     }
 
     [Fact]
@@ -248,10 +248,10 @@ public class GroupLeaveTests
         Deliver(alice.Group, alice.Group, MarmotGroupLeave.Request(alice.Group));
         Deliver(bob, alice.Group, MarmotGroupLeave.Request(bob));
 
-        StagedInvite staged = Assert.IsType<StagedInvite>(
+        StagedCommit staged = Assert.IsType<StagedCommit>(
             MarmotGroupLeave.CommitDepartures(alice.Group));
 
-        Assert.Equal(bobSigner.AccountPublicKey.ToArray(), Assert.Single(staged.AddedAccounts));
+        Assert.Equal(bobSigner.AccountPublicKey.ToArray(), Assert.Single(staged.AffectedAccounts));
         Assert.NotNull(carol);
     }
 
@@ -283,7 +283,7 @@ public class GroupLeaveTests
         Deliver(carol, alice.Group, carolRequest);
         Deliver(carol, bob, carolRequest);
 
-        StagedInvite first = MarmotGroupLeave.CommitDepartures(alice.Group)!;
+        StagedCommit first = MarmotGroupLeave.CommitDepartures(alice.Group)!;
         var peeler = Peeler();
         string envelope = GroupHandshake.Wrap(alice.Group, peeler, first.Commit);
         first.Applied();
@@ -295,7 +295,7 @@ public class GroupLeaveTests
 
         // And now Bob, the last other member.
         Deliver(bob, alice.Group, MarmotGroupLeave.Request(bob));
-        StagedInvite second = MarmotGroupLeave.CommitDepartures(alice.Group)!;
+        StagedCommit second = MarmotGroupLeave.CommitDepartures(alice.Group)!;
         GroupHandshake.Wrap(alice.Group, Peeler(), second.Commit);
         second.Applied();
 
@@ -319,7 +319,7 @@ public class GroupLeaveTests
         Assert.Equal(1, MarmotGroupLeave.DropRequestsFrom(alice.Group, bobAccount));
         Assert.Null(MarmotGroupLeave.CommitDepartures(alice.Group));
 
-        StagedInvite staged = MarmotGroupInvite.Remove(alice.Group, [bobAccount]);
+        StagedCommit staged = MarmotGroupInvite.Remove(alice.Group, [bobAccount]);
         staged.Applied();
 
         Assert.DoesNotContain(
@@ -337,10 +337,10 @@ public class GroupLeaveTests
         Assert.Equal(1, MarmotGroupLeave.DropRequestsFrom(
             alice.Group, bobSigner.AccountPublicKey.Span));
 
-        StagedInvite staged = MarmotGroupLeave.CommitDepartures(alice.Group)!;
-        Assert.Single(staged.AddedAccounts);
+        StagedCommit staged = MarmotGroupLeave.CommitDepartures(alice.Group)!;
+        Assert.Single(staged.AffectedAccounts);
         Assert.DoesNotContain(
-            staged.AddedAccounts, a => a.AsSpan().SequenceEqual(bobSigner.AccountPublicKey.Span));
+            staged.AffectedAccounts, a => a.AsSpan().SequenceEqual(bobSigner.AccountPublicKey.Span));
     }
 
     // ---- The handshake transport ----
@@ -355,7 +355,7 @@ public class GroupLeaveTests
 
         Deliver(bob, alice.Group, MarmotGroupLeave.Request(bob));
 
-        StagedInvite staged = MarmotGroupLeave.CommitDepartures(alice.Group)!;
+        StagedCommit staged = MarmotGroupLeave.CommitDepartures(alice.Group)!;
         staged.Applied();
 
         var ex = Assert.Throws<InvalidOperationException>(
@@ -411,7 +411,7 @@ public class GroupLeaveTests
         Assert.Throws<ArgumentException>(() => GroupHandshake.Wrap(bob, Peeler(), request));
 
         Deliver(bob, alice.Group, request);
-        StagedInvite staged = MarmotGroupLeave.CommitDepartures(alice.Group)!;
+        StagedCommit staged = MarmotGroupLeave.CommitDepartures(alice.Group)!;
 
         Assert.Throws<ArgumentException>(
             () => GroupHandshake.WrapProposal(alice.Group, Peeler(), staged.Commit));
