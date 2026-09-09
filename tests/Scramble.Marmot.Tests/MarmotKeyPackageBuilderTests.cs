@@ -63,16 +63,19 @@ public class MarmotKeyPackageBuilderTests
         var bundle = await BuildAsync();
         var capabilities = bundle.KeyPackage.LeafNode.Capabilities;
 
-        // required_capabilities, app_data_dictionary, and the three
-        // agent-text-stream role markers. 0x8009 must NOT be here: it is an
-        // extension capability only in the Legacy profile, and advertising it is
-        // a Legacy tell.
+        // app_data_dictionary and the three agent-text-stream role markers.
+        //
+        // 0x0003 is NOT here: RFC 9420 §7.2 makes extension types 1-5 implicit,
+        // so advertising required_capabilities in a leaf is malformed rather
+        // than redundant. 0x8009 is not here either, for a different reason --
+        // it is an extension capability only in the Legacy profile, and
+        // advertising it is a Legacy tell.
         //
         // The roles are what make us invitable: the reference client attaches
         // component 0x8006 to every group it creates, unconditionally, with
         // `receive` required of every invitee.
         Assert.Equal(
-            new ushort[] { 0x0003, 0x0006, 0xf2d1, 0xf2d2, 0xf2d4 },
+            new ushort[] { 0x0006, 0xf2d1, 0xf2d2, 0xf2d4 },
             capabilities.Extensions.Order().ToArray());
 
         // app_data_update and self_remove. The reference client requires both of
@@ -80,6 +83,35 @@ public class MarmotKeyPackageBuilderTests
         // draft proposal types are not adjacent.
         Assert.Equal(new ushort[] { 0x0008, 0x000a }, capabilities.Proposals.Order().ToArray());
         Assert.DoesNotContain((ushort)0x8009, capabilities.Extensions);
+    }
+
+    [Fact]
+    public async Task NoDefaultTypeIsEverAdvertised()
+    {
+        // The rule rather than the list, so adding a capability cannot quietly
+        // reintroduce one. RFC 9420 §7.2 makes extension types 1-5 and proposal
+        // types 1-7 mandatory for every implementation: support is implicit, and
+        // a leaf that lists one is malformed rather than thorough.
+        //
+        // This was wrong until 2026-09-09 and never surfaced as a rejection,
+        // because a peer reading the leaf adds the defaults back itself. It had
+        // to be found by reading upstream's diff, which is why the invariant is
+        // pinned here rather than left to the expected-value list above.
+        var bundle = await BuildAsync();
+        var capabilities = bundle.KeyPackage.LeafNode.Capabilities;
+
+        Assert.All(
+            MarmotLeaf.DefaultExtensionTypes,
+            t => Assert.DoesNotContain(t, capabilities.Extensions));
+
+        Assert.All(
+            MarmotLeaf.DefaultProposalTypes,
+            t => Assert.DoesNotContain(t, capabilities.Proposals));
+
+        // And the two we do advertise sit outside the implicit ranges, which is
+        // why advertising them is meaningful.
+        Assert.DoesNotContain(MarmotLeaf.AppDataUpdateProposalType, MarmotLeaf.DefaultProposalTypes);
+        Assert.DoesNotContain(MarmotLeaf.SelfRemoveProposalType, MarmotLeaf.DefaultProposalTypes);
     }
 
     [Fact]

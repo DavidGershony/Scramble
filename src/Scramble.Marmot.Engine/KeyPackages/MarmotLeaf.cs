@@ -32,7 +32,34 @@ namespace Scramble.Marmot.Engine.KeyPackages;
 public static class MarmotLeaf
 {
     /// <summary>MLS <c>required_capabilities</c>, RFC 9420 §17.3.</summary>
+    /// <remarks>
+    /// <b>Never advertised in a leaf.</b> RFC 9420 §7.2 makes extension types
+    /// 1-5 and proposal types 1-7 mandatory for every implementation, so
+    /// support for them is implicit and listing one is not a stronger claim —
+    /// it is a malformed one. The GroupContext still carries its
+    /// <c>required_capabilities</c> extension as usual; that is a different
+    /// thing from a leaf claiming to support the type.
+    /// </remarks>
     public const ushort RequiredCapabilitiesExtensionType = 0x0003;
+
+    /// <summary>
+    /// Extension types RFC 9420 §7.2 makes implicit, which a leaf must not
+    /// advertise.
+    /// </summary>
+    public static readonly IReadOnlyList<ushort> DefaultExtensionTypes =
+        new ushort[] { 1, 2, 3, 4, 5 };
+
+    /// <summary>
+    /// Proposal types RFC 9420 §7.2 makes implicit, which a leaf must not
+    /// advertise.
+    /// </summary>
+    /// <remarks>
+    /// Our two — <c>app_data_update</c> (<c>0x0008</c>) and <c>self_remove</c>
+    /// (<c>0x000a</c>) — are both outside this range, which is why they are
+    /// still advertised.
+    /// </remarks>
+    public static readonly IReadOnlyList<ushort> DefaultProposalTypes =
+        new ushort[] { 1, 2, 3, 4, 5, 6, 7 };
 
     /// <summary>The <c>app_data_update</c> proposal, draft-ietf-mls-extensions.</summary>
     public const ushort AppDataUpdateProposalType = 0x0008;
@@ -92,9 +119,17 @@ public static class MarmotLeaf
     /// <c>mls_extensions</c> tag is built from this list and a stable order
     /// makes two publications of the same client byte-comparable.
     /// </remarks>
+    /// <remarks>
+    /// <b><c>0x0003</c> is deliberately absent.</b> It was here until
+    /// 2026-09-09, which was a conformance bug: RFC 9420 §7.2 makes
+    /// <see cref="DefaultExtensionTypes"/> implicit, so advertising one is
+    /// malformed rather than redundant. Upstream stopped in
+    /// <c>wn-agent-v0.9.19</c>; a peer reading our leaf adds the defaults back
+    /// itself, which is why this never surfaced as a rejection and had to be
+    /// found by reading their diff.
+    /// </remarks>
     public static readonly IReadOnlyList<ushort> ExtensionTypes =
     [
-        RequiredCapabilitiesExtensionType,
         MarmotDictionary.ExtensionType,
         .. AgentTextStreamRoleExtensionTypes,
     ];
