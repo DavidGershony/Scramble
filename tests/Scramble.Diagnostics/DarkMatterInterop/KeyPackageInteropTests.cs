@@ -151,9 +151,22 @@ public class KeyPackageInteropTests
         Capabilities capabilities = keyPackage.LeafNode.Capabilities;
 
         // The Current-profile floor, which is what we emit.
-        Assert.Contains(MarmotLeaf.RequiredCapabilitiesExtensionType, capabilities.Extensions);
         Assert.Contains(MarmotDictionary.ExtensionType, capabilities.Extensions);
         Assert.Contains(MarmotLeaf.AppDataUpdateProposalType, capabilities.Proposals);
+
+        // And the floor does NOT include required_capabilities. RFC 9420 §7.2
+        // makes extension types 1-5 implicit, so a conforming leaf must not
+        // advertise one -- upstream started filtering them in v0.9.19 and we
+        // stopped emitting 0x0003 on 2026-09-10. This assertion used to require
+        // the opposite, which is how a peer that had already fixed it read as a
+        // failure on our side.
+        Assert.All(
+            MarmotLeaf.DefaultExtensionTypes,
+            t => Assert.DoesNotContain(t, capabilities.Extensions));
+
+        Assert.All(
+            MarmotLeaf.DefaultProposalTypes,
+            t => Assert.DoesNotContain(t, capabilities.Proposals));
 
         // 0x8009 is a component, never an advertised extension type, in Current.
         // A peer carrying it here would be running the Legacy profile.

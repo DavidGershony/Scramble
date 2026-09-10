@@ -135,53 +135,26 @@ public class LeaveInteropTests : IDisposable
     // ---- We leave a group the reference client hosts ----
 
     /// <summary>
-    /// We publish a departure request; the reference client at this pin does not
-    /// commit it.
+    /// We ask to leave and the reference client commits it.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>This asserts a defect in the peer, deliberately, and fails when the
-    /// peer is fixed.</b> That is the point: the moment upstream commits
-    /// departures again, this goes red and the stronger assertion — that we are
-    /// actually let out — should replace it. The history is in git; the shape to
-    /// restore is the one this replaced.
+    /// This was a characterisation test from 2026-09-03 to 2026-09-10, asserting
+    /// that the peer did <i>not</i> commit our departure. `wn-agent-v0.9.17`
+    /// had regressed: two mdk accounts, no Scramble code, and a departed member
+    /// stayed listed through 12 sync and run-maintenance rounds. Its whole job
+    /// was to fail once upstream fixed it, which it did at `v0.9.20` —
+    /// `auto_committer.rs` never changed across that range, so the fix landed in
+    /// the reworked ingest path.
     /// </para>
     /// <para>
-    /// <b>It is not our bug.</b> Reproduced with two mdk accounts and no Scramble
-    /// code, against <c>wn-agent-v0.9.17</c>, over ~80 seconds and 12
-    /// sync + run-maintenance rounds:
-    /// </para>
-    /// <code>
-    /// wn create-identity            # A and B
-    /// wn --account B keys publish
-    /// wn --account A groups create "leave probe" &lt;B&gt;
-    /// wn --account B groups accept &lt;group&gt;
-    /// wn --account B groups leave  &lt;group&gt;
-    /// wn --account A sync; wn --account A groups run-maintenance
-    /// wn --account A groups members &lt;group&gt;   # B is still listed
-    /// </code>
-    /// <para>
-    /// It worked at <c>v0.9.10</c> — the assertion this replaced passed there —
-    /// so it regressed somewhere in the seven releases between. The auto-commit
-    /// <i>policy</i> (<c>auto_committer.rs</c>) is byte-identical across that
-    /// range and the 10–50 ms jitter is far too small to explain it, so the
-    /// cause is in the ingest path, which was substantially reworked
-    /// (<c>DeferredPeelSweep</c>, deferred-capacity refusals, reshuffled
-    /// rejection categories). Which release, and why, is not isolated.
-    /// </para>
-    /// <para>
-    /// <b>What this costs us in production is bounded, and only because the
-    /// durable intent exists.</b> A leaver stays in the group until some member
-    /// commits, so against a peer that never does, they stay. <c>LeaveCoordinator</c>
-    /// keeps re-proposing against each new epoch rather than treating the first
-    /// unanswered proposal as done, so a member who leaves is let out as soon as
-    /// <i>any</i> conforming member commits — including one running a fixed
-    /// build. The other direction is unaffected: we commit their departures, and
-    /// <see cref="WeCommitTheReferenceClientsDeparture"/> proves it.
+    /// Kept as the note rather than deleted with the test, because the shape
+    /// recurs: it is the direction that depends entirely on the peer, and it is
+    /// the one that broke silently while every other test stayed green.
     /// </para>
     /// </remarks>
     [Fact]
-    public async Task TheReferenceClientDoesNotYetCommitOurDeparture()
+    public async Task TheReferenceClientCommitsOurDeparture()
     {
         var peer = new MdkCliDockerClient(_log.Add);
         Assert.SkipUnless(await peer.IsReadyAsync(), "The mdk-cli interop peer is not running.");
@@ -195,15 +168,15 @@ public class LeaveInteropTests : IDisposable
         JoinedGroup joined = await JoinAPeerGroupAsync(peer, us);
         string groupIdHex = Convert.ToHexString(joined.GroupId).ToLowerInvariant();
 
-        // Our half still has to be right: a well-formed SelfRemove, framed as a
-        // PublicMessage and wrapped under the epoch the peer is at. Nothing here
-        // would notice if it were malformed, which is why the mdk-to-mdk
-        // reproduction above carries the weight of saying whose bug it is.
+        // The peer has to accept a proposal we built, cache it, and commit it.
         await _relay.PublishAsync(
             GroupHandshake.WrapProposal(
                 joined.Group, _peeler, MarmotGroupLeave.Request(joined.Group)),
             RelayTimeout);
 
+        // A removed member cannot apply the commit that removes them -- the
+        // UpdatePath encrypts path secrets only to those who remain -- so this
+        // is reported rather than applied.
         ReceivedHandshake? removal = await WaitForHandshakeAsync(
             joined.Group,
             HandshakeOutcome.RemovedByCommit,
@@ -214,15 +187,14 @@ public class LeaveInteropTests : IDisposable
             });
 
         Assert.True(
-            removal is null,
-            "The reference client committed our departure. That is the behaviour we want: "
-            + "delete this test and restore the assertion it replaced, which is that the "
-            + $"commit arrives and reports RemovedByCommit.\n{Log()}");
+            removal is not null,
+            $"The peer never committed our departure from {groupIdHex}.\n{Log()}");
 
-        // And it still lists us, which is the same fact from its own side.
-        Assert.True(
+        // Its own membership list is the independent confirmation: our group
+        // state is deliberately left untouched, so it cannot be the witness.
+        Assert.False(
             MdkCliDockerClient.ContainsPubkey(await peer.MembersAsync(groupIdHex), us.Hex),
-            $"The peer dropped us without a commit we could observe.\n{Log()}");
+            $"The peer committed our departure but still lists us.\n{Log()}");
     }
 
     // ---- Setup shared by the two directions ----

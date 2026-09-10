@@ -1532,6 +1532,65 @@ older than its chain head is unrecoverable. Pre-existing, inherited rather than
 introduced, and it needs `RatchetState` to expose its retained keys. Worth a
 follow-up only if persistence across restarts becomes load-bearing.
 
+### 3x. P6 is complete, P8 is half-built, and the peer is current at v0.9.20
+
+17/17 interop against `wn 0.9.20`, zero skips. 958 Marmot, 384 library, 516
+core, 256 UI. Two upstream questions closed themselves.
+
+**The leave regression is fixed upstream.** §3t characterised `v0.9.17` not
+auto-committing an inbound `self_remove`, as a test whose whole job was to fail
+once they fixed it. At `v0.9.20` it failed, reporting `RemovedByCommit`, and the
+real assertion is restored. `auto_committer.rs` never changed across
+`v0.9.17..v0.9.20`, so the fix landed in the reworked ingest path — which is
+where §3t predicted the regression was.
+
+**`0x0003` is confirmed correct against a §7.2-conforming peer.** Its leaf now
+advertises exactly `[6, 62161, 62162, 62164]` — byte-identical to ours. One
+stale assertion in `KeyPackageInteropTests` still *required* the peer to
+advertise `3`, so a peer that had already fixed it read as a failure on our
+side; that assertion now checks the rule (neither implicit range appears)
+rather than the old value.
+
+**`wn-agent-latest` is not the latest, and this cost a whole green run.** It
+points at the same commit as `wn-agent-v0.9.12`, eight releases behind. Pointing
+the peers at it *downgraded* them from the `v0.9.17` we had pinned, and the
+suite went 17/17 green against it. **Nothing failed and nothing could** — a peer
+that is merely old is still conforming, so it agrees with us about everything we
+already agreed on. The only tell was the readiness check printing `wn 0.9.12`, a
+line added for an unrelated reason.
+
+That is the third variant of the same failure this project keeps producing:
+green that means less than it looks. Skipped tests reading as passes (§3t),
+vectors that cannot distinguish the case they exist for (§3v), and now a peer
+too old to disagree. **When a suite goes green, the question is not whether it
+passed but whether it could have failed.**
+
+`scripts/build-marmot-peers.ps1` now resolves the newest `wn-agent-vX.Y.Z` by
+semver, caches on the resolved commit rather than the ref name (a repeat run
+with upstream unmoved is about a second, not a Rust compile), and labels each
+image `mdk.commit` so what an image holds is answered by the image.
+
+**P6 is done.** Ingest pipeline, `SelfUpdate`, disposal guards, and the `0x0003`
+fix all landed. `StagedInvite` became `StagedCommit` first, as a no-op, per I4 —
+it had been staging three things that were not invites.
+
+**P8 is half-built.** `ConvergencePolicy`, `BranchSelection`,
+`BranchSelectionAudit`, the scenario harness and now `CanonicalizationPipeline`.
+`V1SettlementQuiescenceMs` and `V1MaxConvergencePassMs` are consumed rather than
+merely pinned.
+
+**What P8 needs next:**
+
+1. **`CandidateMaterializer`** — the last large piece. Candidate-path BFS, DoS
+   replay budget, own-commit replay workaround, crash-safe two-level reorg
+   apply, storage. The harness's `Materialize` is a working sketch: restore a
+   snapshot, apply, score. Good candidate for `split-and-mutate`.
+2. **P6's exit criterion is still unproven** — "a same-epoch commit race
+   resolves identically on both sides" has only ever been shown in the
+   simulated harness, never against the live peer. It needs the materializer.
+3. **A vector that distinguishes a tie-break winner** — still not closable with
+   what upstream ships (§3v).
+
 ### 3d. Non-code items still open (not blocking)
 
 - **Open a PR for `feat/dark-matter`.** **65 commits** ahead of `master` and
