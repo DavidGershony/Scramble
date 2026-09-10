@@ -21,14 +21,19 @@
     no-op check takes about a second.
 
 .PARAMETER Ref
-    The upstream ref to track. Defaults to the moving `wn-agent-latest` tag.
+    An explicit ref to build. Omit it to track the newest wn-agent release.
+
+    Note what is NOT used: upstream's `wn-agent-latest` tag. It reads like the
+    thing to track and is not -- on 2026-09-10 it pointed at the same commit as
+    `wn-agent-v0.9.12`, eight releases behind `v0.9.20`. Following it silently
+    downgraded the peer. The newest semver tag is resolved instead.
 
 .PARAMETER Force
     Rebuild even when the resolved commit matches what the images hold.
 #>
 [CmdletBinding()]
 param(
-    [string]$Ref = 'wn-agent-latest',
+    [string]$Ref,
     [switch]$Force
 )
 $ErrorActionPreference = 'Stop'
@@ -41,19 +46,59 @@ $services = @(
     @{ Service = 'wn-agent'; Image = 'scramble-wn-agent:latest' }
 )
 
-Write-Host "[peers] resolving $Ref ..."
-# Captured whole, then indexed. Piping straight into `Select-Object -First 1`
-# terminates the pipeline early, which kills git and leaves a non-zero
-# $LASTEXITCODE behind -- a success that reports as failure.
-$output = @(git ls-remote $repoUrl $Ref 2>&1)
-$line = if ($output.Count -gt 0) { $output[0] } else { $null }
-if ($LASTEXITCODE -ne 0 -or -not $line) {
-    throw "Could not resolve '$Ref' at $repoUrl. Offline, or the ref does not exist."
+if (-not $Ref) {
+    Write-Host "[peers] finding the newest wn-agent release ..."
+
+    # Every wn-agent-vX.Y.Z ref, with the peeled commit for annotated tags.
+    # Captured whole rather than piped into Select-Object: piping terminates
+    # the pipeline early, which kills git and leaves a non-zero $LASTEXITCODE
+    # behind -- a success that reports as a failure.
+    $refs = @(git ls-remote --tags $repoUrl 'wn-agent-v*' 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not list tags at $repoUrl. Offline?"
+    }
+
+    $releases = @{}
+    foreach ($entry in $refs) {
+        if ($entry -notmatch '^([0-9a-f]{40})\s+refs/tags/wn-agent-v(\d+)\.(\d+)\.(\d+)(\^\{\})?$') {
+            continue
+        }
+
+        $name = "wn-agent-v$($Matches[2]).$($Matches[3]).$($Matches[4])"
+        $version = [version]("$($Matches[2]).$($Matches[3]).$($Matches[4])")
+
+        # An annotated tag appears twice: the tag object, then "^{}" for the
+        # commit it points at. The second is the one to build, so it wins.
+        if ($Matches[5] -or -not $releases.ContainsKey($name)) {
+            $releases[$name] = @{ Version = $version; Commit = $Matches[1] }
+        }
+    }
+
+    if ($releases.Count -eq 0) {
+        throw "No wn-agent-vX.Y.Z tags found at $repoUrl."
+    }
+
+    $newest = $releases.GetEnumerator() | Sort-Object { $_.Value.Version } | Select-Object -Last 1
+    $Ref = $newest.Key
+    $commit = $newest.Value.Commit
+
+    Write-Host "[peers] newest release is $Ref"
+}
+else {
+    Write-Host "[peers] resolving $Ref ..."
+    $output = @(git ls-remote $repoUrl $Ref 2>&1)
+    if ($LASTEXITCODE -ne 0 -or $output.Count -eq 0) {
+        throw "Could not resolve '$Ref' at $repoUrl. Offline, or the ref does not exist."
+    }
+
+    # Prefer the peeled entry when the ref is an annotated tag.
+    $peeled = @($output | Where-Object { $_ -match '\^\{\}$' })
+    $line = if ($peeled.Count -gt 0) { $peeled[0] } else { $output[0] }
+    $commit = ($line -split '\s+')[0]
 }
 
-$commit = ($line -split '\s+')[0]
 if ($commit -notmatch '^[0-9a-f]{40}$') {
-    throw "Resolved '$Ref' to something that is not a commit: $line"
+    throw "Resolved '$Ref' to something that is not a commit: $commit"
 }
 
 Write-Host "[peers] $Ref = $commit"

@@ -28,13 +28,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 ARG MDK_REPO_URL=https://github.com/marmot-protocol/mdk.git
-ARG MDK_REF=wn-agent-latest
+# NOT `wn-agent-latest`. That tag reads like the one to track and is not: on
+# 2026-09-10 it pointed at the same commit as `wn-agent-v0.9.12`, eight
+# releases behind `v0.9.20`, and following it silently downgraded the peer.
+#
+# This default is only a fallback for a hand-run `docker compose build`. The
+# normal path is scripts/build-marmot-peers.ps1, which resolves the newest
+# wn-agent-vX.Y.Z tag and passes both MDK_REF and MDK_COMMIT.
+ARG MDK_REF=wn-agent-v0.9.20
 
 # The commit MDK_REF resolved to when the build was launched.
 #
 # Without this the build is WRONG rather than merely stale: MDK_REF is a moving
-# tag, so the clone below keys its cache on the unchanged string
-# "wn-agent-latest" and Docker happily reuses a checkout from weeks ago.
+# tag or a floating ref, so the clone below would key its cache on an
+# unchanged string and Docker would happily reuse a checkout from weeks ago.
 # Passing the resolved commit makes the cache key move exactly when upstream
 # does -- an unchanged commit reuses everything, a new one rebuilds from here.
 #
