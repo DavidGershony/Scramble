@@ -114,15 +114,29 @@ public sealed class CandidateMaterializer(
     /// </summary>
     /// <param name="live">The group as it stands, for the branch we hold.</param>
     /// <param name="currentBranchId">The id of the branch we are on.</param>
+    /// <param name="currentTipPriority">
+    /// The ordering class of the commit that put us here.
+    /// </param>
     /// <param name="stored">Commits kept for convergence.</param>
     /// <param name="witnessesOn">
     /// The application messages that decrypt against a materialized branch.
     /// Taken as a function of the built state rather than of the branch id,
     /// because a witness is evidence only if the branch can actually read it.
     /// </param>
+    /// <remarks>
+    /// <b>Why the current tip's class is passed in rather than read.</b> Every
+    /// other candidate is classified on the way in, from the proposal cache the
+    /// commit's references resolve against. The branch we are already on has no
+    /// such moment left: applying its tip is what cleared that cache. So the
+    /// class has to be remembered when the commit is applied and handed back
+    /// here. There is deliberately no default — a default would be a guess, and
+    /// guessing "ordinary" understates our own branch against a peer that knows
+    /// better, which is a disagreement rather than a conservative choice.
+    /// </remarks>
     public MaterializationResult Materialize(
         MlsGroup live,
         string currentBranchId,
+        CommitOrderingPriority currentTipPriority,
         IReadOnlyList<StoredCommit> stored,
         Func<MlsGroup, IReadOnlyList<AppWitness>> witnessesOn)
     {
@@ -190,7 +204,7 @@ public sealed class CandidateMaterializer(
             currentBranchId,
             ForkEpochOf(candidates, live),
             live.Epoch,
-            CommitOrderingPriority.Ordinary,
+            currentTipPriority,
             IdentityOfSelf(live),
             DigestOfBranchId(currentBranchId),
             witnessesOn(live)));
@@ -215,6 +229,12 @@ public sealed class CandidateMaterializer(
         byte[]? committer = null;
         byte[] tipWire = head.Wire;
 
+        // The tip's class, not the branch's. A branch is ranked by the commit
+        // that ends it, so this is overwritten at every step rather than
+        // accumulated -- a privileged commit three steps back does not make an
+        // ordinary tip privileged.
+        CommitOrderingPriority priority = CommitOrderingPriority.Ordinary;
+
         while (next is not null)
         {
             if (applied >= ReplayBudget)
@@ -230,9 +250,12 @@ public sealed class CandidateMaterializer(
                 var message = MlsMessage.ReadFrom(new TlsReader(next.Wire));
                 commit = (PublicMessage)message.Body;
 
-                // Read before applying: afterwards the tree has moved and the
-                // sender's leaf may belong to somebody else entirely.
+                // Both read before applying, and for the same reason twice over:
+                // afterwards the tree has moved and the sender's leaf may belong
+                // to somebody else entirely, and the proposal cache that says
+                // what this commit's references were has been cleared.
                 committer = IdentityOfLeaf(probe, commit.Content.Sender.LeafIndex);
+                priority = CommitOrdering.PriorityOf(probe, commit) ?? priority;
                 probe.ProcessCommit(commit);
             }
             catch (Exception)
@@ -260,7 +283,7 @@ public sealed class CandidateMaterializer(
             Convert.ToHexString(Digest(tipWire)).ToLowerInvariant(),
             forkEpoch,
             probe.Epoch,
-            CommitOrderingPriority.Ordinary,
+            priority,
             committer,
             Digest(tipWire),
             witnessesOn(probe));

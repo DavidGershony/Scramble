@@ -2,6 +2,7 @@ using DotnetMls.Codec;
 using DotnetMls.Crypto;
 using DotnetMls.Group;
 using DotnetMls.Types;
+using Scramble.Marmot.AppComponents;
 using Scramble.Marmot.Engine.Convergence;
 using Scramble.Marmot.Engine.Groups;
 using Scramble.Marmot.Engine.KeyPackages;
@@ -26,6 +27,18 @@ public class CandidateMaterializerTests
 {
     private readonly ICipherSuite _cs = new CipherSuite0x0001();
     private const ulong Now = 1_760_000_000;
+    /// <summary>
+    /// The live branch's tip class, stated rather than defaulted.
+    /// </summary>
+    /// <remarks>
+    /// Every fixture here builds its current branch from ordinary commits, so
+    /// this is the true value and not a placeholder. It is written at each call
+    /// because the parameter has no default: a branch whose own tip is
+    /// misreported competes on the wrong terms, and that is worth one word per
+    /// call site.
+    /// </remarks>
+    private const CommitOrderingPriority Ordinary = CommitOrderingPriority.Ordinary;
+
     private static readonly string[] Relays = ["wss://relay.example.com"];
 
     private sealed class LocalSigner : IAccountIdentityProofSigner
@@ -143,7 +156,7 @@ public class CandidateMaterializerTests
         StoredCommit fromAlice = Commit(f.Alice.Group);
 
         MaterializationResult result = NewMaterializer(f.Archive)
-            .Materialize(f.Carol, "genesis", [fromAlice], NoWitnesses);
+            .Materialize(f.Carol, "genesis", Ordinary, [fromAlice], NoWitnesses);
 
         BranchCandidate built = Assert.Single(
             result.Candidates, c => !string.Equals(c.Id, "genesis", StringComparison.Ordinal));
@@ -163,7 +176,7 @@ public class CandidateMaterializerTests
         StoredCommit fromAlice = Commit(f.Alice.Group);
 
         MaterializationResult result = NewMaterializer(f.Archive)
-            .Materialize(f.Carol, "genesis", [fromAlice], NoWitnesses);
+            .Materialize(f.Carol, "genesis", Ordinary, [fromAlice], NoWitnesses);
 
         Assert.Equal(2, result.Candidates.Count);
         Assert.Contains(result.Candidates, c => c.Id == "genesis");
@@ -178,7 +191,7 @@ public class CandidateMaterializerTests
         ulong before = f.Carol.Epoch;
 
         StoredCommit fromAlice = Commit(f.Alice.Group);
-        NewMaterializer(f.Archive).Materialize(f.Carol, "genesis", [fromAlice], NoWitnesses);
+        NewMaterializer(f.Archive).Materialize(f.Carol, "genesis", Ordinary, [fromAlice], NoWitnesses);
 
         Assert.Equal(before, f.Carol.Epoch);
         Assert.Equal(3, f.Carol.GetMembers().Count);
@@ -195,7 +208,7 @@ public class CandidateMaterializerTests
         StoredCommit second = Commit(f.Alice.Group);
 
         MaterializationResult result = NewMaterializer(f.Archive)
-            .Materialize(f.Carol, "genesis", [first, second], NoWitnesses);
+            .Materialize(f.Carol, "genesis", Ordinary, [first, second], NoWitnesses);
 
         BranchCandidate built = Assert.Single(result.Candidates, c => c.Id != "genesis");
 
@@ -214,7 +227,7 @@ public class CandidateMaterializerTests
         f.Archive.Forget(f.Carol.Epoch);
 
         MaterializationResult result = NewMaterializer(f.Archive)
-            .Materialize(f.Carol, "genesis", [fromAlice], NoWitnesses);
+            .Materialize(f.Carol, "genesis", Ordinary, [fromAlice], NoWitnesses);
 
         Assert.Equal(
             MaterializationRefusal.NoSnapshot,
@@ -240,7 +253,7 @@ public class CandidateMaterializerTests
             MessageId.FromMlsBytes(wire), good.SourceEpoch, wire, IsOurs: false);
 
         MaterializationResult result = NewMaterializer(f.Archive)
-            .Materialize(f.Carol, "genesis", [corrupt], NoWitnesses);
+            .Materialize(f.Carol, "genesis", Ordinary, [corrupt], NoWitnesses);
 
         Assert.Equal(
             MaterializationRefusal.DoesNotApply,
@@ -258,7 +271,7 @@ public class CandidateMaterializerTests
         StoredCommit ours = Commit(f.Alice.Group, ours: true);
 
         MaterializationResult result = NewMaterializer(f.Archive)
-            .Materialize(f.Carol, "genesis", [ours], NoWitnesses);
+            .Materialize(f.Carol, "genesis", Ordinary, [ours], NoWitnesses);
 
         Assert.Equal(
             MaterializationRefusal.UnreplayableOwnCommit,
@@ -295,7 +308,7 @@ public class CandidateMaterializerTests
             flood.Add(Commit(f.Alice.Group));
 
         MaterializationResult result = materializer.Materialize(
-            f.Carol, "genesis", flood, NoWitnesses);
+            f.Carol, "genesis", Ordinary, flood, NoWitnesses);
 
         Assert.True(
             result.CommitsApplied <= materializer.ReplayBudget,
@@ -316,7 +329,7 @@ public class CandidateMaterializerTests
 
         var materializer = NewMaterializer(f.Archive);
         MaterializationResult result = materializer.Materialize(
-            f.Carol, "genesis", [fromAlice], NoWitnesses);
+            f.Carol, "genesis", Ordinary, [fromAlice], NoWitnesses);
 
         BranchCandidate winner = result.Candidates.Single(c => c.Id != "genesis");
         MlsGroup rebuilt = materializer.Reorg(winner, [fromAlice]);
@@ -333,7 +346,7 @@ public class CandidateMaterializerTests
 
         var materializer = NewMaterializer(f.Archive);
         MaterializationResult result = materializer.Materialize(
-            f.Carol, "genesis", [first, second], NoWitnesses);
+            f.Carol, "genesis", Ordinary, [first, second], NoWitnesses);
 
         BranchCandidate winner = result.Candidates.Single(c => c.Id != "genesis");
         MlsGroup rebuilt = materializer.Reorg(winner, [first, second]);
@@ -353,7 +366,7 @@ public class CandidateMaterializerTests
 
         var materializer = NewMaterializer(f.Archive);
         MaterializationResult result = materializer.Materialize(
-            f.Carol, "genesis", [first, second], NoWitnesses);
+            f.Carol, "genesis", Ordinary, [first, second], NoWitnesses);
 
         BranchCandidate winner = result.Candidates.Single(c => c.Id != "genesis");
         ulong before = f.Carol.Epoch;
@@ -374,7 +387,7 @@ public class CandidateMaterializerTests
 
         var materializer = NewMaterializer(f.Archive);
         MaterializationResult result = materializer.Materialize(
-            f.Carol, "genesis", [fromAlice], NoWitnesses);
+            f.Carol, "genesis", Ordinary, [fromAlice], NoWitnesses);
 
         BranchCandidate winner = result.Candidates.Single(c => c.Id != "genesis");
         f.Archive.Forget(winner.ForkEpoch);
@@ -400,7 +413,7 @@ public class CandidateMaterializerTests
         StoredCommit fromAlice = Commit(f.Alice.Group);
 
         MaterializationResult result = NewMaterializer(f.Archive)
-            .Materialize(f.Carol, "genesis", [fromAlice], NoWitnesses);
+            .Materialize(f.Carol, "genesis", Ordinary, [fromAlice], NoWitnesses);
 
         BranchCandidate winner = result.Candidates.Single(c => c.Id != "genesis");
 
@@ -436,6 +449,7 @@ public class CandidateMaterializerTests
         NewMaterializer(f.Archive).Materialize(
             f.Carol,
             "genesis",
+            Ordinary,
             [fromAlice],
             probe =>
             {

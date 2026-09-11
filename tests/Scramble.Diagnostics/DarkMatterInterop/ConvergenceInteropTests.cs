@@ -161,6 +161,12 @@ public class ConvergenceInteropTests : IDisposable
         MessageId ourCommitId = MessageId.FromMlsBytes(
             TlsCodec.Serialize(
                 new MlsMessage(WireFormat.MlsPublicMessage, ours.Commit).WriteTo));
+        // Read before publishing, which is the only moment it can be read: the
+        // commit's class comes off the proposal cache, and applying it clears
+        // that. An engine that keeps this has to record it at apply time.
+        CommitOrderingPriority ourPriority = CommitOrdering.PriorityOf(group, ours.Commit)
+            ?? CommitOrderingPriority.Ordinary;
+
         string ourWire = GroupHandshake.Wrap(group, _peeler, ours.Commit);
         ours.Publishing();
         await _relay.PublishAsync(ourWire, RelayTimeout);
@@ -181,6 +187,7 @@ public class ConvergenceInteropTests : IDisposable
         MaterializationResult materialized = materializer.Materialize(
             group,
             OurBranchId(ourWire),
+            ourPriority,
             [theirs!],
             _ => []);
 
