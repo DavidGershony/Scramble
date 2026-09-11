@@ -1610,6 +1610,35 @@ merely pinned.
   `integration.yml`; §3g says what to do if it becomes the reason PRs are slow.
 - **Send Whitenoise the questions** in plan §5 (deployed tag, flip date,
   wire-stable tag, disband-for-interop). Q2 on legacy proofs is closed.
+- **Ask Max why a rewound peer never folds the winning commit.** Found
+  2026-09-11 building P6's exit criterion
+  (`tests/Scramble.Diagnostics/DarkMatterInterop/ConvergenceInteropTests.cs`).
+  Set up a genuine same-epoch race against `wn 0.9.20`: the peer hosts, renames
+  the group (the only thing it commits on demand — its own leaf rotation is
+  durable maintenance, jittered a day out, so `schedule-self-update` +
+  `run-maintenance` publishes nothing), and we self-update from the same epoch
+  before ingesting its commit. Then both members carry on talking down their own
+  branches, which is unbiased and what actually happens after a fork. **The peer
+  rewinds to the fork epoch, abandoning its own commit, and stops there.** It
+  never applies ours; repeated `sync` and `run-maintenance` passes do not move
+  it. Our guess is that it saw and deduplicated our commit while it was still at
+  the far epoch and could not apply it then, and never retries. Two things worth
+  saying when we ask:
+  - Our comparator matches their reference model line for line
+    (`crates/cgka-conformance-simulator/src/reference_convergence.rs:521-526` —
+    the last three tie-breaks reversed), so this is not a disagreement about
+    which branch wins.
+  - A kind-445 envelope is sealed under its epoch's exporter secret, so a member
+    that has committed past an epoch cannot peel a competing commit from it
+    until something replays history. That makes the *order* of events decide
+    whether a fork is even visible, which seems worth their confirming.
+- **Do not "fix" that test by nudging from one branch.** App-witness score
+  outranks every tie-break, so traffic on one branch decides the winner on its
+  own: the peer then adopts whichever branch we happen to talk on, and reversing
+  our committer tie-break survives the test. Ancestor-epoch traffic is unbiased
+  but inert — members keep the last few epochs' keys and read it cleanly. The
+  test as it stands asserts only what holds: a real upstream commit becomes a
+  branch, scores deterministically, and can be adopted.
 
 ---
 

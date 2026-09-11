@@ -198,6 +198,102 @@ public sealed class MdkCliDockerClient(Action<string> log)
     /// <summary>The CLI version, for the test log.</summary>
     public async Task<string> VersionAsync() => (await ExecAsync("wn", "--version")).Trim();
 
+    /// <summary>
+    /// Schedules one own-leaf rotation, which the next maintenance pass
+    /// commits.
+    /// </summary>
+    /// <remarks>
+    /// The cheapest way to make the peer produce a commit on demand: it needs
+    /// no second party and changes no membership, so a race staged with it
+    /// differs from the branch we build only in who committed.
+    /// </remarks>
+    public Task ScheduleSelfUpdateAsync(string groupIdHex) =>
+        CliAsync("groups", "schedule-self-update", groupIdHex);
+
+    /// <summary>Renames a group, which commits immediately.</summary>
+    /// <remarks>
+    /// The one thing the peer will commit <i>on demand</i>. Its self-update is
+    /// durable maintenance -- jittered, quiescence-gated, and targeted a day
+    /// out -- so <c>schedule-self-update</c> followed by <c>run-maintenance</c>
+    /// schedules an obligation that is not yet due and publishes nothing. A
+    /// rename is an admin action taken at once, which is what a test that needs
+    /// two commits forking from one epoch requires. Admin-gated: the caller
+    /// must have been made an admin.
+    /// </remarks>
+    public Task RenameAsync(string groupIdHex, string name) =>
+        CliAsync("groups", "rename", groupIdHex, name);
+
+    /// <summary>Adds members to a group.</summary>
+    public Task AddMembersAsync(string groupIdHex, params string[] pubkeys) =>
+        CliAsync(["groups", "add-members", groupIdHex, .. pubkeys]);
+
+    /// <summary>Raw JSON of one group's metadata and MLS state.</summary>
+    /// <remarks>
+    /// <c>groups list</c> carries no epoch — only <c>show</c> does. A poll that
+    /// reads the wrong command gets a null forever and reports it as a peer
+    /// that never caught up.
+    /// </remarks>
+    public Task<JsonElement> ShowAsync(string groupIdHex) =>
+        CliJsonAsync("groups", "show", groupIdHex);
+
+    /// <summary>The epoch the peer believes a group is at.</summary>
+    /// <remarks>
+    /// Searched for rather than read from a fixed path: the CLI's JSON shape is
+    /// not a contract we control, and a test that hardcodes it breaks on an
+    /// upstream field rename for no protocol reason.
+    /// </remarks>
+    public async Task<ulong?> GroupEpochAsync(string groupIdHex) =>
+        Objects(await ShowAsync(groupIdHex))
+            .Select(o =>
+                o.TryGetProperty("epoch", out JsonElement e)
+                && e.ValueKind == JsonValueKind.Number
+                    ? e.GetUInt64()
+                    : (ulong?)null)
+            .FirstOrDefault(e => e is not null);
+
+    /// <summary>
+    /// The group name the peer currently shows, which names its branch.
+    /// </summary>
+    /// <remarks>
+    /// Two branches of one epoch carry the same epoch number, so epoch equality
+    /// alone cannot tell convergence from a coincidence. The profile name can,
+    /// whenever the branches differ in it — which is why the race is built from
+    /// a rename on one side and a leaf rotation on the other.
+    /// </remarks>
+    public async Task<string?> GroupNameAsync(string groupIdHex)
+    {
+        foreach (JsonElement o in Objects(await ShowAsync(groupIdHex)))
+        {
+            if (o.TryGetProperty("name", out JsonElement name)
+                && name.ValueKind == JsonValueKind.String)
+            {
+                return name.GetString();
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Every object anywhere in a JSON document.</summary>
+    private static IEnumerable<JsonElement> Objects(JsonElement json)
+    {
+        switch (json.ValueKind)
+        {
+            case JsonValueKind.Object:
+                yield return json;
+                foreach (var property in json.EnumerateObject())
+                    foreach (JsonElement nested in Objects(property.Value))
+                        yield return nested;
+                break;
+
+            case JsonValueKind.Array:
+                foreach (var item in json.EnumerateArray())
+                    foreach (JsonElement nested in Objects(item))
+                        yield return nested;
+                break;
+        }
+    }
+
     /// <summary>Runs one due-maintenance pass.</summary>
     /// <remarks>
     /// Whether committing another member's pending departure is sync work or
