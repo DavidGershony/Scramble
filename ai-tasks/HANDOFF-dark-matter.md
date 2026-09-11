@@ -19,19 +19,19 @@ before P0–P2 landed.
 ## 1. The one-paragraph situation
 
 Scramble is replacing its Marmot engine with a standalone Dark Matter
-implementation (`Scramble.Marmot.*`), built fresh against Rust `mdk` pinned at
-**`wn-agent-v0.9.10`**. Planning is finished. Phases P0 (storage), P1 (epoch
-state machine), P2 (account-identity proof) and P4 (app components) are done,
-**P3 is closed**, and **P6 has started**: KeyPackage generation, publication
-and the first live interop suite all landed on 2026-08-31 (§3f, §3g). Our stack
-now validates a KeyPackage the reference implementation actually published, and
-reproduces its bytes exactly. Nothing is wired into the running app yet: the new
-engine is entirely additive and nothing depends on it, so it cannot break the
-shipping product. Create-group landed on 2026-08-31 (§3i), the last two `dotnet-mls` gaps closed
-on 2026-09-01 (§3j), and **invite landed the same day (§3k)** — there is a
-two-party group with a member who joined through a Welcome. What remains of **P6** is join-from-Welcome, application messages, and the
-outbound interop direction, which is **green as of 2026-09-02 (§3m)** — the
-reference client joins a group we create.
+implementation (`Scramble.Marmot.*`), built fresh against Rust `mdk`. The peer
+is **no longer pinned to a fixed tag**: `scripts/build-marmot-peers.ps1`
+resolves the newest `wn-agent-vX.Y.Z` by semver on every run and caches on the
+resolved commit, so we track upstream as it moves (decided 2026-09-09 — they
+asked for interop testing now, so the newest is what matters). Latest verified:
+**`wn 0.9.20`**.
+
+Planning is finished. **P0, P1, P2, P3, P4, P6 and P7 are done.** **P8 is
+built but not wired**: policy, selector, audit trace, canonicalization
+pipeline, candidate materializer and commit ordering all exist and are tested,
+but nothing in the ingest path feeds them yet (§3y). Nothing is wired into the
+running app: the new engine is entirely additive and nothing depends on it, so
+it cannot break the shipping product. **P9–P12 have not started.**
 
 ---
 
@@ -39,9 +39,11 @@ reference client joins a group we create.
 
 Seven new projects, all standalone (no reference to `marmot-cs`), all in
 `Scramble.sln` and `Scramble.Desktop.slnf`, all running in the fast unit gate.
-**823 tests in `Scramble.Marmot.Tests`**, plus **13 passing and 2 skipped in the
-live `DarkMatterInterop` suite** (`tests/Scramble.Diagnostics/DarkMatterInterop/`),
-all passing.
+As of 2026-09-11: **979 tests in `Scramble.Marmot.Tests`**, **18 in the live
+`DarkMatterInterop` suite with zero skips**
+(`tests/Scramble.Diagnostics/DarkMatterInterop/`), and **384 in `dotnet-mls`**.
+A skip in the interop suite is a failure, not a pass — `stage6-dark-matter.ps1`
+enforces that, for the reason in §3t.
 
 | Project | Phase | Contains |
 |---|---|---|
@@ -53,14 +55,23 @@ all passing.
 | `src/Scramble.Marmot.Wire.Nostr` | P3 | kind-445 codec, kind-444 Welcome, kind-30443 KeyPackage, `NostrGroupPeeler` |
 | `src/Scramble.Marmot.AppComponents` | P4 | id registry, QUIC-varint codec, the four v1 schemas, app-data dictionary, Current-profile invariants, commit authorization, staged-commit component integrity, the shared relay-URL profile |
 
-Also landed: `dotnet-mls` is **released and pinned at `v0.1.0-beta.10`**
-(2026-09-01), which carries everything P6 needs — see §3e. **415 of its tests
-pass**, RFC 9420 vectors included. The submodule sits exactly on the tag; keep
-it that way. Also a `wn-agent` interop peer in `docker-compose.test.yml`.
+Also landed: `dotnet-mls` is **released and pinned at `v0.1.0-beta.15`**, which
+carries everything P6–P8 need — see §3e, §3s, §3w. RFC 9420 vectors included.
+The submodule sits exactly on the tag; keep it that way. Two interop peers
+(`mdk-cli-interop`, `wn-agent-interop`) are built by
+`scripts/build-marmot-peers.ps1`; `docker-compose.test.yml` carries the relay.
 
 ---
 
 ## 3. Do this next
+
+**Start at §3y** — it is the most recent section and it says what is built,
+what is only called by tests, and what has no phase. §3a–§3x are history in
+order; read backwards from §3y as far as you need.
+
+**The one-line answer:** P0–P4, P6 and P7 are done; P8's pieces exist and are
+tested but nothing in the ingest path calls them. The next substantial piece is
+the convergence drain, which no phase currently owns (§3y, last subsection).
 
 ### 3a. The crypto review is DONE and actioned — nothing to do here
 
@@ -1579,21 +1590,143 @@ it had been staging three things that were not invites.
 `V1SettlementQuiescenceMs` and `V1MaxConvergencePassMs` are consumed rather than
 merely pinned.
 
-**What P8 needs next:**
+**What P8 needs next:** items 1 and 2 below were done on 2026-09-11 — see §3y,
+which also revises what item 2 turned out to mean. Item 3 is still open.
 
-1. **`CandidateMaterializer`** — the last large piece. Candidate-path BFS, DoS
-   replay budget, own-commit replay workaround, crash-safe two-level reorg
-   apply, storage. The harness's `Materialize` is a working sketch: restore a
-   snapshot, apply, score. Good candidate for `split-and-mutate`.
-2. **P6's exit criterion is still unproven** — "a same-epoch commit race
-   resolves identically on both sides" has only ever been shown in the
-   simulated harness, never against the live peer. It needs the materializer.
+1. ~~**`CandidateMaterializer`**~~ **✅ DONE.** Candidate-path BFS, DoS replay
+   budget, own-commit replay workaround, two-level reorg apply.
+2. ~~**P6's exit criterion is still unproven**~~ **✅ ATTEMPTED, and it found
+   something.** The race now runs against the live peer. It does not converge,
+   and the reason is upstream's — read §3y before touching it.
 3. **A vector that distinguishes a tie-break winner** — still not closable with
    what upstream ships (§3v).
 
+### 3y. The race runs against a live peer, and branch ordering got its top rule back
+
+2026-09-11. 979 Marmot, 18/18 interop at `wn 0.9.20` with zero skips, 384
+`dotnet-mls`. Two commits: `c2c5a2c` (the race) and `1e50f33` (commit ordering).
+
+#### The same-epoch race is real now — and it does not converge
+
+`ConvergenceInteropTests` builds a genuine fork against the reference client.
+**Read this before changing that test**, because three plausible-looking
+versions of it are worthless and one of them goes green.
+
+**The peer hosts the group, and that is not a detail.** The only thing it will
+commit *on demand* is an admin action. Its own leaf rotation is durable
+maintenance: `groups schedule-self-update` creates an obligation whose
+`operational_target_at` is ~24h out with sampled jitter, and `run-maintenance`
+runs only *due* obligations — so schedule-then-run publishes nothing at all.
+`groups rename` commits immediately, and being the creator is what makes the
+peer an admin. Our engine correctly refuses to name an admin who is not yet a
+member (`RequireAdminsAreMembers`), so the peer cannot be made one in a group we
+create until commit-time promotion exists. Hence: peer creates, we join from the
+Welcome, peer renames, we self-update from the same epoch.
+
+**What holds, and is asserted:** a real upstream commit from the contested epoch
+becomes a second candidate, scores deterministically with a traced decisive
+rule, and **can be adopted** — `Reorg` rewinds to the fork epoch and applies
+bytes from a client sharing none of our code. Mutating `Reorg` to skip the apply
+fails the test.
+
+**What does not hold, and is deliberately not asserted: the peer does not end up
+where we do.** Three constructions, three different reasons:
+
+| Nudge traffic | What the peer does | Why that version of the test is worthless |
+|---|---|---|
+| On our branch only | Adopts our branch | `app_witness_score` outranks **every** tie-break, so traffic on one branch decides the winner by itself. Reversing our committer tie-break **survived** this version. The peer was following our noise, not our rules. |
+| From the shared ancestor epoch | Nothing at all | Unbiased, but inert: a member keeps the last few epochs' keys, reads ancestor traffic cleanly, and never reconsiders. |
+| Both members down their own branches | **Rewinds to the fork epoch**, abandons its own commit, and stops | Unbiased and realistic. It never folds ours. Six further `sync` + `run-maintenance` cycles do not move it. |
+
+The third is the honest construction and it is the one that fails. Two facts
+matter when asking upstream about it:
+
+- **Our comparator matches their reference model line for line** —
+  `crates/cgka-conformance-simulator/src/reference_convergence.rs:521-526`,
+  depth then quorum then witness score, then the last three reversed
+  (`b.cmp(&a)` on priority, committer, digest). This is not a disagreement about
+  which branch wins.
+- **A kind-445 envelope is sealed under its epoch's exporter secret.** A member
+  that has committed past an epoch cannot peel a competing commit from it until
+  something replays history — upstream's own `epoch_stall.rs` exists for exactly
+  this, arming a full-history backfill after `EPOCH_STALL_BACKFILL_THRESHOLD = 8`
+  undecryptable messages. So the *order* of events decides whether a fork is
+  visible at all. Best guess at the stall: the peer saw and deduplicated our
+  commit while it was at the far epoch and could not apply it, and never retries.
+
+The test is therefore named for what it proves —
+`AnUpstreamCommitFromARacedEpochIsScoredAndCanBeAdopted` — and the questions for
+upstream are in §3d. It is **not** marked skipped: a skip reads as a pass (§3t),
+and an honest narrow assertion beats a wide one that cannot fail.
+
+#### Branch ordering had a rule with no caller
+
+Found while checking P8's other exit criterion. `CommitAuthorization.OrderingPriority`
+had unit tests and **no production caller**: `CandidateMaterializer` filed every
+candidate as `CommitOrderingPriority.Ordinary`.
+
+That is not a conservative tie-break. Priority sits **above** both the committer
+and the digest in `BranchSelection.Compare`, so hardcoding it deletes a rule the
+whole group orders by and silently pushes every decision down to the rule below.
+Two members doing that differently pick different branches from an identical
+candidate set, with no error anywhere.
+
+`src/Scramble.Marmot.Engine/Convergence/CommitOrdering.cs` now reads a real
+commit and answers the question. Three things about it are load-bearing:
+
+1. **Inline and referenced proposals both count.** The rule is about what a
+   commit *does*; counting only the references would let any commit become
+   ordinary by inlining what it applies. (Upstream reads
+   `staged.queued_proposals()`, which is both.)
+2. **It must run before the commit is applied.** A commit cites proposals by
+   hash, and a proposal is cached only for the epoch it was framed against —
+   applying the commit clears the cache that says what those hashes were.
+3. **An unresolvable reference is `Privileged`.** Fail-closed, and unreachable
+   in practice: a commit whose proposals we cannot resolve will not apply, so
+   its branch is refused before its priority is ever compared. The answer exists
+   so the gap between those two steps cannot read as "ordinary".
+
+`Materialize` now takes the current branch's tip class as a parameter with
+**no default**. The live branch is the one candidate that cannot be classified
+on the way in, because applying its tip is what cleared the cache. A default
+would be a guess, and guessing "ordinary" understates our own branch against a
+peer that knows better — a disagreement, not a safe choice.
+
+Both halves were mutated. Hardcoding the candidate's class fails
+`TheClassReachesTheCandidateThatIsScored` alone; making the classifier answer
+`Ordinary` fails three tests.
+
+#### Two traps this section paid for
+
+- **`GroupEpochAsync` read `groups list`, which carries no epoch.** It returned
+  null forever, and the poll reported that as "the peer never caught up". Epoch
+  and profile name both live under `groups show`. A CLI reader returning `null`
+  for a field that does not exist needs a caller that can tell *absent* from
+  *not yet*.
+- **Own-commit filtering by envelope string does not work.** A relay
+  re-serialises an event before handing it back, so the JSON need not be
+  byte-identical to what went out. Filter on `MessageId.FromMlsBytes` of the
+  peeled MLS bytes instead. Getting this wrong is silent: our own commit
+  materialises as a branch that cannot apply, and the race quietly has one
+  candidate.
+
+#### What is left, and what has no phase
+
+- **The convergence drain is not built.** `MessageIngest` records a commit that
+  fails to apply as `Retryable`/`TransportDeferred`, and nothing ever
+  reconsiders it as a branch candidate. `CanonicalizationPipeline`,
+  `CandidateMaterializer`, `BranchSelection` and `CommitOrdering` are therefore
+  complete, tested, and **called only by tests**.
+- **Nothing records a tip's ordering class at apply time**, which is what
+  `Materialize`'s new parameter needs in production.
+- **Neither has a phase.** P6's row says convergence is *stubbed*; P8's scope is
+  the pieces, not the wiring. Whoever picks this up should decide where it
+  belongs before starting — it is roughly M-sized and it touches `MessageIngest`,
+  so I2 applies.
+
 ### 3d. Non-code items still open (not blocking)
 
-- **Open a PR for `feat/dark-matter`.** **65 commits** ahead of `master` and
+- **Open a PR for `feat/dark-matter`.** **104 commits** ahead of `master` and
   growing; it is reviewable now and will not be after P6. This is the repo's
   documented flag-day failure mode (I4). *(The user has said a PR is not wanted
   — the plan is to keep going and merge at the end. Recorded here because I4
@@ -1644,9 +1777,13 @@ merely pinned.
 
 ## 4. How to work here
 
-**Commands.**
+**Commands.** Prefer the `run-tests` skill — it owns the stage scripts, brings
+the right containers up, and knows that a skipped interop test is a failure.
 
 ```powershell
+# Everything, in six stages
+./.claude/skills/run-tests/scripts/run-all.ps1
+
 # Fast unit gate — includes every Scramble.Marmot test
 dotnet test Scramble.Desktop.slnf --filter "Category!=Relay&Category!=Integration" -p:DesktopOnly=true
 
@@ -1657,14 +1794,18 @@ dotnet test tests/Scramble.Marmot.Tests
 docker compose -f docker-compose.test.yml up -d nostr-relay
 dotnet test tests/Scramble.Diagnostics/ --filter "Category=Integration|Category=MIP-Compliance|Category=ProtocolCompliance|Category=FullE2E|Category=EpochSync|Category=DeviceSync|Category=OutboxModel|Category=Notifications|Category=RelayHarness|Category=ExporterSecret"
 
-# The Dark Matter interop suite. The peer builds from a pinned mdk ref, so the
-# first run is slow; the tests SKIP when it is not up rather than failing.
-docker compose -f docker-compose.test.yml up -d --build nostr-relay wn-agent
-dotnet test tests/Scramble.Diagnostics/ --filter "Category=DarkMatterInterop"
+# The Dark Matter interop suite. Build the peers FIRST — the tests skip when
+# they are not up, and a skipped run exits zero printing "Skipped!", which
+# matches neither "Passed!" nor "Failed!". stage6 fails on any skip for exactly
+# that reason; do not read a bare dotnet test result yourself.
+./scripts/build-marmot-peers.ps1          # resolves the newest wn-agent tag, caches on its commit
+./.claude/skills/run-tests/scripts/stage6-dark-matter.ps1
 
-# Driving the peer by hand (it bootstraps itself in the tests)
-docker exec wn-agent-interop wn-agent bootstrap --home /data/marmot-agent `
-  --socket /run/marmot-agent/wn-agent.sock --no-quic --json
+# Driving the mdk-cli peer by hand. The binary is `wn`, not `mdk-cli`, and under
+# Git Bash you need MSYS_NO_PATHCONV=1 or the container paths get rewritten to
+# Windows ones. --account is required once more than one identity exists.
+docker exec mdk-cli-interop wn --home /data/wn --socket /data/wn/wnd.sock `
+  --secret-store file --account <hex> groups show <group-id-hex> --json
 
 ./scripts/check-drift.ps1
 ```
@@ -1723,6 +1864,11 @@ without the interop suite running).
 | Reading only the first of a repeated tag | An attacker prepends a value another implementation ignores, so two peers disagree about one signed event | Explicitly a MUST NOT. Reject the event. |
 | Uppercase hex in tags | Decodes identically but changes the event id | Lowercase everywhere on the wire. |
 | Dedup on the Nostr event id | Same MLS message under a different envelope is processed twice | Dedup on `MessageId.FromMlsBytes`; transport ids are a pre-filter only. |
+| Filtering out our own commit by comparing envelope strings | A relay re-serialises before returning, so the JSON differs and our own commit is taken for a competitor — then refused as `DoesNotApply`, leaving a "race" with one candidate. Silent. | Compare `MessageId.FromMlsBytes` of the peeled MLS bytes. |
+| Reading a group's epoch from `wn groups list` | It carries no `epoch` field, so the reader returns null forever and a poll reports it as a peer that never caught up | Epoch and profile name are under `groups show`. Make the reader distinguish *absent* from *not yet*. |
+| Making the peer commit with `schedule-self-update` + `run-maintenance` | Publishes nothing. The obligation targets ~24h out with jitter, and `run-maintenance` runs only *due* ones | `groups rename` commits immediately. It is admin-gated, so the peer has to be the group's creator. |
+| Nudging a forked peer with traffic on one branch | It converges — on whichever branch you talked on. `app_witness_score` outranks every tie-break, so the test proves nothing and survives a reversed tie-break | If a convergence test needs to break a stall, both sides must talk. See §3y. |
+| Filing every branch candidate as `Ordinary` | Deletes the top tie-break rather than being conservative about it; two members can then pick different branches from identical candidates | Classify with `CommitOrdering` **before** applying the commit — applying it clears the proposal cache the references resolve against. |
 | `wn-agent` + private-range relay | `connector request failed`, nothing in the agent log | The agent accepts plaintext `ws://` only for a *literal* loopback host, hence `network_mode: host` and `ws://127.0.0.1:7777`. |
 | `wn-agent` socket dir at `0755` | `PermissionDenied` naming no path | The socket's parent directory must be `0700`. |
 | `wn-agent serve` | `unrecognized subcommand` | There is no `serve`. Running `wn-agent` bare is what serves. |
