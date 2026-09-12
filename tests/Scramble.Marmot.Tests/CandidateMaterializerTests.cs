@@ -28,16 +28,21 @@ public class CandidateMaterializerTests
     private readonly ICipherSuite _cs = new CipherSuite0x0001();
     private const ulong Now = 1_760_000_000;
     /// <summary>
-    /// The live branch's tip class, stated rather than defaulted.
+    /// The live branch's tip, stated rather than defaulted.
     /// </summary>
     /// <remarks>
-    /// Every fixture here builds its current branch from ordinary commits, so
-    /// this is the true value and not a placeholder. It is written at each call
-    /// because the parameter has no default: a branch whose own tip is
-    /// misreported competes on the wrong terms, and that is worth one word per
-    /// call site.
+    /// Every fixture here builds its current branch from ordinary commits by a
+    /// member whose key is this one, so these are true values and not
+    /// placeholders. The parameter has no default because a branch whose own tip
+    /// is misreported does not fail loudly -- it competes, on terms no other
+    /// member computed, in exactly the comparison a fork exists to settle.
     /// </remarks>
-    private const CommitOrderingPriority Ordinary = CommitOrderingPriority.Ordinary;
+    private static readonly CommitTip LiveTip = new(
+        CommitOrderingPriority.Ordinary,
+        new MessageId(Enumerable.Repeat((byte)0x5a, 32).ToArray()),
+        Enumerable.Repeat((byte)0x77, 32).ToArray());
+
+    private static readonly string LiveId = LiveTip.BranchId;
 
     private static readonly string[] Relays = ["wss://relay.example.com"];
 
@@ -156,10 +161,10 @@ public class CandidateMaterializerTests
         StoredCommit fromAlice = Commit(f.Alice.Group);
 
         MaterializationResult result = NewMaterializer(f.Archive)
-            .Materialize(f.Carol, "genesis", Ordinary, [fromAlice], NoWitnesses);
+            .Materialize(f.Carol, LiveTip, [fromAlice], NoWitnesses);
 
         BranchCandidate built = Assert.Single(
-            result.Candidates, c => !string.Equals(c.Id, "genesis", StringComparison.Ordinal));
+            result.Candidates, c => !string.Equals(c.Id, LiveId, StringComparison.Ordinal));
 
         Assert.Equal(f.Carol.Epoch, built.ForkEpoch);
         Assert.Equal(f.Carol.Epoch + 1, built.TipEpoch);
@@ -176,10 +181,10 @@ public class CandidateMaterializerTests
         StoredCommit fromAlice = Commit(f.Alice.Group);
 
         MaterializationResult result = NewMaterializer(f.Archive)
-            .Materialize(f.Carol, "genesis", Ordinary, [fromAlice], NoWitnesses);
+            .Materialize(f.Carol, LiveTip, [fromAlice], NoWitnesses);
 
         Assert.Equal(2, result.Candidates.Count);
-        Assert.Contains(result.Candidates, c => c.Id == "genesis");
+        Assert.Contains(result.Candidates, c => c.Id == LiveId);
     }
 
     [Fact]
@@ -191,7 +196,7 @@ public class CandidateMaterializerTests
         ulong before = f.Carol.Epoch;
 
         StoredCommit fromAlice = Commit(f.Alice.Group);
-        NewMaterializer(f.Archive).Materialize(f.Carol, "genesis", Ordinary, [fromAlice], NoWitnesses);
+        NewMaterializer(f.Archive).Materialize(f.Carol, LiveTip, [fromAlice], NoWitnesses);
 
         Assert.Equal(before, f.Carol.Epoch);
         Assert.Equal(3, f.Carol.GetMembers().Count);
@@ -208,9 +213,9 @@ public class CandidateMaterializerTests
         StoredCommit second = Commit(f.Alice.Group);
 
         MaterializationResult result = NewMaterializer(f.Archive)
-            .Materialize(f.Carol, "genesis", Ordinary, [first, second], NoWitnesses);
+            .Materialize(f.Carol, LiveTip, [first, second], NoWitnesses);
 
-        BranchCandidate built = Assert.Single(result.Candidates, c => c.Id != "genesis");
+        BranchCandidate built = Assert.Single(result.Candidates, c => c.Id != LiveId);
 
         Assert.Equal(f.Carol.Epoch + 2, built.TipEpoch);
         Assert.Equal(2, result.CommitsApplied);
@@ -227,7 +232,7 @@ public class CandidateMaterializerTests
         f.Archive.Forget(f.Carol.Epoch);
 
         MaterializationResult result = NewMaterializer(f.Archive)
-            .Materialize(f.Carol, "genesis", Ordinary, [fromAlice], NoWitnesses);
+            .Materialize(f.Carol, LiveTip, [fromAlice], NoWitnesses);
 
         Assert.Equal(
             MaterializationRefusal.NoSnapshot,
@@ -253,7 +258,7 @@ public class CandidateMaterializerTests
             MessageId.FromMlsBytes(wire), good.SourceEpoch, wire, IsOurs: false);
 
         MaterializationResult result = NewMaterializer(f.Archive)
-            .Materialize(f.Carol, "genesis", Ordinary, [corrupt], NoWitnesses);
+            .Materialize(f.Carol, LiveTip, [corrupt], NoWitnesses);
 
         Assert.Equal(
             MaterializationRefusal.DoesNotApply,
@@ -271,7 +276,7 @@ public class CandidateMaterializerTests
         StoredCommit ours = Commit(f.Alice.Group, ours: true);
 
         MaterializationResult result = NewMaterializer(f.Archive)
-            .Materialize(f.Carol, "genesis", Ordinary, [ours], NoWitnesses);
+            .Materialize(f.Carol, LiveTip, [ours], NoWitnesses);
 
         Assert.Equal(
             MaterializationRefusal.UnreplayableOwnCommit,
@@ -308,7 +313,7 @@ public class CandidateMaterializerTests
             flood.Add(Commit(f.Alice.Group));
 
         MaterializationResult result = materializer.Materialize(
-            f.Carol, "genesis", Ordinary, flood, NoWitnesses);
+            f.Carol, LiveTip, flood, NoWitnesses);
 
         Assert.True(
             result.CommitsApplied <= materializer.ReplayBudget,
@@ -329,9 +334,9 @@ public class CandidateMaterializerTests
 
         var materializer = NewMaterializer(f.Archive);
         MaterializationResult result = materializer.Materialize(
-            f.Carol, "genesis", Ordinary, [fromAlice], NoWitnesses);
+            f.Carol, LiveTip, [fromAlice], NoWitnesses);
 
-        BranchCandidate winner = result.Candidates.Single(c => c.Id != "genesis");
+        BranchCandidate winner = result.Candidates.Single(c => c.Id != LiveId);
         MlsGroup rebuilt = materializer.Reorg(winner, [fromAlice]);
 
         Assert.Equal(winner.TipEpoch, rebuilt.Epoch);
@@ -346,9 +351,9 @@ public class CandidateMaterializerTests
 
         var materializer = NewMaterializer(f.Archive);
         MaterializationResult result = materializer.Materialize(
-            f.Carol, "genesis", Ordinary, [first, second], NoWitnesses);
+            f.Carol, LiveTip, [first, second], NoWitnesses);
 
-        BranchCandidate winner = result.Candidates.Single(c => c.Id != "genesis");
+        BranchCandidate winner = result.Candidates.Single(c => c.Id != LiveId);
         MlsGroup rebuilt = materializer.Reorg(winner, [first, second]);
 
         Assert.Equal(f.Carol.Epoch + 2, rebuilt.Epoch);
@@ -366,9 +371,9 @@ public class CandidateMaterializerTests
 
         var materializer = NewMaterializer(f.Archive);
         MaterializationResult result = materializer.Materialize(
-            f.Carol, "genesis", Ordinary, [first, second], NoWitnesses);
+            f.Carol, LiveTip, [first, second], NoWitnesses);
 
-        BranchCandidate winner = result.Candidates.Single(c => c.Id != "genesis");
+        BranchCandidate winner = result.Candidates.Single(c => c.Id != LiveId);
         ulong before = f.Carol.Epoch;
 
         // The middle of the chain is missing, so the branch cannot be rebuilt.
@@ -387,9 +392,9 @@ public class CandidateMaterializerTests
 
         var materializer = NewMaterializer(f.Archive);
         MaterializationResult result = materializer.Materialize(
-            f.Carol, "genesis", Ordinary, [fromAlice], NoWitnesses);
+            f.Carol, LiveTip, [fromAlice], NoWitnesses);
 
-        BranchCandidate winner = result.Candidates.Single(c => c.Id != "genesis");
+        BranchCandidate winner = result.Candidates.Single(c => c.Id != LiveId);
         f.Archive.Forget(winner.ForkEpoch);
 
         var ex = Assert.Throws<InvalidOperationException>(
@@ -413,9 +418,9 @@ public class CandidateMaterializerTests
         StoredCommit fromAlice = Commit(f.Alice.Group);
 
         MaterializationResult result = NewMaterializer(f.Archive)
-            .Materialize(f.Carol, "genesis", Ordinary, [fromAlice], NoWitnesses);
+            .Materialize(f.Carol, LiveTip, [fromAlice], NoWitnesses);
 
-        BranchCandidate winner = result.Candidates.Single(c => c.Id != "genesis");
+        BranchCandidate winner = result.Candidates.Single(c => c.Id != LiveId);
 
         // An archive that ignores the epoch and always returns a later state.
         MlsGroup ahead = f.Archive.Restore(new EpochId(winner.ForkEpoch))!;
@@ -433,6 +438,34 @@ public class CandidateMaterializerTests
     private static PublicMessage ReadCommit(byte[] wire) =>
         (PublicMessage)MlsMessage.ReadFrom(new TlsReader(wire)).Body;
 
+    [Fact]
+    public async Task TheLiveBranchIsScoredOnTheTipItWasGivenNotOnWhoWeAre()
+    {
+        // The tip of the branch we hold need not be our own commit. Most often
+        // it is somebody else's, applied a moment before a competitor arrived.
+        // Filling the committer in from the live group would have every member
+        // score that one branch as though they had made its last commit --
+        // three different answers in a three-member group, from an identical
+        // candidate set, on the rule directly below priority.
+        Fixture f = await TrioAsync();
+        StoredCommit fromAlice = Commit(f.Alice.Group);
+
+        MaterializationResult result = NewMaterializer(f.Archive)
+            .Materialize(f.Carol, LiveTip, [fromAlice], NoWitnesses);
+
+        BranchCandidate live = result.Candidates.Single(c => c.Id == LiveId);
+
+        Assert.Equal(LiveTip.Committer, live.TipCommitter);
+        Assert.Equal(LiveTip.Commit.Value, live.TipDigest);
+
+        byte[] ourOwnIdentity = f.Carol
+            .GetMembers()
+            .Single(m => m.leafIndex == f.Carol.MyLeafIndex)
+            .identity;
+
+        Assert.NotEqual(ourOwnIdentity, live.TipCommitter);
+    }
+
     // ---- Witnesses ----
 
     [Fact]
@@ -448,8 +481,7 @@ public class CandidateMaterializerTests
 
         NewMaterializer(f.Archive).Materialize(
             f.Carol,
-            "genesis",
-            Ordinary,
+            LiveTip,
             [fromAlice],
             probe =>
             {

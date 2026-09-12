@@ -113,10 +113,7 @@ public sealed class CandidateMaterializer(
     /// Builds every branch the stored commits describe.
     /// </summary>
     /// <param name="live">The group as it stands, for the branch we hold.</param>
-    /// <param name="currentBranchId">The id of the branch we are on.</param>
-    /// <param name="currentTipPriority">
-    /// The ordering class of the commit that put us here.
-    /// </param>
+    /// <param name="liveTip">The commit that put us where we are.</param>
     /// <param name="stored">Commits kept for convergence.</param>
     /// <param name="witnessesOn">
     /// The application messages that decrypt against a materialized branch.
@@ -124,23 +121,28 @@ public sealed class CandidateMaterializer(
     /// because a witness is evidence only if the branch can actually read it.
     /// </param>
     /// <remarks>
-    /// <b>Why the current tip's class is passed in rather than read.</b> Every
-    /// other candidate is classified on the way in, from the proposal cache the
-    /// commit's references resolve against. The branch we are already on has no
-    /// such moment left: applying its tip is what cleared that cache. So the
-    /// class has to be remembered when the commit is applied and handed back
-    /// here. There is deliberately no default — a default would be a guess, and
-    /// guessing "ordinary" understates our own branch against a peer that knows
-    /// better, which is a disagreement rather than a conservative choice.
+    /// <para>
+    /// <b>Why the branch we hold is described rather than read.</b> Every other
+    /// candidate is built here, so its tip is known by construction. The branch
+    /// we are already on has no such moment left: applying its tip is what
+    /// cleared the proposal cache its class resolves against, and moved the tree
+    /// its committer was a leaf index into. So all three have to be taken when
+    /// the commit is applied and handed back here.
+    /// </para>
+    /// <para>
+    /// There is deliberately no default. A default would be a guess, and a
+    /// guessed tip does not fail loudly — it competes, on terms no other member
+    /// computed, in exactly the comparison a fork exists to settle.
+    /// </para>
     /// </remarks>
     public MaterializationResult Materialize(
         MlsGroup live,
-        string currentBranchId,
-        CommitOrderingPriority currentTipPriority,
+        CommitTip liveTip,
         IReadOnlyList<StoredCommit> stored,
         Func<MlsGroup, IReadOnlyList<AppWitness>> witnessesOn)
     {
         ArgumentNullException.ThrowIfNull(live);
+        ArgumentNullException.ThrowIfNull(liveTip);
         ArgumentNullException.ThrowIfNull(stored);
         ArgumentNullException.ThrowIfNull(witnessesOn);
 
@@ -201,12 +203,12 @@ public sealed class CandidateMaterializer(
         // would let a late-arriving commit win by being the only candidate,
         // which is how a group gets talked off a history it has delivered.
         candidates.Add(new BranchCandidate(
-            currentBranchId,
+            liveTip.BranchId,
             ForkEpochOf(candidates, live),
             live.Epoch,
-            currentTipPriority,
-            IdentityOfSelf(live),
-            DigestOfBranchId(currentBranchId),
+            liveTip.Priority,
+            liveTip.Committer,
+            liveTip.Commit.Value,
             witnessesOn(live)));
 
         return new MaterializationResult(candidates, refused, applied);
@@ -361,31 +363,6 @@ public sealed class CandidateMaterializer(
 
     private static byte[] Digest(byte[] wire) =>
         System.Security.Cryptography.SHA256.HashData(wire);
-
-    private static byte[] DigestOfBranchId(string branchId)
-    {
-        // A branch id is the hex digest of the commit that produced it, so it
-        // round-trips. The exception is the genesis pseudo-branch, which has no
-        // commit behind it and is hashed instead -- the tie-break needs 32
-        // bytes and does not care where they came from, only that every member
-        // derives the same ones.
-        if (branchId.Length == 64)
-        {
-            try
-            {
-                return Convert.FromHexString(branchId);
-            }
-            catch (FormatException)
-            {
-                // Not a digest after all; fall through and hash it.
-            }
-        }
-
-        return Digest(System.Text.Encoding.UTF8.GetBytes(branchId));
-    }
-
-    private static byte[] IdentityOfSelf(MlsGroup group) =>
-        IdentityOfLeaf(group, group.MyLeafIndex);
 
     private static byte[] IdentityOfLeaf(MlsGroup group, uint leafIndex) =>
         group.GetMembers().Single(m => m.leafIndex == leafIndex).identity;

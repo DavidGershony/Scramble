@@ -40,6 +40,12 @@ public class CommitOrderingTests
 
     private readonly ICipherSuite _cs = new CipherSuite0x0001();
 
+    /// <summary>The live branch's tip, stated rather than guessed.</summary>
+    private static readonly CommitTip LiveTip = new(
+        CommitOrderingPriority.Ordinary,
+        new MessageId(Enumerable.Repeat((byte)0x5a, 32).ToArray()),
+        Enumerable.Repeat((byte)0x77, 32).ToArray());
+
     private sealed class LocalSigner : IAccountIdentityProofSigner
     {
         public LocalSigner()
@@ -254,8 +260,7 @@ public class CommitOrderingTests
 
         MaterializationResult result = materializer.Materialize(
             guest,
-            "genesis",
-            CommitOrderingPriority.Ordinary,
+            LiveTip,
             [new StoredCommit(
                 MessageId.FromMlsBytes(wire),
                 new EpochId(guest.Epoch),
@@ -264,7 +269,7 @@ public class CommitOrderingTests
             _ => []);
 
         BranchCandidate theirs = Assert.Single(
-            result.Candidates.Where(c => c.Id != "genesis"));
+            result.Candidates.Where(c => c.Id != LiveTip.BranchId));
 
         Assert.Equal(CommitOrderingPriority.Privileged, theirs.TipPriority);
     }

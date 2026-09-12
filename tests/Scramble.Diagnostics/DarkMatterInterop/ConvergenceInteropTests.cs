@@ -164,8 +164,15 @@ public class ConvergenceInteropTests : IDisposable
         // Read before publishing, which is the only moment it can be read: the
         // commit's class comes off the proposal cache, and applying it clears
         // that. An engine that keeps this has to record it at apply time.
-        CommitOrderingPriority ourPriority = CommitOrdering.PriorityOf(group, ours.Commit)
-            ?? CommitOrderingPriority.Ordinary;
+        // Everything the tie-break reads about our own branch, taken at the
+        // only moment it can be: the class off the proposal cache the apply
+        // clears, the digest over the MLS bytes -- the same hash the peer takes,
+        // not over the Nostr envelope we happened to wrap them in -- and the
+        // committer, which is us because this is our commit.
+        var ourTip = new CommitTip(
+            CommitOrdering.PriorityOf(group, ours.Commit) ?? CommitOrderingPriority.Ordinary,
+            ourCommitId,
+            Convert.FromHexString(us.Hex));
 
         string ourWire = GroupHandshake.Wrap(group, _peeler, ours.Commit);
         ours.Publishing();
@@ -186,8 +193,7 @@ public class ConvergenceInteropTests : IDisposable
 
         MaterializationResult materialized = materializer.Materialize(
             group,
-            OurBranchId(ourWire),
-            ourPriority,
+            ourTip,
             [theirs!],
             _ => []);
 
@@ -207,7 +213,7 @@ public class ConvergenceInteropTests : IDisposable
             $"we selected {winner.Id[..8]} (decisive "
             + $"{trace.RuleTrace.FirstOrDefault(r => r.Decisive)?.RuleName ?? "none"})");
 
-        MlsGroup settled = winner.Id == OurBranchId(ourWire)
+        MlsGroup settled = winner.Id == ourTip.BranchId
             ? group
             : materializer.Reorg(winner, [theirs!]);
 
@@ -220,7 +226,7 @@ public class ConvergenceInteropTests : IDisposable
         //    commit to it — real upstream bytes, produced by a client that
         //    shares none of our code.
         BranchCandidate theirBranch = materialized.Candidates.Single(
-            c => c.Id != OurBranchId(ourWire));
+            c => c.Id != ourTip.BranchId);
 
         MlsGroup adopted = materializer.Reorg(theirBranch, [theirs!]);
 
@@ -287,11 +293,6 @@ public class ConvergenceInteropTests : IDisposable
 
     private MlsGroup? Restore(EpochId epoch) =>
         _archive.TryGetValue(epoch.Value, out byte[]? blob) ? MlsGroup.Import(blob, _cs) : null;
-
-    private static string OurBranchId(string envelope) =>
-        Convert.ToHexString(
-            System.Security.Cryptography.SHA256.HashData(
-                System.Text.Encoding.UTF8.GetBytes(envelope))).ToLowerInvariant();
 
     /// <summary>Polls for a commit from the race epoch that is not our own.</summary>
     /// <remarks>
