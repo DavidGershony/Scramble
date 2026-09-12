@@ -13,6 +13,7 @@ internal static class MarmotSqliteMigrations
         (2, "Query indexes", V002),
         (3, "KeyPackage bundles", V003),
         (4, "Routing index", V004),
+        (5, "Epoch archive", V005),
     };
 
     public static void Apply(SqliteConnection connection, string tablePrefix)
@@ -181,6 +182,35 @@ internal static class MarmotSqliteMigrations
             -- the group listening on two addresses and publishing to one.
             CREATE UNIQUE INDEX {tp}idx_routing_current
                 ON {tp}routing_index (group_id) WHERE last_epoch IS NULL;");
+    }
+
+    private static void V005(SqliteConnection connection, string tp)
+    {
+        // Exported MLS group state, one row per epoch, so a branch forking a
+        // few epochs back can be rebuilt -- an MLS group cannot rewind, so the
+        // only way to evaluate a competing commit is to restore a copy of the
+        // state it was built from and replay onto that.
+        //
+        // Keyed by (group, epoch) rather than by a name: recovery asks for 'the
+        // state at epoch N', and the same epoch can legitimately be written
+        // twice, once on a branch that loses and again after a reorg onto the
+        // one that wins. The later write is the one a further branch forks from.
+        //
+        // tip_priority is the ordering class of the commit that produced the
+        // epoch. It is stored rather than recomputed because it can only be
+        // read before that commit is applied: applying it clears the proposal
+        // cache its references resolve against.
+        Execute(connection, $@"
+            CREATE TABLE {tp}epoch_archive (
+                group_id     BLOB    NOT NULL,
+                epoch        INTEGER NOT NULL,
+                group_state  BLOB    NOT NULL,
+                tip_priority INTEGER NOT NULL,
+                created_at   TEXT    NOT NULL,
+                PRIMARY KEY (group_id, epoch)
+            );
+
+            CREATE INDEX {tp}idx_epoch_archive_group ON {tp}epoch_archive (group_id, epoch);");
     }
 
     private static void Execute(SqliteConnection connection, string sql)

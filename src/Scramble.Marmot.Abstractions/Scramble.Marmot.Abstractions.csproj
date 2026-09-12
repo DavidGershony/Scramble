@@ -5,4 +5,16 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Scramble.Marmot</RootNamespace>
   </PropertyGroup>
+
+  <!--
+    The one reference this project has, and it points at a leaf. AppComponents
+    holds the Marmot component vocabulary and depends on nothing; the storage
+    contracts need one type out of it, the ordering class of a commit, because
+    persisting that as a bare integer would put a protocol-meaningful value in
+    the schema with nothing naming what it means. The direction must stay this
+    way round: AppComponents must not learn about storage.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\Scramble.Marmot.AppComponents\Scramble.Marmot.AppComponents.csproj" />
+  </ItemGroup>
 </Project>

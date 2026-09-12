@@ -16,7 +16,8 @@ public interface IMarmotStorageProvider :
     IWelcomeStorage,
     IKeyPackageStorage,
     IRoutingIndexStorage,
-    ISnapshotStorage
+    ISnapshotStorage,
+    IEpochArchiveStorage
 {
     /// <summary>Opens a transaction covering every sub-store.</summary>
     Task<IStorageTransaction> BeginTransactionAsync(CancellationToken ct = default);
