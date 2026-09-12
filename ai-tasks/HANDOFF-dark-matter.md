@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
 **Updated:** 2026-09-12 (eighteenth revision) · **Branch:** `feat/dark-matter`
-· **Last commit at time of writing:** `833728d`
+· **Last commit at time of writing:** `0fe6cbe`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -40,7 +40,7 @@ started.**
 
 Seven new projects, all standalone (no reference to `marmot-cs`), all in
 `Scramble.sln` and `Scramble.Desktop.slnf`, all running in the fast unit gate.
-As of 2026-09-12: **1020 tests in `Scramble.Marmot.Tests`**, **18 in the live
+As of 2026-09-12: **1023 tests in `Scramble.Marmot.Tests`**, **18 in the live
 `DarkMatterInterop` suite with zero skips**
 (`tests/Scramble.Diagnostics/DarkMatterInterop/`), and **384 in `dotnet-mls`**.
 A skip in the interop suite is a failure, not a pass — `stage6-dark-matter.ps1`
@@ -1728,8 +1728,9 @@ Both halves were mutated. Hardcoding the candidate's class fails
 
 ### 3z. The convergence pass is wired — and the wiring found three guesses
 
-2026-09-12. **1020 Marmot tests**, fast gate green (1020 / 516 core / 253 UI).
-Seven commits, `25cfb87`..`833728d`.
+2026-09-12. **1023 Marmot tests**, fast gate green (1023 / 516 core / 253 UI),
+**18/18 interop at `wn 0.9.20` with zero skips** (image `mdk.commit 2f44f6b6`,
+checked rather than assumed — §3x). Nine commits, `25cfb87`..`0fe6cbe`.
 
 **P8's pieces have a caller now.** `ConvergencePass` reads the commits ingest
 filed as `Retryable`, builds the branches they describe, and either keeps the
@@ -1800,6 +1801,29 @@ which cites its proposal by hash. **That is the fourth variant of this project's
 recurring failure** (§3t skips, §3v indistinguishable vectors, §3x a peer too old
 to disagree): a test that cannot fail. Every fix in these seven commits was
 mutation-checked; four of the pass's own properties were.
+
+#### A stale commit could wedge convergence for good
+
+Found reading back over the above, and fixed in `8d977e9`. A commit forking
+below the rewind horizon refused as `NoSnapshot` on every pass and stayed
+`Retryable`, so it returned to the next pass with the same answer. A pass
+holding a branch it cannot assess reports `Blocked`, and a `Blocked` pass
+decides nothing — so **one commit framed at an ancient epoch stopped a group
+converging at all, permanently, whatever else arrived.** A peer needed to send
+exactly one message to wedge it.
+
+The horizon only moves forward, so such a commit is unevaluable for good, not
+merely for now. It is retired on sight — refused once, terminally, before any
+work is spent on it — using the bound `BranchSelection.IsEligible` already
+applies. `NoSnapshot` then means what the pipeline wants it to mean: a hole in
+the archive, not a commit that arrived too late.
+
+**Both tests were run against the previous code first and failed with
+`Blocked`**, which is the only way to know a regression test tests the
+regression. The second shows a perfectly decidable fork being denied by one
+stale commit. The boundary has its own test, because retiring one epoch too
+eagerly discards a branch the policy calls adoptable and nothing would ever
+mention it again.
 
 #### What is left
 
