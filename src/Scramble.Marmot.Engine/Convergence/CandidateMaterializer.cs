@@ -35,6 +35,16 @@ public enum MaterializationRefusal
 /// <summary>One stored commit that was not turned into a candidate.</summary>
 public sealed record RefusedCommit(MessageId Id, MaterializationRefusal Reason);
 
+/// <summary>A branch adopted, and what it took to get there.</summary>
+/// <param name="Group">The group on the winning branch.</param>
+/// <param name="Applied">
+/// The commits replayed onto it, in the order applied. Reported rather than
+/// left to the caller to work out: the caller has records to bring in line with
+/// what was adopted, and a caller re-deriving this walk would be a second copy
+/// of the rule that decides which commits continue a branch.
+/// </param>
+public sealed record ReorgResult(MlsGroup Group, IReadOnlyList<MessageId> Applied);
+
 /// <summary>What a materialization pass produced.</summary>
 /// <param name="Candidates">Branches that can be scored.</param>
 /// <param name="Refused">Commits that could not be, and why.</param>
@@ -312,9 +322,9 @@ public sealed class CandidateMaterializer(
     /// state matches nobody's.
     /// </para>
     /// </remarks>
-    /// <returns>The group on the winning branch.</returns>
+    /// <returns>The group on the winning branch, and the commits that built it.</returns>
     /// <exception cref="InvalidOperationException">The branch could not be built.</exception>
-    public MlsGroup Reorg(BranchCandidate winner, IReadOnlyList<StoredCommit> stored)
+    public ReorgResult Reorg(BranchCandidate winner, IReadOnlyList<StoredCommit> stored)
     {
         ArgumentNullException.ThrowIfNull(winner);
         ArgumentNullException.ThrowIfNull(stored);
@@ -324,7 +334,7 @@ public sealed class CandidateMaterializer(
                 $"Epoch {winner.ForkEpoch} is no longer retained, so the winning branch "
                 + "cannot be rebuilt. The rewind horizon should have refused it earlier.");
 
-        var applied = new HashSet<MessageId>();
+        var applied = new List<MessageId>();
         ulong reached = rebuilt.Epoch;
 
         while (reached < winner.TipEpoch)
@@ -355,7 +365,7 @@ public sealed class CandidateMaterializer(
                 + "it was scored at.");
         }
 
-        return rebuilt;
+        return new ReorgResult(rebuilt, applied);
     }
 
     private static ulong ForkEpochOf(IReadOnlyList<BranchCandidate> candidates, MlsGroup live) =>

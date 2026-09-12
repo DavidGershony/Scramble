@@ -215,7 +215,7 @@ public class ConvergenceInteropTests : IDisposable
 
         MlsGroup settled = winner.Id == ourTip.BranchId
             ? group
-            : materializer.Reorg(winner, [theirs!]);
+            : materializer.Reorg(winner, [theirs!]).Group;
 
         string settledName = NameOf(settled);
         _log.Add($"we settled at epoch {settled.Epoch}, named '{settledName}'");
@@ -228,7 +228,7 @@ public class ConvergenceInteropTests : IDisposable
         BranchCandidate theirBranch = materialized.Candidates.Single(
             c => c.Id != ourTip.BranchId);
 
-        MlsGroup adopted = materializer.Reorg(theirBranch, [theirs!]);
+        MlsGroup adopted = materializer.Reorg(theirBranch, [theirs!]).Group;
 
         Assert.Equal(raceEpoch + 1, adopted.Epoch);
         Assert.Equal("raced", NameOf(adopted));

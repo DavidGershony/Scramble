@@ -337,7 +337,7 @@ public class CandidateMaterializerTests
             f.Carol, LiveTip, [fromAlice], NoWitnesses);
 
         BranchCandidate winner = result.Candidates.Single(c => c.Id != LiveId);
-        MlsGroup rebuilt = materializer.Reorg(winner, [fromAlice]);
+        MlsGroup rebuilt = materializer.Reorg(winner, [fromAlice]).Group;
 
         Assert.Equal(winner.TipEpoch, rebuilt.Epoch);
     }
@@ -354,7 +354,7 @@ public class CandidateMaterializerTests
             f.Carol, LiveTip, [first, second], NoWitnesses);
 
         BranchCandidate winner = result.Candidates.Single(c => c.Id != LiveId);
-        MlsGroup rebuilt = materializer.Reorg(winner, [first, second]);
+        MlsGroup rebuilt = materializer.Reorg(winner, [first, second]).Group;
 
         Assert.Equal(f.Carol.Epoch + 2, rebuilt.Epoch);
     }
