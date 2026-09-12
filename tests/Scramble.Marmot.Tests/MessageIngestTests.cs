@@ -3,7 +3,9 @@ using DotnetMls.Codec;
 using DotnetMls.Crypto;
 using DotnetMls.Group;
 using DotnetMls.Types;
+using Scramble.Marmot.AppComponents;
 using Scramble.Marmot.Engine;
+using Scramble.Marmot.Engine.Convergence;
 using Scramble.Marmot.Engine.Groups;
 using Scramble.Marmot.Engine.Ingest;
 using Scramble.Marmot.Engine.KeyPackages;
@@ -42,6 +44,12 @@ public class MessageIngestTests : IDisposable
     public void Dispose() => _fixture.Dispose();
 
     private MessageIngest NewIngest() => new(_fixture.Provider, _epochs, () => _now);
+
+    private EpochArchive NewArchive() =>
+        new(_fixture.Provider, _cs, ConvergencePolicy.V1, () => _now);
+
+    private MessageIngest NewIngest(EpochArchive archive) =>
+        new(_fixture.Provider, _epochs, () => _now, archive);
 
     private sealed class LocalSigner : IAccountIdentityProofSigner
     {
@@ -469,6 +477,101 @@ public class MessageIngestTests : IDisposable
         Assert.Equal(MessageRecordState.Created, stored.State);
         Assert.Equal(new EpochId(pair.Alice.Group.Epoch), stored.SourceEpoch);
         Assert.NotEqual(epoch, stored.SourceEpoch);
+    }
+
+    // ---- Keeping enough state to evaluate a fork later ----
+
+    [Fact]
+    public async Task AnAppliedCommitArchivesTheEpochItProduced()
+    {
+        // Written as epochs pass rather than when a fork shows up, because by
+        // then the state that a competing branch forks from is already gone --
+        // an MLS group cannot rewind to produce it again.
+        Pair pair = await PairAsync();
+        EpochArchive archive = NewArchive();
+
+        var (commit, _) = pair.Alice.Group.CommitPublic();
+        byte[] wire = TlsCodec.Serialize(
+            new MlsMessage(WireFormat.MlsPublicMessage, commit).WriteTo);
+        pair.Alice.Group.MergePendingCommit();
+
+        await NewIngest(archive).IngestAsync(pair.Bob, pair.GroupId, wire);
+
+        EpochWindow window = await archive.LoadWindowAsync(
+            pair.GroupId, new EpochId(pair.Bob.Epoch));
+
+        MlsGroup restored = window.Restore(new EpochId(pair.Bob.Epoch))!;
+        Assert.Equal(pair.Bob.Epoch, restored.Epoch);
+    }
+
+    [Fact]
+    public async Task TheArchivedEpochRemembersTheClassOfTheCommitThatMadeIt()
+    {
+        // Read before the commit is applied and stored with the epoch it
+        // produced. Nothing can recover it afterwards, and a tip filed as
+        // ordinary when it was privileged loses a tie-break the rest of the
+        // group wins.
+        Pair pair = await PairAsync();
+        EpochArchive archive = NewArchive();
+
+        var bundle = await MarmotKeyPackageBuilder.CreateAsync(_cs, new LocalSigner(), Now);
+        using StagedCommit staged = MarmotGroupInvite.Add(
+            pair.Alice.Group, _cs, [bundle.KeyPackage]);
+
+        byte[] wire = TlsCodec.Serialize(
+            new MlsMessage(WireFormat.MlsPublicMessage, staged.Commit).WriteTo);
+        staged.Publishing();
+        staged.Applied();
+
+        await NewIngest(archive).IngestAsync(pair.Bob, pair.GroupId, wire);
+
+        EpochWindow window = await archive.LoadWindowAsync(
+            pair.GroupId, new EpochId(pair.Bob.Epoch));
+
+        Assert.Equal(
+            CommitOrderingPriority.Privileged,
+            window.TipPriorityAt(new EpochId(pair.Bob.Epoch)));
+    }
+
+    [Fact]
+    public async Task ACachedProposalArchivesNothing()
+    {
+        // A proposal advances no epoch, so there is no new state to keep. An
+        // archive that wrote one anyway would replace the checkpoint for the
+        // epoch the group is still on -- with a row claiming a commit produced
+        // it, and claiming the wrong class for that commit.
+        Pair pair = await PairAsync();
+        EpochArchive archive = NewArchive();
+
+        PublicMessage request = MarmotGroupLeave.Request(pair.Bob);
+        byte[] wire = TlsCodec.Serialize(
+            new MlsMessage(WireFormat.MlsPublicMessage, request).WriteTo);
+
+        await NewIngest(archive).IngestAsync(pair.Alice.Group, pair.GroupId, wire);
+
+        EpochWindow window = await archive.LoadWindowAsync(
+            pair.GroupId, new EpochId(pair.Alice.Group.Epoch));
+
+        Assert.Empty(window.Epochs);
+    }
+
+    [Fact]
+    public async Task IngestWithoutAnArchiveStillWorks()
+    {
+        // The engine is additive: a caller with no interest in convergence must
+        // not be made to construct an archive to receive a message.
+        Pair pair = await PairAsync();
+
+        var (commit, _) = pair.Alice.Group.CommitPublic();
+        byte[] wire = TlsCodec.Serialize(
+            new MlsMessage(WireFormat.MlsPublicMessage, commit).WriteTo);
+        pair.Alice.Group.MergePendingCommit();
+
+        IngestResult result = await NewIngest().IngestAsync(pair.Bob, pair.GroupId, wire);
+
+        Assert.IsType<IngestOutcome.Processed>(result.Outcome);
+        Assert.Empty(
+            await _fixture.Provider.ListEpochCheckpointsAsync(pair.GroupId, new EpochId(0)));
     }
 
     // ---- The contract callers rely on ----

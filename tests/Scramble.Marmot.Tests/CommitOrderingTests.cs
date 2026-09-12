@@ -177,6 +177,59 @@ public class CommitOrderingTests
         Assert.Null(CommitOrdering.PriorityOf(host.Group, request));
     }
 
+    // ---- What a commit of ours remembers about itself ----
+
+    [Fact]
+    public async Task AStagedCommitOfOursCarriesItsOwnClass()
+    {
+        // Our own tip is the one branch nothing on the wire can classify for
+        // us: by the time convergence asks, the commit is applied and the cache
+        // is gone. So the answer has to be taken while it is still staged.
+        var (host, _, _, spareAccount) = await TrioAsync();
+
+        using StagedCommit staged = MarmotGroupInvite.Remove(host.Group, [spareAccount]);
+
+        Assert.Equal(CommitOrderingPriority.Privileged, staged.OrderingPriority);
+    }
+
+    [Fact]
+    public async Task ASelfUpdateOfOursIsOrdinary()
+    {
+        var (_, guest, _, _) = await TrioAsync();
+
+        using StagedCommit staged = MarmotSelfUpdate.Stage(guest);
+
+        Assert.Equal(CommitOrderingPriority.Ordinary, staged.OrderingPriority);
+    }
+
+    [Fact]
+    public async Task AStagedCommitKeepsTheClassAfterTheCacheThatGaveItIsGone()
+    {
+        // The reason it is computed eagerly rather than on demand. This commit
+        // cites its proposal by hash, and applying it clears the cache those
+        // hashes resolve against -- so a property that recomputed here would
+        // answer correctly right up until the moment anybody needs it, then
+        // fail closed to Privileged for the rest of the group's life. Which is
+        // the wrong answer loudly: it would rank our own routine departure
+        // commit above a real admin action in a race.
+        var (host, guest, _, _) = await TrioAsync();
+
+        PublicMessage request = MarmotGroupLeave.Request(guest);
+        GroupHandshake.Receive(host.Group, Serialize(request));
+
+        using StagedCommit? departure = MarmotGroupLeave.CommitDepartures(host.Group);
+        Assert.NotNull(departure);
+        Assert.Equal(CommitOrderingPriority.Ordinary, departure!.OrderingPriority);
+
+        departure.Publishing();
+        departure.Applied();
+
+        Assert.Equal(CommitOrderingPriority.Ordinary, departure.OrderingPriority);
+        Assert.Equal(
+            CommitOrderingPriority.Privileged,
+            CommitOrdering.PriorityOf(host.Group, departure.Commit));
+    }
+
     [Fact]
     public async Task TheClassReachesTheCandidateThatIsScored()
     {

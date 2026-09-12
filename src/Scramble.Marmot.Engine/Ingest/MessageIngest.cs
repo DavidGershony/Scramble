@@ -1,6 +1,8 @@
 using DotnetMls.Codec;
 using DotnetMls.Group;
 using DotnetMls.Types;
+using Scramble.Marmot.AppComponents;
+using Scramble.Marmot.Engine.Convergence;
 using Scramble.Marmot.Engine.Messages;
 using Scramble.Marmot.Ingest;
 using Scramble.Marmot.Storage;
@@ -51,7 +53,8 @@ public sealed record IngestResult(IngestOutcome Outcome, ReceivedGroupMessage? M
 public sealed class MessageIngest(
     IMarmotStorageProvider storage,
     EpochManager epochs,
-    Func<DateTimeOffset> clock)
+    Func<DateTimeOffset> clock,
+    EpochArchive? archive = null)
 {
     private readonly IMarmotStorageProvider _storage =
         storage ?? throw new ArgumentNullException(nameof(storage));
@@ -61,6 +64,18 @@ public sealed class MessageIngest(
 
     private readonly Func<DateTimeOffset> _clock =
         clock ?? throw new ArgumentNullException(nameof(clock));
+
+    /// <summary>
+    /// Where each epoch reached is kept, so a fork can be evaluated later.
+    /// </summary>
+    /// <remarks>
+    /// Optional because the engine is still additive and a caller that has no
+    /// interest in convergence should not be made to construct one. A caller
+    /// that omits it gets a group that ingests correctly and can never evaluate
+    /// a competing branch, which is the behaviour this class had before the
+    /// archive existed.
+    /// </remarks>
+    private readonly EpochArchive? _archive = archive;
 
     /// <summary>
     /// Ingests one peeled MLS message against a group.
@@ -145,7 +160,8 @@ public sealed class MessageIngest(
 
             WireFormat.MlsPublicMessage =>
                 await IngestHandshakeAsync(
-                    group, groupId, id, sourceEpoch, mlsBytes, transportId, ct),
+                    group, groupId, id, sourceEpoch, mlsBytes, (PublicMessage)message.Body,
+                    transportId, ct),
 
             // A Welcome arrives outside a group and is joined from, not ingested
             // into one. Reaching here means it was routed to the wrong door.
@@ -201,9 +217,17 @@ public sealed class MessageIngest(
         MessageId id,
         EpochId sourceEpoch,
         byte[] mlsBytes,
+        PublicMessage framed,
         string? transportId,
         CancellationToken ct)
     {
+        // Classified before it is applied, and that ordering is forced rather
+        // than tidy: the commit cites proposals by reference, and applying it
+        // clears the cache that says what those references were. Null here
+        // means the handshake is a proposal rather than a commit, which
+        // advances nothing and so archives nothing.
+        CommitOrderingPriority? priority = CommitOrdering.PriorityOf(group, framed);
+
         ReceivedHandshake handshake;
         try
         {
@@ -240,9 +264,17 @@ public sealed class MessageIngest(
 
         // A cached proposal has not changed group state, so the epoch is
         // unchanged and reporting Processed would overstate what happened.
-        return handshake.Outcome == HandshakeOutcome.ProposalCached
-            ? new IngestResult(new IngestOutcome.Buffered(groupId, new EpochId(group.Epoch)), null)
-            : new IngestResult(new IngestOutcome.Processed(groupId, new EpochId(group.Epoch)), null);
+        if (handshake.Outcome == HandshakeOutcome.ProposalCached)
+            return new IngestResult(new IngestOutcome.Buffered(groupId, new EpochId(group.Epoch)), null);
+
+        // The commit applied, so this epoch is now one a later fork may need to
+        // be rebuilt from. Archived after the apply because the state belonging
+        // to an epoch is the state its commit produced -- the other half of the
+        // pair read before it.
+        if (_archive is not null && priority is { } tipPriority)
+            await _archive.CaptureAsync(groupId, group, tipPriority, ct);
+
+        return new IngestResult(new IngestOutcome.Processed(groupId, new EpochId(group.Epoch)), null);
     }
 
     private static IngestResult Refuse(InputRejectionCategory category) =>

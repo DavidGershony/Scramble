@@ -2,6 +2,7 @@ using DotnetMls.Crypto;
 using DotnetMls.Group;
 using DotnetMls.Types;
 using Scramble.Marmot.AppComponents;
+using Scramble.Marmot.Engine.Convergence;
 using Scramble.Marmot.Engine.KeyPackages;
 using Scramble.Marmot.Identity;
 using MarmotDictionary = Scramble.Marmot.AppComponents.AppDataDictionary;
@@ -56,10 +57,32 @@ public sealed class StagedCommit : IDisposable
         Commit = commit;
         Welcome = welcome;
         AffectedAccounts = affectedAccounts;
+
+        // Read here and nowhere later. The class comes off the proposal cache
+        // the commit's references resolve against, and Applied() clears it --
+        // so a property that computed this on demand would answer correctly
+        // until the one moment anybody needs it, then answer Ordinary forever.
+        OrderingPriority = CommitOrdering.PriorityOf(group, commit)
+            ?? throw new InvalidOperationException(
+                "A staged commit did not frame a commit. This is a bug in the caller "
+                + "that built it, not something the wire can cause.");
     }
 
     /// <summary>The commit, framed as a PublicMessage.</summary>
     public PublicMessage Commit { get; }
+
+    /// <summary>
+    /// The ordering class of this commit, computed while it was still staged.
+    /// </summary>
+    /// <remarks>
+    /// Convergence ranks branches by the class of the commit that ends them,
+    /// and priority outranks both the committer and the digest — so a member
+    /// that cannot say what class its own tip was has deleted the rule rather
+    /// than being conservative about it. This is the only moment the answer
+    /// exists for a commit of ours: the caller archives it alongside the epoch
+    /// the commit produces.
+    /// </remarks>
+    public CommitOrderingPriority OrderingPriority { get; }
 
     /// <summary>
     /// The Welcome for the added members, or null when nobody was added.
