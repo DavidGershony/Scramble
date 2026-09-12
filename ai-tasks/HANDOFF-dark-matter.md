@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
-**Updated:** 2026-09-02 (seventeenth revision) · **Branch:** `feat/dark-matter`
-· **Last commit at time of writing:** `eccecdc`
+**Updated:** 2026-09-12 (eighteenth revision) · **Branch:** `feat/dark-matter`
+· **Last commit at time of writing:** `833728d`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -27,11 +27,12 @@ asked for interop testing now, so the newest is what matters). Latest verified:
 **`wn 0.9.20`**.
 
 Planning is finished. **P0, P1, P2, P3, P4, P6 and P7 are done.** **P8 is
-built but not wired**: policy, selector, audit trace, canonicalization
-pipeline, candidate materializer and commit ordering all exist and are tested,
-but nothing in the ingest path feeds them yet (§3y). Nothing is wired into the
-running app: the new engine is entirely additive and nothing depends on it, so
-it cannot break the shipping product. **P9–P12 have not started.**
+wired**: `ConvergencePass` reads the commits ingest could not apply, builds the
+branches they describe, and adopts the one the group agrees on (§3z). What
+remains of the drain is re-delivering messages a reorg makes readable. Nothing
+is wired into the running app: the new engine is entirely additive and nothing
+depends on it, so it cannot break the shipping product. **P9–P12 have not
+started.**
 
 ---
 
@@ -39,7 +40,7 @@ it cannot break the shipping product. **P9–P12 have not started.**
 
 Seven new projects, all standalone (no reference to `marmot-cs`), all in
 `Scramble.sln` and `Scramble.Desktop.slnf`, all running in the fast unit gate.
-As of 2026-09-11: **979 tests in `Scramble.Marmot.Tests`**, **18 in the live
+As of 2026-09-12: **1020 tests in `Scramble.Marmot.Tests`**, **18 in the live
 `DarkMatterInterop` suite with zero skips**
 (`tests/Scramble.Diagnostics/DarkMatterInterop/`), and **384 in `dotnet-mls`**.
 A skip in the interop suite is a failure, not a pass — `stage6-dark-matter.ps1`
@@ -47,8 +48,8 @@ enforces that, for the reason in §3t.
 
 | Project | Phase | Contains |
 |---|---|---|
-| `src/Scramble.Marmot.Abstractions` | P0/P1/P3 | Ids (`GroupId`, `EpochId`, `MessageId`, `MemberId`), storage contracts and records incl. `IKeyPackageStorage`, `EpochState`, `ITransportPeeler` + `PeeledMessage` |
-| `src/Scramble.Marmot.Storage.Sqlite` | P0/P3 | SQLite provider, migrations, transactions, epoch-anchored snapshots, KeyPackage bundles + private material |
+| `src/Scramble.Marmot.Abstractions` | P0/P1/P3/P8 | Ids (`GroupId`, `EpochId`, `MessageId`, `MemberId`), `CommitTip`, storage contracts and records incl. `IKeyPackageStorage`, `IEpochArchiveStorage`, `EpochState`, `ITransportPeeler` + `PeeledMessage`. Its one project reference, to the AppComponents leaf, is deliberate — see the csproj |
+| `src/Scramble.Marmot.Storage.Sqlite` | P0/P3/P8 | SQLite provider, migrations (through V006), transactions, epoch-anchored snapshots, the epoch archive of exported MLS state, KeyPackage bundles + private material |
 | `src/Scramble.Marmot.Engine` | P1/P6 | `EpochManager`; `KeyPackages/` — leaf shape, lifetime policy, builder, publisher, publication validator; `Groups/` — `required_capabilities` codec, component negotiation, group creation, add-members. **The only project referencing `dotnet-mls`.** |
 | `src/Scramble.Marmot.Identity` | P2 | `AccountIdentityProof` (`0x8009`), async signer seam |
 | `src/Scramble.Nostr.Crypto` | P2/P3 | BIP-340, NIP-01 event ids and envelope serialisation, NIP-44 v2, NIP-59 gift wrap, ChaCha20-Poly1305 envelope, secp256k1 |
@@ -65,13 +66,14 @@ The submodule sits exactly on the tag; keep it that way. Two interop peers
 
 ## 3. Do this next
 
-**Start at §3y** — it is the most recent section and it says what is built,
-what is only called by tests, and what has no phase. §3a–§3x are history in
-order; read backwards from §3y as far as you need.
+**Start at §3z** — it is the most recent section and it says what is built,
+what the wiring exposed, and what is left. §3a–§3y are history in order; read
+backwards from §3z as far as you need.
 
-**The one-line answer:** P0–P4, P6 and P7 are done; P8's pieces exist and are
-tested but nothing in the ingest path calls them. The next substantial piece is
-the convergence drain, which no phase currently owns (§3y, last subsection).
+**The one-line answer:** P0–P4 and P6–P8 are done. The next pieces are
+re-delivering messages a reorg makes readable, and archiving the epoch a group
+is created or joined at (§3z, last subsection) — both small, neither owned by a
+phase.
 
 ### 3a. The crypto review is DONE and actioned — nothing to do here
 
@@ -1724,6 +1726,99 @@ Both halves were mutated. Hardcoding the candidate's class fails
   belongs before starting — it is roughly M-sized and it touches `MessageIngest`,
   so I2 applies.
 
+### 3z. The convergence pass is wired — and the wiring found three guesses
+
+2026-09-12. **1020 Marmot tests**, fast gate green (1020 / 516 core / 253 UI).
+Seven commits, `25cfb87`..`833728d`.
+
+**P8's pieces have a caller now.** `ConvergencePass` reads the commits ingest
+filed as `Retryable`, builds the branches they describe, and either keeps the
+branch we hold or moves onto the one the group agrees on. The drain §3y asked
+for exists; what remains of it is named at the end of this section.
+
+#### What had to be built underneath
+
+The pass could not be written until four things it needs actually existed.
+
+1. **A message was filed under the wrong epoch** (`25cfb87`, a `fix:`). The
+   record's source epoch was *our* epoch when the bytes arrived, not the epoch
+   the sender framed them against. Those differ exactly when it matters: a
+   competing commit was built from the epoch we have already left, and that is
+   where its branch forks. Both wire formats carry it in the clear, so the decode
+   now runs ahead of the ingestibility gate — a message buffered mid-publish is
+   arriving precisely when a fork is being made.
+2. **Nothing retained past MLS state** (`a69b6be`, `0bc9bae`). `restore` had only
+   ever been satisfied by a test double. `epoch_archive` keeps the exported group
+   per epoch, bounded by the rewind horizon and no wider: retaining less narrows
+   the horizon for one member alone, and a member that cannot evaluate a branch
+   cannot agree about it either. Every `Restore` is a fresh import — two branches
+   forking from one epoch would otherwise replay onto the same instance.
+3. **Nothing recorded a tip at apply time** (`e642964`). Inbound commits archive
+   themselves in ingest, classified before the apply and captured after it.
+   `StagedCommit` computes its own class while still staged, eagerly: a commit
+   citing proposals by hash would otherwise answer correctly until the one
+   moment anybody asks, then fail closed to `Privileged` forever.
+4. **`Reorg` did not say what it applied**, so its caller could not bring the
+   records into line without a second copy of the rule that decides what
+   continues a branch. It returns `ReorgResult` now.
+
+#### Three guesses the wiring exposed
+
+**The live branch's committer and digest were invented** (`2bfa245`, a `fix:`).
+§3y gave that branch its ordering class and stopped there; `Materialize` still
+filled `TipCommitter` from `IdentityOfSelf(live)` and derived `TipDigest` from
+whatever string the caller passed as a branch id. Both are right only when our
+tip is our own commit — and in a pass it usually is not. Then every member
+scores that one branch as though they had made its last commit: three members,
+three answers, identical candidates, on the rule directly below priority.
+`Materialize` now takes a `CommitTip` — class, content id, committer — and the
+digest *is* the message id, both SHA-256 over the same MLS bytes, so what a
+member names and what it stores cannot drift apart. **This also fixes the
+interop race, which had been naming our branch after a hash of the Nostr
+envelope** — a value no peer could compute, on a rule they are meant to agree
+with us about.
+
+**A witness check spends the keys it reads with.** Proving a branch means trying
+to decrypt messages against it, and one of the groups handed to that check is
+the live group. Done in place it would consume ratchet keys real traffic needs,
+and the damage surfaces much later as history that cannot be read. Every attempt
+runs against a copy.
+
+**Invalidation cannot go by epoch alone.** At exactly the fork epoch an
+application message survives a reorg — it was sent under keys both branches
+share — while a commit does not, because it is a branch head and only one head
+survives. Same epoch, opposite fates. The sweep goes by epoch; the rest by kind.
+A test found this, not a review.
+
+#### One test was worth nothing until it was mutated
+
+`TheArchivedEpochRemembersTheClassOfTheCommitThatMadeIt` passed with the tip read
+*after* the apply as happily as before it. Its fixture used an Add commit, which
+carries its proposals inline and whose committer keeps its leaf — the case was
+insensitive to the ordering it existed to pin. Replaced with a departure commit,
+which cites its proposal by hash. **That is the fourth variant of this project's
+recurring failure** (§3t skips, §3v indistinguishable vectors, §3x a peer too old
+to disagree): a test that cannot fail. Every fix in these seven commits was
+mutation-checked; four of the pass's own properties were.
+
+#### What is left
+
+- **Re-delivery after a reorg is not built.** Adopting a branch makes messages
+  readable that were not readable before. Ingest deduplicates on content, so a
+  replay cannot go through the front door — it needs a retry path that
+  reconsiders records already in storage. The pass leaves them in a state that
+  says so; nothing acts on it yet. This is the rest of the "drain".
+- **Create and join do not archive their starting epoch.** Ingest archives every
+  epoch it applies, but a group's first epoch (no commit) and a joined epoch (a
+  commit we never held) are written by neither. A fork at exactly that epoch
+  reports `Blocked`, correctly but unhelpfully. The checkpoint's tip is nullable
+  for this reason; wiring create/join to capture is small and belongs with
+  whoever wires the engine into a session.
+- **Nothing calls `ConvergencePass` in the running app**, because nothing calls
+  the engine at all yet. It is P9+ that changes that.
+- **A vector that distinguishes a tie-break winner** — still not closable with
+  what upstream ships (§3v). Unchanged.
+
 ### 3d. Non-code items still open (not blocking)
 
 - **Open a PR for `feat/dark-matter`.** **104 commits** ahead of `master` and
@@ -1885,6 +1980,12 @@ without the interop suite running).
 | Hashing the struct-order payload JSON to get an app event id | The id is the NIP-01 *array* hash; the JSON is only the transport shape | Two different serialisations. Peers reject a mismatched id. |
 | Adding an interop test class without joining `DarkMatterInteropCollection` | xUnit runs classes in parallel against one shared peer and corrupts its SQLite | One collection for all of them. |
 | Creating a group without the Nostr routing component `0x8004` | A peer reads the transport group id and relays from it and nowhere else, so the group cannot be addressed; the reference client refuses it | Seed it at creation with a random 32-byte `nostr_group_id`. A green unit suite will not catch this. |
+| Filling the live branch's committer in from the live group | Right only when our tip is our own commit, which in a convergence pass it usually is not — every member then scores that branch as though they made its last commit | Describe the branch we hold with a `CommitTip` recorded at apply time. Class, committer and digest are one value because all three are readable at one moment and useless apart. |
+| Naming our own branch after a hash of its transport envelope | 64 hex characters, so it looks like a digest and round-trips — and no peer can compute it, on a tie-break they are meant to agree with us about | The branch digest is `MessageId.FromMlsBytes` of the commit. Digest and content id are the same hash of the same bytes, deliberately. |
+| Proving a branch against the group you were handed | Reading a message consumes ratchet keys, and one of those groups is the live one. The loss surfaces much later, as history that cannot be read | Import a copy first. A failed decryption then costs nothing either. |
+| Invalidating a reorg's losing history by epoch alone | At the fork epoch a message survives (both branches share its keys) and a commit does not (only one branch head survives) | Sweep by epoch above the fork, then invalidate commits *at* the fork by kind. |
+| Filing a message under the epoch you were at when it arrived | A competing commit was framed against the epoch you have left; recording yours describes every fork as starting wherever you happened to be | Both wire formats carry the epoch in the clear. Read it, and decode before the ingestibility gate so a buffered record gets it too. |
+| Testing a read-before-apply rule with an Add commit | Its proposals are inline and its committer keeps its leaf, so the case cannot tell the orderings apart — the test passes either way | Use a commit that cites a proposal by hash. A departure commit does. |
 | Reaching for `whitenoise-rs` or `wn-agent` as the interop peer | The first is archived and legacy-only; the second never subscribes, so it cannot receive an invite | Use `tests/mdk-cli-docker` — mdk's own CLI. |
 | Expecting `wn-agent` to fetch anything without a held subscription | Its relay connection sits at `sent: 0 events`; `subscribe_inbound` is streaming and the subscription dies with the connection | Hold it open, and keep the pipe's writer alive — `printf \| socat` half-closes at EOF. |
 | Polling `group_info` while holding a subscription | A held subscription starves the agent's small control pool and the query returns nothing at all | Read the stream while subscribed; query after releasing. |
