@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
 **Updated:** 2026-09-12 (eighteenth revision) · **Branch:** `feat/dark-matter`
-· **Last commit at time of writing:** `0fe6cbe`
+· **Last commit at time of writing:** `1ec6b07`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -40,7 +40,7 @@ started.**
 
 Seven new projects, all standalone (no reference to `marmot-cs`), all in
 `Scramble.sln` and `Scramble.Desktop.slnf`, all running in the fast unit gate.
-As of 2026-09-12: **1023 tests in `Scramble.Marmot.Tests`**, **18 in the live
+As of 2026-09-12: **1030 tests in `Scramble.Marmot.Tests`**, **18 in the live
 `DarkMatterInterop` suite with zero skips**
 (`tests/Scramble.Diagnostics/DarkMatterInterop/`), and **384 in `dotnet-mls`**.
 A skip in the interop suite is a failure, not a pass — `stage6-dark-matter.ps1`
@@ -1728,9 +1728,9 @@ Both halves were mutated. Hardcoding the candidate's class fails
 
 ### 3z. The convergence pass is wired — and the wiring found three guesses
 
-2026-09-12. **1023 Marmot tests**, fast gate green (1023 / 516 core / 253 UI),
+2026-09-12. **1030 Marmot tests**, fast gate green (1030 / 516 core / 253 UI),
 **18/18 interop at `wn 0.9.20` with zero skips** (image `mdk.commit 2f44f6b6`,
-checked rather than assumed — §3x). Nine commits, `25cfb87`..`0fe6cbe`.
+checked rather than assumed — §3x). Eleven commits, `25cfb87`..`1ec6b07`.
 
 **P8's pieces have a caller now.** `ConvergencePass` reads the commits ingest
 filed as `Retryable`, builds the branches they describe, and either keeps the
@@ -1825,13 +1825,37 @@ stale commit. The boundary has its own test, because retiring one epoch too
 eagerly discards a branch the policy calls adoptable and nothing would ever
 mention it again.
 
+#### Re-delivery is built, and it found the reorg throwing history away
+
+`1ec6b07`. `MessageIngest.ReplayAsync` is the other half of the drain: it
+re-runs the records held as `PeelDeferred` or `Created`, which is what
+`Buffered` and `TransportDeferred` have been promising all along. It cannot use
+the front door — ingest deduplicates on content, so every retry would be refused
+as a duplicate of itself — so the dispatch is shared and the replay skips only
+the two questions a stored record has already answered.
+
+**Bounded by the delivery window, not by a retry count.** A message stays
+readable for as many epochs back as the group keeps keys for
+(`AppMessagePastEpochLimit`, pinned to the MLS window). A count would be wrong
+in both directions at once: giving up on a message still perfectly deliverable,
+and retrying one whose keys are long gone.
+
+**The end-to-end test found a real bug in the reorg** — the one written three
+commits earlier in this same session. `InvalidateAfterEpochAsync` swept every
+record past the fork epoch, and the messages the adopted branch carried are
+exactly the ones sitting undelivered waiting for that branch. So the reorg threw
+away the history it was performed to gain, and the member ended up agreeing with
+everyone while showing an empty conversation. It now sweeps **only what was
+delivered**: a record still waiting to be read was never part of our history, so
+there is nothing about it to invalidate. That rule is pinned by its own storage
+test, and the end-to-end test fails without it too.
+
+**Who calls it** is still a composition question for P9: after a publish
+completes, and after a pass reports `Reorged` — `ReplayAsync(result.Group, …)`,
+with the group the pass handed back rather than the one that went in.
+
 #### What is left
 
-- **Re-delivery after a reorg is not built.** Adopting a branch makes messages
-  readable that were not readable before. Ingest deduplicates on content, so a
-  replay cannot go through the front door — it needs a retry path that
-  reconsiders records already in storage. The pass leaves them in a state that
-  says so; nothing acts on it yet. This is the rest of the "drain".
 - **Create and join do not archive their starting epoch.** Ingest archives every
   epoch it applies, but a group's first epoch (no commit) and a joined epoch (a
   commit we never held) are written by neither. A fork at exactly that epoch
@@ -2004,6 +2028,8 @@ without the interop suite running).
 | Hashing the struct-order payload JSON to get an app event id | The id is the NIP-01 *array* hash; the JSON is only the transport shape | Two different serialisations. Peers reject a mismatched id. |
 | Adding an interop test class without joining `DarkMatterInteropCollection` | xUnit runs classes in parallel against one shared peer and corrupts its SQLite | One collection for all of them. |
 | Creating a group without the Nostr routing component `0x8004` | A peer reads the transport group id and relays from it and nowhere else, so the group cannot be addressed; the reference client refuses it | Seed it at creation with a random 32-byte `nostr_group_id`. A green unit suite will not catch this. |
+| Invalidating a reorg's old history by epoch alone | It also sweeps the undelivered messages the adopted branch carried — the reorg discards the history it was performed to gain, and the member shows an empty conversation while agreeing with everyone | Invalidate only `Processed` records. Something never delivered was never our history, so there is nothing to invalidate. |
+| Replaying a held message through `IngestAsync` | The record being replayed is exactly what the dedup check finds, so every retry is refused as a duplicate of itself | Share the dispatch and skip dedup for a retry. The stored record has already answered it. |
 | Leaving a commit retryable when its fork epoch has aged out | It refuses `NoSnapshot` on every later pass, and a pass holding an unassessable branch cannot report itself settled — so one ancient commit stops the group converging for good | Retire it terminally on sight. The horizon only moves forward, so below-horizon is permanent; `NoSnapshot` is then reserved for a genuine hole in the archive. |
 | Filling the live branch's committer in from the live group | Right only when our tip is our own commit, which in a convergence pass it usually is not — every member then scores that branch as though they made its last commit | Describe the branch we hold with a `CommitTip` recorded at apply time. Class, committer and digest are one value because all three are readable at one moment and useless apart. |
 | Naming our own branch after a hash of its transport envelope | 64 hex characters, so it looks like a digest and round-trips — and no peer can compute it, on a tie-break they are meant to agree with us about | The branch digest is `MessageId.FromMlsBytes` of the commit. Digest and content id are the same hash of the same bytes, deliberately. |
