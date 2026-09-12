@@ -38,7 +38,7 @@ public class MessageIngestTests : IDisposable
     private const ulong Now = 1_760_000_000;
     private static readonly string[] Relays = ["wss://relay.example.com"];
 
-    private readonly DateTimeOffset _now = DateTimeOffset.UnixEpoch.AddSeconds(Now);
+    private DateTimeOffset _now = DateTimeOffset.UnixEpoch.AddSeconds(Now);
     private readonly EpochManager _epochs = new();
 
     public void Dispose() => _fixture.Dispose();
@@ -663,6 +663,166 @@ public class MessageIngestTests : IDisposable
         Assert.IsType<IngestOutcome.Processed>(result.Outcome);
         Assert.Empty(
             await _fixture.Provider.ListEpochCheckpointsAsync(pair.GroupId, new EpochId(0)));
+    }
+
+    // ---- Replaying what was held ----
+
+    [Fact]
+    public async Task AMessageBufferedMidPublishIsDeliveredOnceThePublishIsDone()
+    {
+        // Buffered is a promise of a later replay, and this is the only thing
+        // that keeps it. Nothing about the message changed -- what changed is
+        // that the group can take input again.
+        Pair pair = await PairAsync();
+        EpochArchive archive = NewArchive();
+        MessageIngest ingest = NewIngest(archive);
+
+        byte[] wire = AppMessage(pair, "mid-flight");
+
+        var epoch = new EpochId(pair.Bob.Epoch);
+        PendingStateRef pending = _epochs.NextPendingRef();
+        _epochs.BeginPending(
+            pair.GroupId, epoch, new EpochId(epoch.Value + 1),
+            new StagedCommitHandle([1, 2, 3]), pending, PendingKind.GroupEvolution);
+
+        Assert.IsType<IngestOutcome.Buffered>(
+            (await ingest.IngestAsync(pair.Bob, pair.GroupId, wire)).Outcome);
+
+        // While the publish is still in flight there is nothing to be done: the
+        // group cannot take input, which is why the message was held at all.
+        Assert.Empty((await ingest.ReplayAsync(pair.Bob, pair.GroupId)).Delivered);
+
+        _epochs.RollbackPublish(pending);
+
+        ReplayResult replayed = await ingest.ReplayAsync(pair.Bob, pair.GroupId);
+
+        ReceivedGroupMessage delivered = Assert.Single(replayed.Delivered);
+        Assert.Equal("mid-flight", delivered.Event.Content);
+
+        MessageRecord record =
+            (await _fixture.Provider.GetMessageAsync(MessageId.FromMlsBytes(wire)))!;
+
+        Assert.Equal(MessageRecordState.Processed, record.State);
+    }
+
+    [Fact]
+    public async Task AMessageAlreadyDeliveredIsNotDeliveredAgain()
+    {
+        // A replay that re-emitted delivered history would show every message
+        // twice, and the second copy would look exactly as real as the first.
+        Pair pair = await PairAsync();
+        EpochArchive archive = NewArchive();
+        MessageIngest ingest = NewIngest(archive);
+
+        await ingest.IngestAsync(pair.Bob, pair.GroupId, AppMessage(pair, "already read"));
+
+        ReplayResult replayed = await ingest.ReplayAsync(pair.Bob, pair.GroupId);
+
+        Assert.Empty(replayed.Delivered);
+        Assert.Equal(0, replayed.StillDeferred);
+    }
+
+    [Fact]
+    public async Task AMessageWeStillCannotReadStaysHeld()
+    {
+        // Not a failure and not a retirement. The commit that would make it
+        // readable may simply not have arrived yet.
+        Pair pair = await PairAsync();
+        EpochArchive archive = NewArchive();
+        MessageIngest ingest = NewIngest(archive);
+
+        var (_, _) = pair.Alice.Group.CommitPublic();
+        pair.Alice.Group.MergePendingCommit();
+        byte[] wire = AppMessage(pair, "from an epoch we cannot reach");
+
+        await ingest.IngestAsync(pair.Bob, pair.GroupId, wire);
+
+        ReplayResult replayed = await ingest.ReplayAsync(pair.Bob, pair.GroupId);
+
+        Assert.Empty(replayed.Delivered);
+        Assert.Equal(1, replayed.StillDeferred);
+        Assert.Empty(replayed.Retired);
+
+        Assert.Equal(
+            MessageRecordState.PeelDeferred,
+            (await _fixture.Provider.GetMessageAsync(MessageId.FromMlsBytes(wire)))!.State);
+    }
+
+    [Fact]
+    public async Task AMessageIsRetiredOnceItsEpochLeavesTheDeliveryWindow()
+    {
+        // Bounded by the window rather than by a count of tries, because the
+        // window is the thing that actually decides: past it the keys are gone
+        // and no number of retries helps, while inside it a message may still
+        // become readable on the very next commit.
+        Pair pair = await PairAsync();
+        EpochArchive archive = NewArchive();
+        MessageIngest ingest = NewIngest(archive);
+
+        // Alice moves on and speaks where we cannot follow.
+        var (first, _) = pair.Alice.Group.CommitPublic();
+        pair.Alice.Group.MergePendingCommit();
+        byte[] unreachable = AppMessage(pair, "long ago");
+
+        await ingest.IngestAsync(pair.Bob, pair.GroupId, unreachable);
+        Assert.Equal(1, (await ingest.ReplayAsync(pair.Bob, pair.GroupId)).StillDeferred);
+
+        // We catch up, and then keep going until her message is out of range.
+        byte[] Serialize(PublicMessage m) =>
+            TlsCodec.Serialize(new MlsMessage(WireFormat.MlsPublicMessage, m).WriteTo);
+
+        await ingest.IngestAsync(pair.Bob, pair.GroupId, Serialize(first));
+
+        for (ulong i = 0; i <= ConvergencePolicy.V1AppMessagePastEpochLimit; i++)
+        {
+            var (next, _) = pair.Alice.Group.CommitPublic();
+            pair.Alice.Group.MergePendingCommit();
+            await ingest.IngestAsync(pair.Bob, pair.GroupId, Serialize(next));
+        }
+
+        ReplayResult replayed = await ingest.ReplayAsync(pair.Bob, pair.GroupId);
+
+        Assert.Contains(MessageId.FromMlsBytes(unreachable), replayed.Retired);
+        Assert.Equal(
+            MessageRecordState.Failed,
+            (await _fixture.Provider.GetMessageAsync(MessageId.FromMlsBytes(unreachable)))!.State);
+    }
+
+    [Fact]
+    public async Task AReplayKeepsTheTimeTheMessageActuallyArrived()
+    {
+        // The handlers write a record from scratch, which is right for a first
+        // arrival and wrong for a retry: it would stamp a fresh arrival time
+        // onto bytes held for hours, and the replay orders by that time -- so
+        // replayed history would sort as though it had just been sent.
+        Pair pair = await PairAsync();
+        EpochArchive archive = NewArchive();
+        MessageIngest ingest = NewIngest(archive);
+
+        byte[] wire = AppMessage(pair, "held a while");
+
+        var epoch = new EpochId(pair.Bob.Epoch);
+        PendingStateRef pending = _epochs.NextPendingRef();
+        _epochs.BeginPending(
+            pair.GroupId, epoch, new EpochId(epoch.Value + 1),
+            new StagedCommitHandle([1]), pending, PendingKind.GroupEvolution);
+
+        await ingest.IngestAsync(pair.Bob, pair.GroupId, wire);
+
+        MessageRecord held =
+            (await _fixture.Provider.GetMessageAsync(MessageId.FromMlsBytes(wire)))!;
+
+        _epochs.RollbackPublish(pending);
+        _now = _now.AddHours(3);
+
+        await ingest.ReplayAsync(pair.Bob, pair.GroupId);
+
+        MessageRecord after =
+            (await _fixture.Provider.GetMessageAsync(MessageId.FromMlsBytes(wire)))!;
+
+        Assert.Equal(held.CreatedAt, after.CreatedAt);
+        Assert.Equal(held.Attempts + 1, after.Attempts);
+        Assert.NotEqual(held.CreatedAt, after.UpdatedAt);
     }
 
     // ---- The contract callers rely on ----

@@ -209,6 +209,36 @@ public class StorageRoundTripTests
     }
 
     [Fact]
+    public async Task InvalidateAfterEpochLeavesUndeliveredRecordsAlone()
+    {
+        // A record still waiting to be read was never part of our history, so
+        // there is nothing about it to invalidate. After a reorg this is not a
+        // nicety: the messages the adopted branch carried are exactly the ones
+        // sitting undelivered, waiting for that branch to arrive, so a sweep by
+        // epoch alone throws away the history the reorg was performed to gain.
+        using var fx = new StorageFixture();
+        var group = StorageFixture.NewGroupId();
+        await fx.Provider.PutGroupAsync(StorageFixture.Group(group));
+
+        var waiting = StorageFixture.NewMessageId("waiting");
+        var competing = StorageFixture.NewMessageId("competing");
+        await fx.Provider.PutMessageAsync(StorageFixture.Message(
+            group, waiting, epoch: 6, state: MessageRecordState.PeelDeferred));
+        await fx.Provider.PutMessageAsync(StorageFixture.Message(
+            group, competing, epoch: 6, state: MessageRecordState.Retryable));
+
+        await fx.Provider.InvalidateAfterEpochAsync(group, new EpochId(5));
+
+        Assert.Equal(
+            MessageRecordState.PeelDeferred,
+            (await fx.Provider.GetMessageAsync(waiting))!.State);
+
+        Assert.Equal(
+            MessageRecordState.Retryable,
+            (await fx.Provider.GetMessageAsync(competing))!.State);
+    }
+
+    [Fact]
     public async Task InvalidateAfterEpochRetainsRecordsRatherThanDeleting()
     {
         using var fx = new StorageFixture();

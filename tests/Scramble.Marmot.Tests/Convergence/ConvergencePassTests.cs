@@ -335,6 +335,51 @@ public class ConvergencePassTests : IDisposable
         Assert.NotNull(window.TipAt(tip));
     }
 
+    [Fact]
+    public async Task WhatTheAdoptedBranchSaidIsReadableAfterwards()
+    {
+        // The point of adopting a branch, end to end. Rewinding the MLS state is
+        // only half of it: the messages that branch carried were refused while we
+        // were on the other one, and a member who adopts a history without being
+        // able to read it has a group that agrees with everyone and shows an
+        // empty conversation.
+        EpochArchive archive = NewArchive();
+        Fork fork = await ForkAsync(archive);
+        MessageIngest ingest = NewIngest(archive);
+
+        byte[] carols = Commit(fork.Carol);
+        await ingest.IngestAsync(fork.Us, fork.GroupId, carols);
+
+        // Alice takes a different path and talks on it.
+        byte[] hersFirst = Commit(fork.Alice.Group);
+        byte[] hersSecond = Commit(fork.Alice.Group);
+        byte[] saidOnHerBranch = AppMessage(fork, "over here");
+
+        // Everything of hers reaches us, and none of it can be used yet: the
+        // commits do not apply and the message does not decrypt.
+        await ingest.IngestAsync(fork.Us, fork.GroupId, hersFirst);
+        await ingest.IngestAsync(fork.Us, fork.GroupId, hersSecond);
+
+        IngestResult held = await ingest.IngestAsync(fork.Us, fork.GroupId, saidOnHerBranch);
+        Assert.IsType<IngestOutcome.TransportDeferred>(held.Outcome);
+        Assert.Null(held.Message);
+
+        Quiesce();
+        ConvergencePassResult result = await NewPass(archive).RunAsync(fork.Us, fork.GroupId);
+        Assert.True(result.Reorged);
+
+        // Replayed against the group the pass handed back, not the one we came
+        // in with -- that instance is on a branch this member has abandoned.
+        ReplayResult replayed = await ingest.ReplayAsync(result.Group, fork.GroupId);
+
+        ReceivedGroupMessage delivered = Assert.Single(replayed.Delivered);
+        Assert.Equal("over here", delivered.Event.Content);
+
+        Assert.Equal(
+            fork.AliceSigner.AccountPublicKey.ToArray(),
+            delivered.SenderIdentity);
+    }
+
     // ---- When it declines to decide ----
 
     [Fact]

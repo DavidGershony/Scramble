@@ -187,11 +187,18 @@ public sealed partial class SqliteMarmotStorageProvider : IMarmotStorageProvider
     {
         // Retained, not deleted: a message that vanishes after a reorg still has
         // to be explainable to the user.
+        //
+        // Only what was delivered. A record still waiting to be read was never
+        // part of our history, so there is nothing about it to invalidate -- and
+        // sweeping it would be actively wrong after a reorg, because the
+        // messages the adopted branch carried are exactly the ones sitting
+        // undelivered, waiting for that branch to arrive.
         await using var cmd = Command($@"
             UPDATE {_tp}messages
                SET state = @invalidated, updated_at = @now
-             WHERE group_id = @group AND source_epoch > @epoch AND state <> @invalidated;");
+             WHERE group_id = @group AND source_epoch > @epoch AND state = @processed;");
         cmd.Parameters.AddWithValue("@invalidated", (int)MessageRecordState.EpochInvalidated);
+        cmd.Parameters.AddWithValue("@processed", (int)MessageRecordState.Processed);
         cmd.Parameters.AddWithValue("@now", Iso(DateTimeOffset.UtcNow));
         cmd.Parameters.AddWithValue("@group", groupId.Value);
         cmd.Parameters.AddWithValue("@epoch", (long)epoch.Value);

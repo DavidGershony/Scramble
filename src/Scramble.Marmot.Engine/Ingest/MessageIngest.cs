@@ -17,6 +17,24 @@ namespace Scramble.Marmot.Engine.Ingest;
 /// </param>
 public sealed record IngestResult(IngestOutcome Outcome, ReceivedGroupMessage? Message);
 
+/// <summary>What a replay pass delivered, and what it gave up on.</summary>
+/// <param name="Delivered">
+/// Messages readable now that were not before, oldest epoch first. These have
+/// not been shown to anyone yet — the caller owes them to the user.
+/// </param>
+/// <param name="StillDeferred">
+/// How many are still waiting. Not a failure: the commit that would make them
+/// readable may simply not have arrived.
+/// </param>
+/// <param name="Retired">
+/// Messages given up on, because the epoch they were sent in has fallen out of
+/// the delivery window and the keys are gone.
+/// </param>
+public sealed record ReplayResult(
+    IReadOnlyList<ReceivedGroupMessage> Delivered,
+    int StillDeferred,
+    IReadOnlyList<MessageId> Retired);
+
 /// <summary>
 /// The single door every inbound MLS message comes through.
 /// </summary>
@@ -44,10 +62,14 @@ public sealed record IngestResult(IngestOutcome Outcome, ReceivedGroupMessage? M
 /// mistake the previous engine made.
 /// </para>
 /// <para>
-/// Convergence is stubbed here, as the phase plan intends. A message that
-/// cannot be applied because the group is mid-transition comes back
-/// <see cref="IngestOutcome.Buffered"/>, and <b>the caller owes it a replay</b>
-/// — that outcome is a promise, and nothing here can keep it.
+/// <b>A held message is a promise, and <see cref="ReplayAsync"/> is how it is
+/// kept.</b> A message that cannot be applied because the group is
+/// mid-transition comes back <see cref="IngestOutcome.Buffered"/>, and one that
+/// cannot be decrypted comes back
+/// <see cref="IngestOutcome.TransportDeferred"/>. Nothing on this path can
+/// resolve either — what has to change is outside it — so the caller runs a
+/// replay once something has: a publish finishing, or a convergence pass
+/// adopting a branch.
 /// </para>
 /// </remarks>
 public sealed class MessageIngest(
@@ -64,6 +86,18 @@ public sealed class MessageIngest(
 
     private readonly Func<DateTimeOffset> _clock =
         clock ?? throw new ArgumentNullException(nameof(clock));
+
+    /// <summary>
+    /// The pinned convergence policy, for the delivery window alone.
+    /// </summary>
+    /// <remarks>
+    /// Ingest does not converge, but it does have to know how far back a
+    /// message stays readable — and that number is the same one convergence
+    /// pins to the group's MLS window. Reading it from anywhere else would let
+    /// the two drift, and the drift would show as messages retired while the
+    /// group could still have read them.
+    /// </remarks>
+    private readonly ConvergencePolicy _policy = ConvergencePolicy.V1;
 
     /// <summary>
     /// Where each epoch reached is kept, so a fork can be evaluated later.
@@ -152,7 +186,180 @@ public sealed class MessageIngest(
                 new IngestOutcome.Buffered(groupId, new EpochId(group.Epoch)), null);
         }
 
-        return message.WireFormat switch
+        return await DispatchAsync(
+            group, groupId, id, sourceEpoch, mlsBytes, message, transportId, ct);
+    }
+
+    /// <summary>
+    /// Re-runs the messages that were held rather than delivered.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The promise <see cref="IngestOutcome.Buffered"/> and
+    /// <see cref="IngestOutcome.TransportDeferred"/> make.</b> Both say the
+    /// bytes were kept and will be tried again, and nothing in ingest can keep
+    /// that on its own — a message is held because the group could not read it
+    /// yet, so something outside has to change first. Two things do: a publish
+    /// finishing, which lets a group ingest again, and a convergence pass
+    /// adopting a branch, which makes readable what the branch we left could
+    /// not decrypt. Call this after either.
+    /// </para>
+    /// <para>
+    /// <b>It cannot go through the front door.</b> Ingest deduplicates on
+    /// content, and the record being replayed is exactly what that check finds
+    /// — so every retry would be refused as a duplicate of itself. This takes
+    /// the same path from the decode onwards and skips only the two questions a
+    /// stored record has already answered.
+    /// </para>
+    /// <para>
+    /// <b>Bounded by the delivery window, not by a count of attempts.</b> An
+    /// application message stays readable for as many epochs back as the group
+    /// keeps keys for, and past that no number of retries helps. A retry budget
+    /// would be wrong in both directions at once: it would give up on a message
+    /// still perfectly deliverable, and keep retrying one whose keys are already
+    /// gone. Attempts are counted all the same — how often we tried is worth
+    /// seeing — they are just not what decides.
+    /// </para>
+    /// </remarks>
+    /// <param name="group">The group as it stands, after whatever changed.</param>
+    /// <param name="groupId">Its Marmot group id.</param>
+    public async Task<ReplayResult> ReplayAsync(
+        MlsGroup group, GroupId groupId, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+
+        if (!_epochs.CanIngest(groupId))
+            return new ReplayResult([], 0, []);
+
+        if (await _storage.GetGroupAsync(groupId, ct) is not { Removed: false })
+            return new ReplayResult([], 0, []);
+
+        // Oldest epoch first, and within an epoch the order they arrived in.
+        // That is the best order available: where a message sits within its
+        // epoch is inside the ciphertext, so until it is read there is nothing
+        // else to sort on.
+        var held = (await _storage.ListMessagesByStateAsync(
+                groupId, MessageRecordState.PeelDeferred, ct))
+            .Concat(await _storage.ListMessagesByStateAsync(
+                groupId, MessageRecordState.Created, ct))
+            .OrderBy(r => r.SourceEpoch.Value)
+            .ThenBy(r => r.CreatedAt)
+            .ToList();
+
+        var delivered = new List<ReceivedGroupMessage>();
+        var retired = new List<MessageId>();
+        int stillDeferred = 0;
+
+        foreach (MessageRecord record in held)
+        {
+            if (record.State == MessageRecordState.PeelDeferred
+                && BeyondDeliveryWindow(group, record.SourceEpoch))
+            {
+                await RetireAsync(record, ct);
+                retired.Add(record.Id);
+                continue;
+            }
+
+            MlsMessage message;
+            try
+            {
+                message = MlsMessage.ReadFrom(new TlsReader(record.Wire));
+            }
+            catch (Exception ex) when (ex is TlsDecodingException or ArgumentException)
+            {
+                // The buffered path keeps bytes without reading them, so this is
+                // the first chance anything has had to notice. Terminal either
+                // way: undecodable bytes do not become decodable.
+                await PersistAsync(record.Id, groupId, record.SourceEpoch, record.Wire,
+                    record.TransportId, MessageRecordState.Failed,
+                    $"undecodable: {ex.Message}", ct);
+
+                retired.Add(record.Id);
+                continue;
+            }
+
+            IngestResult result = await DispatchAsync(
+                group, groupId, record.Id, record.SourceEpoch, record.Wire, message,
+                record.TransportId, ct);
+
+            await PreserveAsync(record, ct);
+
+            if (result.Message is { } readable)
+                delivered.Add(readable);
+
+            if (result.Outcome is IngestOutcome.Buffered or IngestOutcome.TransportDeferred)
+                stillDeferred++;
+        }
+
+        return new ReplayResult(delivered, stillDeferred, retired);
+    }
+
+    /// <summary>
+    /// Whether a message was sent too long ago for the group to still read it.
+    /// </summary>
+    /// <remarks>
+    /// The window is the convergence policy's, which
+    /// <see cref="ConvergencePolicy.RequireWindowMatches"/> pins to the MLS one
+    /// the group is actually running with. The two must agree, or this asks a
+    /// question the group answers differently.
+    /// </remarks>
+    private bool BeyondDeliveryWindow(MlsGroup group, EpochId sourceEpoch) =>
+        group.Epoch > sourceEpoch.Value
+        && group.Epoch - sourceEpoch.Value > _policy.AppMessagePastEpochLimit;
+
+    /// <summary>Gives up on a message whose keys the group no longer holds.</summary>
+    private async Task RetireAsync(MessageRecord record, CancellationToken ct) =>
+        await _storage.PutMessageAsync(
+            record with
+            {
+                State = MessageRecordState.Failed,
+                UpdatedAt = _clock(),
+                Reason = $"sent at epoch {record.SourceEpoch.Value}, beyond the "
+                    + $"{_policy.AppMessagePastEpochLimit}-epoch delivery window",
+            },
+            ct);
+
+    /// <summary>
+    /// Keeps what the stored record knew that reprocessing does not.
+    /// </summary>
+    /// <remarks>
+    /// The handlers write a record from scratch, which is right for a message
+    /// arriving for the first time and wrong for one being retried: it would
+    /// stamp a fresh arrival time onto bytes that have been held for hours, and
+    /// the replay orders by that time. The attempt count is carried forward
+    /// here too — it decides nothing, but how often a message has been tried is
+    /// worth being able to see.
+    /// </remarks>
+    private async Task PreserveAsync(MessageRecord before, CancellationToken ct)
+    {
+        if (await _storage.GetMessageAsync(before.Id, ct) is not { } after)
+            return;
+
+        await _storage.PutMessageAsync(
+            after with { CreatedAt = before.CreatedAt, Attempts = before.Attempts + 1 }, ct);
+    }
+
+    /// <summary>
+    /// Processes a decoded message according to what it is.
+    /// </summary>
+    /// <remarks>
+    /// Shared by the front door and by <see cref="ReplayAsync"/>, so a replayed
+    /// message is put through exactly the same handling as a fresh one. The
+    /// checks that are <i>not</i> here are the point: deduplication, and whether
+    /// the group is known. A replay has already answered both — the record it is
+    /// replaying is the proof — and re-asking would refuse every message it was
+    /// asked to retry, as a duplicate of itself.
+    /// </remarks>
+    private async Task<IngestResult> DispatchAsync(
+        MlsGroup group,
+        GroupId groupId,
+        MessageId id,
+        EpochId sourceEpoch,
+        byte[] mlsBytes,
+        MlsMessage message,
+        string? transportId,
+        CancellationToken ct) =>
+        message.WireFormat switch
         {
             WireFormat.MlsPrivateMessage =>
                 await IngestApplicationAsync(
@@ -167,7 +374,6 @@ public sealed class MessageIngest(
             // into one. Reaching here means it was routed to the wrong door.
             _ => Refuse(InputRejectionCategory.WrongRecipient),
         };
-    }
 
     private async Task<IngestResult> IngestApplicationAsync(
         MlsGroup group,
