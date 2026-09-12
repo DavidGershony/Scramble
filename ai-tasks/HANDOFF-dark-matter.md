@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
 **Updated:** 2026-09-12 (eighteenth revision) · **Branch:** `feat/dark-matter`
-· **Last commit at time of writing:** `1ec6b07`
+· **Last commit at time of writing:** `7021d84`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -40,7 +40,7 @@ started.**
 
 Seven new projects, all standalone (no reference to `marmot-cs`), all in
 `Scramble.sln` and `Scramble.Desktop.slnf`, all running in the fast unit gate.
-As of 2026-09-12: **1030 tests in `Scramble.Marmot.Tests`**, **18 in the live
+As of 2026-09-12: **1032 tests in `Scramble.Marmot.Tests`**, **18 in the live
 `DarkMatterInterop` suite with zero skips**
 (`tests/Scramble.Diagnostics/DarkMatterInterop/`), and **384 in `dotnet-mls`**.
 A skip in the interop suite is a failure, not a pass — `stage6-dark-matter.ps1`
@@ -1728,9 +1728,9 @@ Both halves were mutated. Hardcoding the candidate's class fails
 
 ### 3z. The convergence pass is wired — and the wiring found three guesses
 
-2026-09-12. **1030 Marmot tests**, fast gate green (1030 / 516 core / 253 UI),
+2026-09-12. **1032 Marmot tests**, fast gate green (1032 / 516 core / 253 UI),
 **18/18 interop at `wn 0.9.20` with zero skips** (image `mdk.commit 2f44f6b6`,
-checked rather than assumed — §3x). Eleven commits, `25cfb87`..`1ec6b07`.
+checked rather than assumed — §3x). Twelve commits, `25cfb87`..`7021d84`.
 
 **P8's pieces have a caller now.** `ConvergencePass` reads the commits ingest
 filed as `Retryable`, builds the branches they describe, and either keeps the
@@ -1854,16 +1854,38 @@ test, and the end-to-end test fails without it too.
 completes, and after a pass reports `Reorged` — `ReplayAsync(result.Group, …)`,
 with the group the pass handed back rather than the one that went in.
 
+#### The starting epoch archives itself now
+
+`7021d84`. This was written up as "wire create and join to capture", and that
+was the wrong shape — two reminders at call sites that do not exist yet. The
+rule underneath is **an epoch we leave must be restorable**, and the first epoch
+a group is held at is simply the one case that is not arrived at through an
+apply. So `CaptureIfAbsentAsync` runs before a commit is applied, which is the
+only moment an epoch is left, and in practice fires exactly once per group.
+
+The tip is null there and stays null: no commit of ours produced that epoch. The
+state is what a branch forks from; the absent tip is what still stops our own
+branch competing on invented terms from an epoch we cannot describe. It writes
+only when nothing is there — an epoch already archived carries the account of
+the commit that produced it, and a null tip over the top would destroy the only
+such account quietly, since the state beside it stays perfectly restorable.
+
+The convergence fixture no longer archives the shared epoch by hand; it had been
+standing in for a caller that does not exist. Removing the new call now fails
+**seven** pass tests, which is what that fixture line was hiding.
+
 #### What is left
 
-- **Create and join do not archive their starting epoch.** Ingest archives every
-  epoch it applies, but a group's first epoch (no commit) and a joined epoch (a
-  commit we never held) are written by neither. A fork at exactly that epoch
-  reports `Blocked`, correctly but unhelpfully. The checkpoint's tip is nullable
-  for this reason; wiring create/join to capture is small and belongs with
-  whoever wires the engine into a session.
-- **Nothing calls `ConvergencePass` in the running app**, because nothing calls
-  the engine at all yet. It is P9+ that changes that.
+- **Nothing calls `ConvergencePass` or `ReplayAsync` in the running app**,
+  because nothing calls the engine at all yet. It is P9+ that changes that. The
+  two obligations for whoever does: run a pass when commits are outstanding, and
+  replay after a publish completes or a pass reports `Reorged` — passing
+  `result.Group`, not the group that went in.
+- **Our own applied commits must still be archived by their caller.** Ingest
+  archives what it applies; `StagedCommit.Applied()` is not ingest and has no
+  storage. The caller that publishes has `OrderingPriority` and the wire bytes
+  to hand, so it can build the `CommitTip` — see `SelfUpdateAsync` in
+  `ConvergencePassTests` for the shape.
 - **A vector that distinguishes a tie-break winner** — still not closable with
   what upstream ships (§3v). Unchanged.
 
