@@ -202,6 +202,53 @@ public class EpochArchiveTests : IDisposable
         Assert.Equal(Tip(CommitOrderingPriority.Privileged).Committer, tip.Committer);
     }
 
+    [Fact]
+    public async Task TheEpochAGroupStartsAtIsArchivedIfNothingElseHas()
+    {
+        // A group is first held at an epoch it did not apply its way into --
+        // epoch zero of one we created, or the epoch of a Welcome we joined
+        // from. Nothing archives those, and a competing commit framed at either
+        // would find nothing to rebuild from.
+        Pair pair = await PairAsync();
+        EpochArchive archive = NewArchive();
+
+        await archive.CaptureIfAbsentAsync(pair.GroupId, pair.Bob);
+
+        EpochWindow window = await archive.LoadWindowAsync(
+            pair.GroupId, new EpochId(pair.Bob.Epoch));
+
+        Assert.NotNull(window.Restore(new EpochId(pair.Bob.Epoch)));
+
+        // With no tip, and that is the truth rather than a shortfall: no commit
+        // of ours produced this epoch. The state is what a branch forks from;
+        // the missing tip is what stops our own branch competing on invented
+        // terms from here.
+        Assert.Null(window.TipAt(new EpochId(pair.Bob.Epoch)));
+    }
+
+    [Fact]
+    public async Task AnEpochAlreadyDescribedIsLeftAsItIs()
+    {
+        // The description can only be taken as the commit is applied, so
+        // overwriting it with a null tip throws away the one account of this
+        // epoch that will ever exist -- and quietly, since the state alongside
+        // it would still be perfectly restorable.
+        Pair pair = await PairAsync();
+        EpochArchive archive = NewArchive();
+
+        await archive.CaptureAsync(
+            pair.GroupId, pair.Bob, Tip(CommitOrderingPriority.Privileged));
+
+        await archive.CaptureIfAbsentAsync(pair.GroupId, pair.Bob);
+
+        EpochWindow window = await archive.LoadWindowAsync(
+            pair.GroupId, new EpochId(pair.Bob.Epoch));
+
+        Assert.Equal(
+            CommitOrderingPriority.Privileged,
+            window.TipAt(new EpochId(pair.Bob.Epoch))!.Priority);
+    }
+
     // ---- The window ----
 
     [Fact]

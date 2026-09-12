@@ -82,15 +82,16 @@ public class ConvergencePassTests : IDisposable
     /// Three members at a shared epoch, with that epoch archived.
     /// </summary>
     /// <remarks>
-    /// Us, plus two who can each commit from the same epoch. The shared epoch is
-    /// archived with a null tip because that is what it truly is — reached
-    /// through a Welcome, produced by a commit we never held. It has to be
-    /// restorable all the same, since it is where every branch below forks.
+    /// Us, plus two who can each commit from the same epoch. <b>Nothing archives
+    /// the shared epoch here</b>, deliberately: it was reached through a Welcome,
+    /// which is not an apply, so in a real client nothing would have. Every
+    /// branch below forks from it all the same, and the engine has to arrange
+    /// that itself.
     /// </remarks>
     private sealed record Fork(
         LocalSigner AliceSigner, CreatedGroup Alice, MlsGroup Carol, MlsGroup Us, GroupId GroupId);
 
-    private async Task<Fork> ForkAsync(EpochArchive archive)
+    private async Task<Fork> ForkAsync(EpochArchive _)
     {
         var aliceSigner = new LocalSigner();
 
@@ -117,8 +118,6 @@ public class ConvergencePassTests : IDisposable
         var groupId = new GroupId(alice.GroupId);
         await _fixture.Provider.PutGroupAsync(alice.ToRecord(_now));
         _epochs.SetStable(groupId, new EpochId(us.Epoch));
-
-        await archive.CaptureAsync(groupId, us, tip: null);
 
         return new Fork(aliceSigner, alice, carol, us, groupId);
     }

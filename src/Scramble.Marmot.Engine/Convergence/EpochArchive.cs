@@ -150,6 +150,41 @@ public sealed class EpochArchive(
     }
 
     /// <summary>
+    /// Archives the epoch the group stands on, if nothing has yet.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Called before leaving an epoch, because every epoch left behind is a
+    /// place a fork can start.</b> Arriving somewhere archives it, so the only
+    /// epoch that can go unrecorded is the first one a group is held at — epoch
+    /// zero of a group we created, or the epoch of a Welcome we joined from.
+    /// Neither arrives through an apply, and a competing commit framed at either
+    /// would find nothing to rebuild from.
+    /// </para>
+    /// <para>
+    /// <b>The tip is null, and that is the truth rather than a shortfall.</b> No
+    /// commit of ours produced this epoch: the group began here, or somebody
+    /// else's commit admitted us and we never held it. Recording the state
+    /// without a tip is what lets a later branch fork from this epoch while
+    /// still refusing to let our own branch compete on invented terms.
+    /// </para>
+    /// <para>
+    /// <b>Only when absent.</b> An epoch already archived was archived by
+    /// whoever applied the commit that produced it, together with what that
+    /// commit was — and overwriting that with a null tip would throw away the
+    /// one description of it that exists.
+    /// </para>
+    /// </remarks>
+    public async Task CaptureIfAbsentAsync(
+        GroupId groupId, MlsGroup group, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+
+        if (await _storage.GetEpochCheckpointAsync(groupId, new EpochId(group.Epoch), ct) is null)
+            await CaptureAsync(groupId, group, tip: null, ct);
+    }
+
+    /// <summary>
     /// Reads the retained window for a convergence pass.
     /// </summary>
     public async Task<EpochWindow> LoadWindowAsync(

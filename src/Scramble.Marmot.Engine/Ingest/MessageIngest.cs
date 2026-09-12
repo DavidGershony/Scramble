@@ -436,6 +436,14 @@ public sealed class MessageIngest(
         // nothing.
         CommitTip? tip = TipOf(group, framed, id);
 
+        // Where we stand now may be where a competing commit forks from, and
+        // once this one applies there is no way back to it. Gated on this being
+        // a commit, because only a commit leaves an epoch -- and arriving at one
+        // archives it, so in practice this fires only for the first epoch a
+        // group is ever held at, which is arrived at through neither.
+        if (_archive is not null && tip is not null)
+            await _archive.CaptureIfAbsentAsync(groupId, group, ct);
+
         ReceivedHandshake handshake;
         try
         {
