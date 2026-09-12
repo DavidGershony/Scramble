@@ -221,12 +221,14 @@ public sealed class MessageIngest(
         string? transportId,
         CancellationToken ct)
     {
-        // Classified before it is applied, and that ordering is forced rather
-        // than tidy: the commit cites proposals by reference, and applying it
-        // clears the cache that says what those references were. Null here
-        // means the handshake is a proposal rather than a commit, which
-        // advances nothing and so archives nothing.
-        CommitOrderingPriority? priority = CommitOrdering.PriorityOf(group, framed);
+        // Everything convergence will later need to say about this commit,
+        // taken before it is applied. That ordering is forced rather than tidy:
+        // the commit cites proposals by reference and applying it clears the
+        // cache that says what those were, and the sender is a leaf index into
+        // a tree the commit is about to move. Null means the handshake is a
+        // proposal rather than a commit, which advances nothing and so archives
+        // nothing.
+        CommitTip? tip = TipOf(group, framed, id);
 
         ReceivedHandshake handshake;
         try
@@ -271,14 +273,47 @@ public sealed class MessageIngest(
         // be rebuilt from. Archived after the apply because the state belonging
         // to an epoch is the state its commit produced -- the other half of the
         // pair read before it.
-        if (_archive is not null && priority is { } tipPriority)
-            await _archive.CaptureAsync(groupId, group, tipPriority, ct);
+        if (_archive is not null && tip is not null)
+            await _archive.CaptureAsync(groupId, group, tip, ct);
 
         return new IngestResult(new IngestOutcome.Processed(groupId, new EpochId(group.Epoch)), null);
     }
 
     private static IngestResult Refuse(InputRejectionCategory category) =>
         new(new IngestOutcome.Ignored(category), null);
+
+    /// <summary>
+    /// What branch selection will need to say about a commit, read while it can
+    /// still be read.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Null for a handshake that is not a commit, and also for one whose sender
+    /// leaf we cannot resolve. The second is fail-closed rather than tidy: such
+    /// a commit will not apply, so nothing is lost, and inventing a committer
+    /// for it would put a value into a group-wide comparison that no other
+    /// member could have computed.
+    /// </para>
+    /// <para>
+    /// The commit's digest is its content id — the same SHA-256 over the same
+    /// MLS bytes — so the branch this tip names and the record stored beside it
+    /// cannot drift apart.
+    /// </para>
+    /// </remarks>
+    private static CommitTip? TipOf(MlsGroup group, PublicMessage framed, MessageId id)
+    {
+        CommitOrderingPriority? priority = CommitOrdering.PriorityOf(group, framed);
+        if (priority is null)
+            return null;
+
+        byte[]? committer = group
+            .GetMembers()
+            .Where(m => m.leafIndex == framed.Content.Sender.LeafIndex)
+            .Select(m => m.identity)
+            .FirstOrDefault();
+
+        return committer is null ? null : new CommitTip(priority.Value, id, committer);
+    }
 
     /// <summary>
     /// The epoch a message was produced in, read off its own wire.

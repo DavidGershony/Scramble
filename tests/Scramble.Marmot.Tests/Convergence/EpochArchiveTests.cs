@@ -75,6 +75,13 @@ public class EpochArchiveTests : IDisposable
         return new Pair(alice, bob, new GroupId(alice.GroupId));
     }
 
+    private static CommitTip Tip(
+        CommitOrderingPriority priority = CommitOrderingPriority.Ordinary,
+        byte fill = 0x42) =>
+        new(priority,
+            new MessageId(Enumerable.Repeat(fill, 32).ToArray()),
+            Enumerable.Repeat((byte)0x88, 32).ToArray());
+
     private static byte[] Wire(PublicMessage commit) =>
         TlsCodec.Serialize(new MlsMessage(WireFormat.MlsPublicMessage, commit).WriteTo);
 
@@ -86,7 +93,7 @@ public class EpochArchiveTests : IDisposable
         Pair pair = await PairAsync();
         EpochArchive archive = NewArchive();
 
-        await archive.CaptureAsync(pair.GroupId, pair.Bob, CommitOrderingPriority.Ordinary);
+        await archive.CaptureAsync(pair.GroupId, pair.Bob, Tip());
 
         EpochWindow window = await archive.LoadWindowAsync(
             pair.GroupId, new EpochId(pair.Bob.Epoch));
@@ -109,7 +116,7 @@ public class EpochArchiveTests : IDisposable
         EpochArchive archive = NewArchive();
 
         ulong forkEpoch = pair.Bob.Epoch;
-        await archive.CaptureAsync(pair.GroupId, pair.Bob, CommitOrderingPriority.Ordinary);
+        await archive.CaptureAsync(pair.GroupId, pair.Bob, Tip());
 
         var (hers, _) = pair.Alice.Group.CommitPublic();
         pair.Alice.Group.MergePendingCommit();
@@ -140,7 +147,7 @@ public class EpochArchiveTests : IDisposable
         EpochArchive archive = NewArchive();
 
         ulong forkEpoch = pair.Bob.Epoch;
-        await archive.CaptureAsync(pair.GroupId, pair.Bob, CommitOrderingPriority.Ordinary);
+        await archive.CaptureAsync(pair.GroupId, pair.Bob, Tip());
 
         var (hers, _) = pair.Alice.Group.CommitPublic();
         pair.Alice.Group.MergePendingCommit();
@@ -163,32 +170,36 @@ public class EpochArchiveTests : IDisposable
         Pair pair = await PairAsync();
         EpochArchive archive = NewArchive();
 
-        await archive.CaptureAsync(pair.GroupId, pair.Bob, CommitOrderingPriority.Ordinary);
+        await archive.CaptureAsync(pair.GroupId, pair.Bob, Tip());
 
         EpochWindow window = await archive.LoadWindowAsync(
             pair.GroupId, new EpochId(pair.Bob.Epoch));
 
         Assert.Null(window.Restore(new EpochId(pair.Bob.Epoch + 1)));
-        Assert.Null(window.TipPriorityAt(new EpochId(pair.Bob.Epoch + 1)));
+        Assert.Null(window.TipAt(new EpochId(pair.Bob.Epoch + 1)));
     }
 
     [Fact]
-    public async Task TheClassOfTheCommitThatMadeAnEpochIsKeptWithIt()
+    public async Task TheCommitThatMadeAnEpochIsKeptWithIt()
     {
-        // The live branch's tip class cannot be recomputed later -- applying the
-        // commit cleared the cache its proposal references resolve against -- so
-        // if it is not remembered here it is not available at all.
+        // None of the three can be recomputed later: applying the commit cleared
+        // the cache its proposal references resolve against, and moved the tree
+        // its committer was a leaf index into. If they are not remembered here
+        // they are not available at all.
         Pair pair = await PairAsync();
         EpochArchive archive = NewArchive();
 
-        await archive.CaptureAsync(pair.GroupId, pair.Bob, CommitOrderingPriority.Privileged);
+        await archive.CaptureAsync(pair.GroupId, pair.Bob, Tip(CommitOrderingPriority.Privileged));
 
         EpochWindow window = await archive.LoadWindowAsync(
             pair.GroupId, new EpochId(pair.Bob.Epoch));
 
-        Assert.Equal(
-            CommitOrderingPriority.Privileged,
-            window.TipPriorityAt(new EpochId(pair.Bob.Epoch)));
+        CommitTip? tip = window.TipAt(new EpochId(pair.Bob.Epoch));
+
+        Assert.NotNull(tip);
+        Assert.Equal(CommitOrderingPriority.Privileged, tip.Priority);
+        Assert.Equal(Tip(CommitOrderingPriority.Privileged).Commit, tip.Commit);
+        Assert.Equal(Tip(CommitOrderingPriority.Privileged).Committer, tip.Committer);
     }
 
     // ---- The window ----
@@ -234,7 +245,7 @@ public class EpochArchiveTests : IDisposable
         Pair pair = await PairAsync();
         EpochArchive archive = NewArchive();
 
-        await archive.CaptureAsync(pair.GroupId, pair.Bob, CommitOrderingPriority.Ordinary);
+        await archive.CaptureAsync(pair.GroupId, pair.Bob, Tip());
 
         for (int i = 0; i < 8; i++)
         {
@@ -244,7 +255,7 @@ public class EpochArchiveTests : IDisposable
             var message = MlsMessage.ReadFrom(new TlsReader(Wire(commit)));
             pair.Bob.ProcessCommit((PublicMessage)message.Body);
 
-            await archive.CaptureAsync(pair.GroupId, pair.Bob, CommitOrderingPriority.Ordinary);
+            await archive.CaptureAsync(pair.GroupId, pair.Bob, Tip());
         }
 
         var tip = new EpochId(pair.Bob.Epoch);

@@ -1,6 +1,5 @@
 using DotnetMls.Crypto;
 using DotnetMls.Group;
-using Scramble.Marmot.AppComponents;
 using Scramble.Marmot.Storage;
 
 namespace Scramble.Marmot.Engine.Convergence;
@@ -57,17 +56,19 @@ public sealed class EpochWindow
             : null;
 
     /// <summary>
-    /// The ordering class of the commit that produced an epoch, or null when
-    /// that epoch is not retained.
+    /// The commit that produced an epoch, or null when that epoch is not
+    /// retained or was not produced by a commit we held.
     /// </summary>
     /// <remarks>
     /// What <see cref="CandidateMaterializer.Materialize"/> needs for the branch
-    /// we are already on, which is the one candidate that cannot be classified
-    /// on the way in.
+    /// we are already on, which is the one candidate that cannot be described on
+    /// the way in. The two nulls are not worth distinguishing to a caller: both
+    /// mean this member cannot state its own branch's terms, and in both cases
+    /// the only sound move is to decline to decide.
     /// </remarks>
-    public CommitOrderingPriority? TipPriorityAt(EpochId epoch) =>
+    public CommitTip? TipAt(EpochId epoch) =>
         _byEpoch.TryGetValue(epoch.Value, out EpochCheckpoint? checkpoint)
-            ? checkpoint.TipPriority
+            ? checkpoint.Tip
             : null;
 }
 
@@ -127,14 +128,15 @@ public sealed class EpochArchive(
     /// Archives the group at the epoch it currently stands on, and drops
     /// whatever has fallen out of horizon.
     /// </summary>
-    /// <param name="tipPriority">
-    /// The ordering class of the commit that produced this epoch, read before
-    /// that commit was applied.
+    /// <param name="tip">
+    /// The commit that produced this epoch, read before it was applied, or null
+    /// when no commit we held produced it — a group's first epoch, or one joined
+    /// through a Welcome.
     /// </param>
     public async Task CaptureAsync(
         GroupId groupId,
         MlsGroup group,
-        CommitOrderingPriority tipPriority,
+        CommitTip? tip,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(group);
@@ -142,7 +144,7 @@ public sealed class EpochArchive(
         var epoch = new EpochId(group.Epoch);
 
         await _storage.PutEpochCheckpointAsync(
-            new EpochCheckpoint(groupId, epoch, group.Export(), tipPriority, _clock()), ct);
+            new EpochCheckpoint(groupId, epoch, group.Export(), tip, _clock()), ct);
 
         await _storage.PruneEpochCheckpointsBeforeAsync(groupId, OldestRetainedFor(epoch), ct);
     }

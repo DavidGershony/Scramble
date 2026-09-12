@@ -99,6 +99,51 @@ public class MessageIngestTests : IDisposable
         return new Pair(aliceSigner, alice, groupId, bob);
     }
 
+    private sealed record Trio(
+        CreatedGroup Alice, MlsGroup Bob, MlsGroup Carol, GroupId GroupId);
+
+    /// <summary>
+    /// A creator and two joined members.
+    /// </summary>
+    /// <remarks>
+    /// Three rather than two wherever a commit removes somebody: the member
+    /// being removed cannot ingest the commit that removes them, so a pair only
+    /// ever reaches the removal path and never the classification one.
+    /// </remarks>
+    private async Task<Trio> TrioAsync()
+    {
+        var aliceSigner = new LocalSigner();
+
+        CreatedGroup alice = await MarmotGroupBuilder.CreateAsync(
+            _cs, aliceSigner, "Rakes", "", Now, Relays);
+
+        var bobBundle = await MarmotKeyPackageBuilder.CreateAsync(_cs, new LocalSigner(), Now);
+        var carolBundle = await MarmotKeyPackageBuilder.CreateAsync(_cs, new LocalSigner(), Now);
+
+        StagedCommit staged = MarmotGroupInvite.Add(
+            alice.Group, _cs, [bobBundle.KeyPackage, carolBundle.KeyPackage]);
+        staged.Applied();
+
+        MlsGroup Join(MarmotKeyPackageBundle bundle) => MlsGroup.ProcessWelcome(
+            _cs, staged.Welcome!, bundle.KeyPackage,
+            bundle.PrivateMaterial.InitPrivateKey,
+            bundle.PrivateMaterial.LeafPrivateKey,
+            bundle.PrivateMaterial.SignaturePrivateKey,
+            config: MarmotGroupSettings.Create());
+
+        MlsGroup bob = Join(bobBundle);
+        MlsGroup carol = Join(carolBundle);
+
+        var groupId = new GroupId(alice.GroupId);
+        await _fixture.Provider.PutGroupAsync(alice.ToRecord(_now));
+        _epochs.SetStable(groupId, new EpochId(carol.Epoch));
+
+        return new Trio(alice, bob, carol, groupId);
+    }
+
+    private static byte[] Serialize(PublicMessage message) =>
+        TlsCodec.Serialize(new MlsMessage(WireFormat.MlsPublicMessage, message).WriteTo);
+
     /// <summary>The MLS bytes of an application message from Alice.</summary>
     /// <remarks>
     /// Peeled with the <i>sender's</i> secret, deliberately. The kind-445 wrap
@@ -528,9 +573,55 @@ public class MessageIngestTests : IDisposable
         EpochWindow window = await archive.LoadWindowAsync(
             pair.GroupId, new EpochId(pair.Bob.Epoch));
 
+        CommitTip? tip = window.TipAt(new EpochId(pair.Bob.Epoch));
+
+        Assert.NotNull(tip);
+        Assert.Equal(CommitOrderingPriority.Privileged, tip.Priority);
+
+        // The digest is the commit's content id over the same MLS bytes, and the
+        // committer is the member who made it -- read off the tree before the
+        // commit moved it.
+        Assert.Equal(MessageId.FromMlsBytes(wire), tip.Commit);
         Assert.Equal(
-            CommitOrderingPriority.Privileged,
-            window.TipPriorityAt(new EpochId(pair.Bob.Epoch)));
+            pair.AliceSigner.AccountPublicKey.ToArray(),
+            tip.Committer);
+    }
+
+    [Fact]
+    public async Task TheTipIsReadBeforeTheCommitIsApplied()
+    {
+        // A commit citing its proposals by hash can only be classified while the
+        // cache those hashes resolve against is intact, and applying the commit
+        // clears it. Read a moment later this departure commit comes back
+        // Privileged -- fail-closed, and wrong here: it would rank a routine
+        // departure above the admin action it might be racing.
+        Trio trio = await TrioAsync();
+        EpochArchive archive = NewArchive();
+        MessageIngest ingest = NewIngest(archive);
+
+        // Bob asks to leave, and Carol sees the request -- so her cache is the
+        // one that can resolve the reference, right up until she applies.
+        PublicMessage request = MarmotGroupLeave.Request(trio.Bob);
+        byte[] requestWire = Serialize(request);
+        await ingest.IngestAsync(trio.Carol, trio.GroupId, requestWire);
+
+        GroupHandshake.Receive(trio.Alice.Group, requestWire);
+        using StagedCommit? departure = MarmotGroupLeave.CommitDepartures(trio.Alice.Group);
+        Assert.NotNull(departure);
+
+        byte[] commitWire = Serialize(departure!.Commit);
+        departure.Publishing();
+        departure.Applied();
+
+        await ingest.IngestAsync(trio.Carol, trio.GroupId, commitWire);
+
+        EpochWindow window = await archive.LoadWindowAsync(
+            trio.GroupId, new EpochId(trio.Carol.Epoch));
+
+        CommitTip? tip = window.TipAt(new EpochId(trio.Carol.Epoch));
+
+        Assert.NotNull(tip);
+        Assert.Equal(CommitOrderingPriority.Ordinary, tip.Priority);
     }
 
     [Fact]

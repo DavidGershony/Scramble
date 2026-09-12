@@ -1,5 +1,3 @@
-using Scramble.Marmot.AppComponents;
-
 namespace Scramble.Marmot.Storage;
 
 /// <summary>
@@ -20,14 +18,21 @@ namespace Scramble.Marmot.Storage;
 /// able to keep participating. It is exactly as sensitive as the live group
 /// state and belongs under the same protection.
 /// </para>
+/// <para>
+/// <b>The tip is nullable and that is a real case, not a convenience.</b> A
+/// group's first epoch was produced by no commit at all, and an epoch joined
+/// through a Welcome was produced by a commit we never held. Convergence cannot
+/// state its own branch's terms from such an epoch, and the honest answer there
+/// is to refuse to decide rather than to invent a committer.
+/// </para>
 /// </remarks>
 /// <param name="GroupState">The exported MLS group.</param>
-/// <param name="TipPriority">
-/// The ordering class of the commit that produced this epoch.
+/// <param name="Tip">
+/// The commit that produced this epoch, or null when no commit of ours did.
 /// </param>
 public sealed record EpochCheckpoint(
     GroupId GroupId,
     EpochId Epoch,
     byte[] GroupState,
-    CommitOrderingPriority TipPriority,
+    CommitTip? Tip,
     DateTimeOffset CreatedAt);

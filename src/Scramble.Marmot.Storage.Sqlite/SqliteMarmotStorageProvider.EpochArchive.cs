@@ -22,14 +22,23 @@ public sealed partial class SqliteMarmotStorageProvider
 
         await using var cmd = Command($@"
             INSERT OR REPLACE INTO {_tp}epoch_archive
-                (group_id, epoch, group_state, tip_priority, created_at)
-            VALUES (@group, @epoch, @state, @priority, @created);");
+                (group_id, epoch, group_state, tip_priority, tip_commit, tip_committer,
+                 created_at)
+            VALUES (@group, @epoch, @state, @priority, @commit, @committer, @created);");
 
         cmd.Parameters.AddWithValue("@group", checkpoint.GroupId.Value);
         cmd.Parameters.AddWithValue("@epoch", (long)checkpoint.Epoch.Value);
         cmd.Parameters.AddWithValue("@state", checkpoint.GroupState);
-        cmd.Parameters.AddWithValue("@priority", (int)checkpoint.TipPriority);
         cmd.Parameters.AddWithValue("@created", Iso(checkpoint.CreatedAt));
+
+        // Written as a set of three or not at all. A row carrying two of them
+        // would read back as a describable tip with one field invented.
+        cmd.Parameters.AddWithValue(
+            "@priority", checkpoint.Tip is null ? DBNull.Value : (int)checkpoint.Tip.Priority);
+        cmd.Parameters.AddWithValue(
+            "@commit", checkpoint.Tip is null ? DBNull.Value : checkpoint.Tip.Commit.Value);
+        cmd.Parameters.AddWithValue(
+            "@committer", checkpoint.Tip is null ? DBNull.Value : checkpoint.Tip.Committer);
 
         await cmd.ExecuteNonQueryAsync(ct);
     }
@@ -38,7 +47,8 @@ public sealed partial class SqliteMarmotStorageProvider
         GroupId groupId, EpochId epoch, CancellationToken ct = default)
     {
         await using var cmd = Command($@"
-            SELECT group_id, epoch, group_state, tip_priority, created_at
+            SELECT group_id, epoch, group_state, tip_priority, tip_commit, tip_committer,
+                   created_at
             FROM {_tp}epoch_archive
             WHERE group_id = @group AND epoch = @epoch;");
 
@@ -53,7 +63,8 @@ public sealed partial class SqliteMarmotStorageProvider
         GroupId groupId, EpochId oldestEpoch, CancellationToken ct = default)
     {
         await using var cmd = Command($@"
-            SELECT group_id, epoch, group_state, tip_priority, created_at
+            SELECT group_id, epoch, group_state, tip_priority, tip_commit, tip_committer,
+                   created_at
             FROM {_tp}epoch_archive
             WHERE group_id = @group AND epoch >= @oldest
             ORDER BY epoch;");
@@ -87,6 +98,29 @@ public sealed partial class SqliteMarmotStorageProvider
         new GroupId((byte[])r["group_id"]),
         new EpochId((ulong)r.GetInt64(r.GetOrdinal("epoch"))),
         (byte[])r["group_state"],
-        (CommitOrderingPriority)r.GetInt32(r.GetOrdinal("tip_priority")),
+        ReadTip(r),
         DateTimeOffset.Parse(GetString(r, "created_at")!));
+
+    /// <summary>
+    /// The tip, or null when the epoch was not produced by a commit we held.
+    /// </summary>
+    /// <remarks>
+    /// All three columns are tested, not just one. A partially written row is a
+    /// bug rather than a state, and reading it as a tip would hand branch
+    /// selection a committer or a digest that no writer ever chose.
+    /// </remarks>
+    private static CommitTip? ReadTip(SqliteDataReader r)
+    {
+        int priority = r.GetOrdinal("tip_priority");
+        int commit = r.GetOrdinal("tip_commit");
+        int committer = r.GetOrdinal("tip_committer");
+
+        if (r.IsDBNull(priority) || r.IsDBNull(commit) || r.IsDBNull(committer))
+            return null;
+
+        return new CommitTip(
+            (CommitOrderingPriority)r.GetInt32(priority),
+            new MessageId((byte[])r["tip_commit"]),
+            (byte[])r["tip_committer"]);
+    }
 }

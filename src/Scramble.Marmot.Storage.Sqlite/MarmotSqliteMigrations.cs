@@ -14,6 +14,7 @@ internal static class MarmotSqliteMigrations
         (3, "KeyPackage bundles", V003),
         (4, "Routing index", V004),
         (5, "Epoch archive", V005),
+        (6, "Epoch archive tip", V006),
     };
 
     public static void Apply(SqliteConnection connection, string tablePrefix)
@@ -209,6 +210,42 @@ internal static class MarmotSqliteMigrations
                 created_at   TEXT    NOT NULL,
                 PRIMARY KEY (group_id, epoch)
             );
+
+            CREATE INDEX {tp}idx_epoch_archive_group ON {tp}epoch_archive (group_id, epoch);");
+    }
+
+    private static void V006(SqliteConnection connection, string tp)
+    {
+        // The checkpoint has to describe the commit that produced its epoch, not
+        // just how privileged that commit was. Branch selection reads three
+        // things about a tip -- class, committer, digest -- and a member that
+        // remembers one and guesses the other two scores its own branch on terms
+        // nobody else computed.
+        //
+        // All three are nullable together, which is why this is a rebuild rather
+        // than two ADD COLUMNs: a group's first epoch was produced by no commit,
+        // and an epoch joined through a Welcome by a commit we never held. The
+        // old tip_priority was NOT NULL and cannot express either.
+        Execute(connection, $@"
+            CREATE TABLE {tp}epoch_archive_new (
+                group_id      BLOB    NOT NULL,
+                epoch         INTEGER NOT NULL,
+                group_state   BLOB    NOT NULL,
+                tip_priority  INTEGER NULL,
+                tip_commit    BLOB    NULL,
+                tip_committer BLOB    NULL,
+                created_at    TEXT    NOT NULL,
+                PRIMARY KEY (group_id, epoch)
+            );
+
+            INSERT INTO {tp}epoch_archive_new
+                (group_id, epoch, group_state, tip_priority, created_at)
+            SELECT group_id, epoch, group_state, tip_priority, created_at
+              FROM {tp}epoch_archive;
+
+            DROP INDEX IF EXISTS {tp}idx_epoch_archive_group;
+            DROP TABLE {tp}epoch_archive;
+            ALTER TABLE {tp}epoch_archive_new RENAME TO {tp}epoch_archive;
 
             CREATE INDEX {tp}idx_epoch_archive_group ON {tp}epoch_archive (group_id, epoch);");
     }

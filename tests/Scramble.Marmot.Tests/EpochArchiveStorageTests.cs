@@ -23,13 +23,20 @@ public class EpochArchiveStorageTests : IDisposable
 
     public void Dispose() => _fixture.Dispose();
 
+    private static CommitTip Tip(
+        CommitOrderingPriority priority = CommitOrderingPriority.Ordinary,
+        byte fill = 0x33) =>
+        new(priority,
+            new MessageId(Enumerable.Repeat(fill, 32).ToArray()),
+            Enumerable.Repeat((byte)0x99, 32).ToArray());
+
     private static EpochCheckpoint Checkpoint(
         GroupId group,
         ulong epoch,
         byte fill = 0x11,
         CommitOrderingPriority priority = CommitOrderingPriority.Ordinary) =>
         new(group, new EpochId(epoch), Enumerable.Repeat(fill, 16).ToArray(),
-            priority, DateTimeOffset.UnixEpoch.AddSeconds(epoch));
+            Tip(priority), DateTimeOffset.UnixEpoch.AddSeconds(epoch));
 
     [Fact]
     public async Task ACheckpointComesBackAsItWentIn()
@@ -44,7 +51,47 @@ public class EpochArchiveStorageTests : IDisposable
         Assert.Equal(group.Value, read.GroupId.Value);
         Assert.Equal(new EpochId(7), read.Epoch);
         Assert.Equal(Enumerable.Repeat((byte)0xab, 16), read.GroupState);
-        Assert.Equal(CommitOrderingPriority.Privileged, read.TipPriority);
+        Assert.Equal(CommitOrderingPriority.Privileged, read.Tip!.Priority);
+    }
+
+    [Fact]
+    public async Task AnEpochNoCommitOfOursProducedHasNoTip()
+    {
+        // A group's first epoch, or one joined through a Welcome. Nullable
+        // because convergence cannot state its own branch's terms from such an
+        // epoch, and refusing to decide is the honest answer -- an invented
+        // committer would compete on terms no other member computed.
+        var group = StorageFixture.NewGroupId();
+
+        await Archive.PutEpochCheckpointAsync(
+            new EpochCheckpoint(
+                group, new EpochId(0), [1, 2, 3], null, DateTimeOffset.UnixEpoch));
+
+        EpochCheckpoint? read = await Archive.GetEpochCheckpointAsync(group, new EpochId(0));
+
+        Assert.NotNull(read);
+        Assert.Null(read.Tip);
+    }
+
+    [Fact]
+    public async Task TheWholeTipSurvivesTheRoundTripNotJustItsClass()
+    {
+        // Branch selection reads three things about a tip, in order: class,
+        // committer, digest. Storage that kept one and dropped the others would
+        // leave two thirds of the tie-break to be invented at read time.
+        var group = StorageFixture.NewGroupId();
+        CommitTip tip = Tip(CommitOrderingPriority.Privileged, 0xc4);
+
+        await Archive.PutEpochCheckpointAsync(
+            new EpochCheckpoint(
+                group, new EpochId(2), [9], tip, DateTimeOffset.UnixEpoch));
+
+        CommitTip read = (await Archive.GetEpochCheckpointAsync(group, new EpochId(2)))!.Tip!;
+
+        Assert.Equal(tip.Priority, read.Priority);
+        Assert.Equal(tip.Commit, read.Commit);
+        Assert.Equal(tip.Committer, read.Committer);
+        Assert.Equal(tip.BranchId, read.BranchId);
     }
 
     [Fact]
@@ -63,11 +110,11 @@ public class EpochArchiveStorageTests : IDisposable
 
         Assert.Equal(
             CommitOrderingPriority.Ordinary,
-            (await Archive.GetEpochCheckpointAsync(group, new EpochId(1)))!.TipPriority);
+            (await Archive.GetEpochCheckpointAsync(group, new EpochId(1)))!.Tip!.Priority);
 
         Assert.Equal(
             CommitOrderingPriority.Privileged,
-            (await Archive.GetEpochCheckpointAsync(group, new EpochId(2)))!.TipPriority);
+            (await Archive.GetEpochCheckpointAsync(group, new EpochId(2)))!.Tip!.Priority);
     }
 
     [Fact]
