@@ -101,19 +101,12 @@ public sealed class MessageIngest(
         if (record.Removed)
             return new IngestResult(new IngestOutcome.LocalState(LocalIngestState.Removed), null);
 
-        // 3. Can the group take input right now? Mid-publish it cannot: applying
-        //    an inbound commit while our own is staged and unacknowledged would
-        //    fork us from the epoch we are about to ask everyone to adopt.
-        if (!_epochs.CanIngest(groupId))
-        {
-            await PersistAsync(id, groupId, group, mlsBytes, transportId,
-                MessageRecordState.Created, "group is not ingestible", ct);
-
-            return new IngestResult(
-                new IngestOutcome.Buffered(groupId, new EpochId(group.Epoch)), null);
-        }
-
-        // 4. Is it decodable as an MLS message at all?
+        // 3. Is it decodable as an MLS message at all? Decoded ahead of the
+        //    ingestibility gate below, because the epoch a message was produced
+        //    in is readable on its wire and every record written from here on
+        //    needs it -- a buffered commit is a convergence candidate, and one
+        //    filed under the wrong fork epoch describes a branch forking from a
+        //    state it was never built on.
         MlsMessage message;
         try
         {
@@ -121,19 +114,38 @@ public sealed class MessageIngest(
         }
         catch (Exception ex) when (ex is TlsDecodingException or ArgumentException)
         {
-            await PersistAsync(id, groupId, group, mlsBytes, transportId,
+            // The one record whose source epoch cannot be read, so the local
+            // epoch stands in. Harmless because the bytes are terminally
+            // refused: nothing replays them and no branch is built from them.
+            await PersistAsync(id, groupId, new EpochId(group.Epoch), mlsBytes, transportId,
                 MessageRecordState.Failed, $"undecodable: {ex.Message}", ct);
 
             return Refuse(InputRejectionCategory.InvalidEncoding);
         }
 
+        EpochId sourceEpoch = SourceEpochOf(message);
+
+        // 4. Can the group take input right now? Mid-publish it cannot: applying
+        //    an inbound commit while our own is staged and unacknowledged would
+        //    fork us from the epoch we are about to ask everyone to adopt.
+        if (!_epochs.CanIngest(groupId))
+        {
+            await PersistAsync(id, groupId, sourceEpoch, mlsBytes, transportId,
+                MessageRecordState.Created, "group is not ingestible", ct);
+
+            return new IngestResult(
+                new IngestOutcome.Buffered(groupId, new EpochId(group.Epoch)), null);
+        }
+
         return message.WireFormat switch
         {
             WireFormat.MlsPrivateMessage =>
-                await IngestApplicationAsync(group, groupId, id, mlsBytes, transportId, ct),
+                await IngestApplicationAsync(
+                    group, groupId, id, sourceEpoch, mlsBytes, transportId, ct),
 
             WireFormat.MlsPublicMessage =>
-                await IngestHandshakeAsync(group, groupId, id, mlsBytes, transportId, ct),
+                await IngestHandshakeAsync(
+                    group, groupId, id, sourceEpoch, mlsBytes, transportId, ct),
 
             // A Welcome arrives outside a group and is joined from, not ingested
             // into one. Reaching here means it was routed to the wrong door.
@@ -145,6 +157,7 @@ public sealed class MessageIngest(
         MlsGroup group,
         GroupId groupId,
         MessageId id,
+        EpochId sourceEpoch,
         byte[] mlsBytes,
         string? transportId,
         CancellationToken ct)
@@ -159,7 +172,7 @@ public sealed class MessageIngest(
             // Decodable as MLS, but the payload is not a Marmot event or claims
             // an author who did not send it. Terminal: the bytes will not
             // become valid later.
-            await PersistAsync(id, groupId, group, mlsBytes, transportId,
+            await PersistAsync(id, groupId, sourceEpoch, mlsBytes, transportId,
                 MessageRecordState.Failed, ex.Message, ct);
 
             return Refuse(InputRejectionCategory.InvalidSignature);
@@ -169,13 +182,13 @@ public sealed class MessageIngest(
             // Could not decrypt. Deliberately NOT terminal: the epoch it
             // belongs to may still be reachable once a commit we have not seen
             // arrives, so this is held for retry rather than rejected.
-            await PersistAsync(id, groupId, group, mlsBytes, transportId,
+            await PersistAsync(id, groupId, sourceEpoch, mlsBytes, transportId,
                 MessageRecordState.PeelDeferred, ex.Message, ct);
 
             return new IngestResult(new IngestOutcome.TransportDeferred(groupId), null);
         }
 
-        await PersistAsync(id, groupId, group, mlsBytes, transportId,
+        await PersistAsync(id, groupId, sourceEpoch, mlsBytes, transportId,
             MessageRecordState.Processed, null, ct);
 
         return new IngestResult(
@@ -186,6 +199,7 @@ public sealed class MessageIngest(
         MlsGroup group,
         GroupId groupId,
         MessageId id,
+        EpochId sourceEpoch,
         byte[] mlsBytes,
         string? transportId,
         CancellationToken ct)
@@ -197,7 +211,7 @@ public sealed class MessageIngest(
         }
         catch (Exception ex)
         {
-            await PersistAsync(id, groupId, group, mlsBytes, transportId,
+            await PersistAsync(id, groupId, sourceEpoch, mlsBytes, transportId,
                 MessageRecordState.Retryable, ex.Message, ct);
 
             return new IngestResult(new IngestOutcome.TransportDeferred(groupId), null);
@@ -208,7 +222,7 @@ public sealed class MessageIngest(
             // The commit was valid and it removed us. Recorded as processed
             // because it is exactly what it claims to be, while the group is
             // marked removed so nothing tries to send in it again.
-            await PersistAsync(id, groupId, group, mlsBytes, transportId,
+            await PersistAsync(id, groupId, sourceEpoch, mlsBytes, transportId,
                 MessageRecordState.Processed, "removed by commit", ct);
 
             if (await _storage.GetGroupAsync(groupId, ct) is { } record)
@@ -221,7 +235,7 @@ public sealed class MessageIngest(
                 new IngestOutcome.LocalState(LocalIngestState.Removed), null);
         }
 
-        await PersistAsync(id, groupId, group, mlsBytes, transportId,
+        await PersistAsync(id, groupId, sourceEpoch, mlsBytes, transportId,
             MessageRecordState.Processed, null, ct);
 
         // A cached proposal has not changed group state, so the epoch is
@@ -233,6 +247,37 @@ public sealed class MessageIngest(
 
     private static IngestResult Refuse(InputRejectionCategory category) =>
         new(new IngestOutcome.Ignored(category), null);
+
+    /// <summary>
+    /// The epoch a message was produced in, read off its own wire.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Not the epoch we were at when it arrived</b>, which is what a
+    /// receiver knows and not what the message says. The two differ exactly
+    /// when it matters: a commit that competes with ours was framed against the
+    /// epoch we have already left, and that framed epoch is where its branch
+    /// forks. Recording ours instead would file every competing commit as
+    /// forking from wherever we happened to be, which is a branch no member can
+    /// rebuild.
+    /// </para>
+    /// <para>
+    /// Both wire formats carry it in the clear — a private message's epoch is
+    /// outside its ciphertext precisely so a receiver can tell which keys to
+    /// reach for before it can read anything.
+    /// </para>
+    /// </remarks>
+    private static EpochId SourceEpochOf(MlsMessage message) => new(
+        message.Body switch
+        {
+            PublicMessage handshake => handshake.Content.Epoch,
+            PrivateMessage application => application.Epoch,
+
+            // A Welcome carries no epoch and is refused a step later as
+            // WrongRecipient. Zero is never read: the record that would carry
+            // it is not written on that path.
+            _ => 0,
+        });
 
     /// <summary>
     /// Records what was seen and what became of it.
@@ -247,7 +292,7 @@ public sealed class MessageIngest(
     private async Task PersistAsync(
         MessageId id,
         GroupId groupId,
-        MlsGroup group,
+        EpochId sourceEpoch,
         byte[] mlsBytes,
         string? transportId,
         MessageRecordState state,
@@ -261,7 +306,7 @@ public sealed class MessageIngest(
                 id,
                 groupId,
                 transportId,
-                new EpochId(group.Epoch),
+                sourceEpoch,
                 state,
                 mlsBytes,
                 now,

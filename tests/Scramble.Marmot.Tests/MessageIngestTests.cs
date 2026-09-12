@@ -378,6 +378,99 @@ public class MessageIngestTests : IDisposable
         Assert.Equal(before, pair.Alice.Group.Epoch);
     }
 
+    // ---- The epoch a record is filed under ----
+
+    [Fact]
+    public async Task ACompetingCommitIsFiledUnderTheEpochItWasBuiltFrom()
+    {
+        // The record's epoch is where convergence will later say the branch
+        // forks, so it has to be the epoch the commit was framed against and
+        // not the one we had reached by the time it arrived. Filing ours would
+        // describe every competing commit as forking from wherever we happened
+        // to be -- a branch no member can rebuild, ourselves included.
+        Pair pair = await PairAsync();
+
+        ulong forkEpoch = pair.Alice.Group.Epoch;
+        var (hers, _) = pair.Alice.Group.CommitPublic();
+        byte[] wire = TlsCodec.Serialize(
+            new MlsMessage(WireFormat.MlsPublicMessage, hers).WriteTo);
+        pair.Alice.Group.MergePendingCommit();
+
+        // We commit from the same epoch and apply ours first, which is what a
+        // relay produces when two members are handed each other's commits
+        // after having already sent their own. Hers no longer applies.
+        var (_, _) = pair.Bob.CommitPublic();
+        pair.Bob.MergePendingCommit();
+        Assert.NotEqual(forkEpoch, pair.Bob.Epoch);
+
+        IngestResult result = await NewIngest().IngestAsync(pair.Bob, pair.GroupId, wire);
+        Assert.IsType<IngestOutcome.TransportDeferred>(result.Outcome);
+
+        MessageRecord stored =
+            (await _fixture.Provider.GetMessageAsync(MessageId.FromMlsBytes(wire)))!;
+
+        Assert.Equal(MessageRecordState.Retryable, stored.State);
+        Assert.Equal(new EpochId(forkEpoch), stored.SourceEpoch);
+        Assert.NotEqual(new EpochId(pair.Bob.Epoch), stored.SourceEpoch);
+    }
+
+    [Fact]
+    public async Task AMessageFromAnEpochWeCannotReachIsFiledUnderTheSenderEpoch()
+    {
+        // The application-message half of the same rule. A private message
+        // carries its epoch outside the ciphertext precisely so a receiver can
+        // tell which keys to reach for before it can read anything, so there is
+        // no excuse for recording our own.
+        Pair pair = await PairAsync();
+        ulong ours = pair.Bob.Epoch;
+
+        var (_, _) = pair.Alice.Group.CommitPublic();
+        pair.Alice.Group.MergePendingCommit();
+        byte[] wire = AppMessage(pair, "from further on");
+
+        await NewIngest().IngestAsync(pair.Bob, pair.GroupId, wire);
+
+        MessageRecord stored =
+            (await _fixture.Provider.GetMessageAsync(MessageId.FromMlsBytes(wire)))!;
+
+        Assert.Equal(MessageRecordState.PeelDeferred, stored.State);
+        Assert.Equal(new EpochId(pair.Alice.Group.Epoch), stored.SourceEpoch);
+        Assert.NotEqual(new EpochId(ours), stored.SourceEpoch);
+    }
+
+    [Fact]
+    public async Task ABufferedMessageIsFiledUnderItsOwnEpochAsWell()
+    {
+        // Buffering happens before anything is decrypted, so this is the record
+        // most easily filed under the receiver's epoch by accident -- and it is
+        // the one that matters most, because a message buffered mid-publish is
+        // arriving exactly when a fork is being created.
+        Pair pair = await PairAsync();
+
+        var (_, _) = pair.Alice.Group.CommitPublic();
+        pair.Alice.Group.MergePendingCommit();
+        byte[] wire = AppMessage(pair, "mid-flight, from ahead");
+
+        var epoch = new EpochId(pair.Bob.Epoch);
+        _epochs.BeginPending(
+            pair.GroupId,
+            epoch,
+            new EpochId(epoch.Value + 1),
+            new StagedCommitHandle([1, 2, 3]),
+            _epochs.NextPendingRef(),
+            PendingKind.GroupEvolution);
+
+        IngestResult result = await NewIngest().IngestAsync(pair.Bob, pair.GroupId, wire);
+        Assert.IsType<IngestOutcome.Buffered>(result.Outcome);
+
+        MessageRecord stored =
+            (await _fixture.Provider.GetMessageAsync(MessageId.FromMlsBytes(wire)))!;
+
+        Assert.Equal(MessageRecordState.Created, stored.State);
+        Assert.Equal(new EpochId(pair.Alice.Group.Epoch), stored.SourceEpoch);
+        Assert.NotEqual(epoch, stored.SourceEpoch);
+    }
+
     // ---- The contract callers rely on ----
 
     [Fact]
