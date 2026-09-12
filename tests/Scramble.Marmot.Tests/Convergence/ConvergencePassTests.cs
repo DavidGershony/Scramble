@@ -422,6 +422,129 @@ public class ConvergencePassTests : IDisposable
             result.Refused, r => r.Reason == MaterializationRefusal.NoSnapshot);
     }
 
+    // ---- Commits that can never be rebuilt ----
+
+    /// <summary>
+    /// Advances us past the rewind horizon on commits from Carol.
+    /// </summary>
+    /// <remarks>
+    /// One more than the horizon, so the epoch we started at is pruned and a
+    /// commit forking there can never be restored again.
+    /// </remarks>
+    private async Task OutrunTheHorizonAsync(Fork fork, MessageIngest ingest)
+    {
+        for (ulong i = 0; i <= ConvergencePolicy.V1MaxRewindCommits; i++)
+            await ingest.IngestAsync(fork.Us, fork.GroupId, Commit(fork.Carol));
+    }
+
+    /// <summary>Our own commit, applied and archived, so our branch is describable.</summary>
+    private async Task SelfUpdateAsync(Fork fork, EpochArchive archive)
+    {
+        using StagedCommit ours = MarmotSelfUpdate.Stage(fork.Us);
+
+        byte[] wire = TlsCodec.Serialize(
+            new MlsMessage(WireFormat.MlsPublicMessage, ours.Commit).WriteTo);
+
+        ours.Publishing();
+        ours.Applied();
+
+        await archive.CaptureAsync(
+            fork.GroupId,
+            fork.Us,
+            new CommitTip(
+                ours.OrderingPriority,
+                MessageId.FromMlsBytes(wire),
+                Convert.FromHexString(fork.AliceSigner.Hex)));
+    }
+
+    [Fact]
+    public async Task ACommitThatCanNeverBeRebuiltIsRetiredRatherThanRetriedForever()
+    {
+        // The horizon only moves forward, so a commit forking below it is not
+        // merely unevaluable now -- it is unevaluable for good. Left retryable it
+        // comes back to every later pass with the same answer, and each of those
+        // passes has to report a branch it cannot assess.
+        EpochArchive archive = NewArchive();
+        Fork fork = await ForkAsync(archive);
+        MessageIngest ingest = NewIngest(archive);
+
+        byte[] stale = Commit(fork.Alice.Group);
+        await OutrunTheHorizonAsync(fork, ingest);
+        await ingest.IngestAsync(fork.Us, fork.GroupId, stale);
+
+        Quiesce();
+        ConvergencePassResult result = await NewPass(archive).RunAsync(fork.Us, fork.GroupId);
+
+        Assert.Equal(ConvergenceStatus.Settled, result.Status);
+        Assert.Contains(MessageId.FromMlsBytes(stale), result.Retired);
+
+        MessageRecord retired =
+            (await _fixture.Provider.GetMessageAsync(MessageId.FromMlsBytes(stale)))!;
+
+        Assert.Equal(MessageRecordState.Failed, retired.State);
+    }
+
+    [Fact]
+    public async Task ACommitForkingExactlyAtTheHorizonIsStillACandidate()
+    {
+        // The boundary, in the direction that fails quietly. Retiring one epoch
+        // too eagerly throws away a branch the policy says is adoptable -- and
+        // the group would never hear about it, because a retired commit is never
+        // mentioned again. The horizon here has to be the one branch selection
+        // applies, to the epoch.
+        EpochArchive archive = NewArchive();
+        Fork fork = await ForkAsync(archive);
+        MessageIngest ingest = NewIngest(archive);
+
+        byte[] hers = Commit(fork.Alice.Group);
+
+        for (ulong i = 0; i < ConvergencePolicy.V1MaxRewindCommits; i++)
+            await ingest.IngestAsync(fork.Us, fork.GroupId, Commit(fork.Carol));
+
+        await ingest.IngestAsync(fork.Us, fork.GroupId, hers);
+
+        Quiesce();
+        ConvergencePassResult result = await NewPass(archive).RunAsync(fork.Us, fork.GroupId);
+
+        Assert.Empty(result.Retired);
+        Assert.Equal(ConvergenceStatus.Settled, result.Status);
+        Assert.NotNull(result.Trace);
+        Assert.Equal(2, result.Trace.Candidates.Count);
+        Assert.All(result.Trace.Candidates, c => Assert.True(c.Eligible));
+    }
+
+    [Fact]
+    public async Task AStaleCommitDoesNotStopTheGroupDecidingARealFork()
+    {
+        // The consequence, and the reason this is not cosmetic. One commit that
+        // can never be rebuilt used to make every later pass report Blocked, and
+        // a pass that reports Blocked decides nothing -- so a single commit
+        // framed at an ancient epoch stopped the group converging at all, for
+        // good, no matter what else arrived.
+        EpochArchive archive = NewArchive();
+        Fork fork = await ForkAsync(archive);
+        MessageIngest ingest = NewIngest(archive);
+
+        byte[] stale = Commit(fork.Alice.Group);
+        await OutrunTheHorizonAsync(fork, ingest);
+
+        // A fork we can perfectly well decide: Carol commits from where we both
+        // stand, and we commit from there too.
+        byte[] carols = Commit(fork.Carol);
+        await SelfUpdateAsync(fork, archive);
+
+        await ingest.IngestAsync(fork.Us, fork.GroupId, carols);
+        await ingest.IngestAsync(fork.Us, fork.GroupId, stale);
+
+        Quiesce();
+        ConvergencePassResult result = await NewPass(archive).RunAsync(fork.Us, fork.GroupId);
+
+        Assert.Equal(ConvergenceStatus.Settled, result.Status);
+        Assert.NotNull(result.Trace);
+        Assert.Equal(2, result.Trace.Candidates.Count);
+        Assert.Contains(MessageId.FromMlsBytes(stale), result.Retired);
+    }
+
     // ---- Our own commit is not a competitor ----
 
     [Fact]

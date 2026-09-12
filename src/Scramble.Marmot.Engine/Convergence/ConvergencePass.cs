@@ -20,12 +20,17 @@ namespace Scramble.Marmot.Engine.Convergence;
 /// Why the selector chose what it chose, or null when no selection was made.
 /// </param>
 /// <param name="Refused">Stored commits that could not be turned into branches.</param>
+/// <param name="Retired">
+/// Commits given up on for good, because they fork beyond the rewind horizon
+/// and the horizon only moves away from them.
+/// </param>
 public sealed record ConvergencePassResult(
     ConvergenceStatus Status,
     MlsGroup Group,
     bool Reorged,
     BranchSelectionTrace? Trace,
-    IReadOnlyList<RefusedCommit> Refused);
+    IReadOnlyList<RefusedCommit> Refused,
+    IReadOnlyList<MessageId> Retired);
 
 /// <summary>
 /// The step that makes the convergence machinery reachable.
@@ -47,6 +52,16 @@ public sealed record ConvergencePassResult(
 /// described. A member that decides early decides on a partial candidate set,
 /// and two members with different partial sets reach different answers from
 /// identical rules — which is the one failure convergence exists to prevent.
+/// </para>
+/// <para>
+/// <b>A branch that can never be assessed is given up on, not kept.</b> The
+/// rewind horizon only moves forward, so a commit forking below it is not
+/// merely unevaluable now — it is unevaluable for good, and no member will ever
+/// adopt it. Left waiting it returns to every later pass with the same answer,
+/// and a pass holding an unassessable branch cannot report itself settled. One
+/// commit framed at an ancient epoch would then stop the group converging at
+/// all, permanently, whatever else arrived. So it is retired on sight: refused
+/// once, terminally, before any work is spent on it.
 /// </para>
 /// <para>
 /// <b>What this does not do.</b> Adopting a branch makes messages readable that
@@ -105,20 +120,31 @@ public sealed class ConvergencePass
 
         var byId = new Dictionary<MessageId, MessageRecord>();
         var stored = new List<StoredCommit>();
+        var retired = new List<MessageRecord>();
 
         foreach (MessageRecord record in retryable)
         {
             if (ToStoredCommit(record, live) is not { } commit)
                 continue;
 
+            if (BeyondHorizon(live, commit.SourceEpoch))
+            {
+                retired.Add(record);
+                continue;
+            }
+
             stored.Add(commit);
             byId[record.Id] = record;
         }
 
+        await RetireAsync(retired, ct);
+        IReadOnlyList<MessageId> retiredIds = retired.Select(r => r.Id).ToList();
+
         // Nothing competing means nothing to decide, and saying Settled is not a
         // shortcut: every input is accounted for and none of them is a branch.
         if (stored.Count == 0)
-            return new ConvergencePassResult(ConvergenceStatus.Settled, live, false, null, []);
+            return new ConvergencePassResult(
+                ConvergenceStatus.Settled, live, false, null, [], retiredIds);
 
         var liveEpoch = new EpochId(live.Epoch);
         EpochWindow window = await _archive.LoadWindowAsync(groupId, liveEpoch, ct);
@@ -131,7 +157,7 @@ public sealed class ConvergencePass
         if (window.TipAt(liveEpoch) is not { } liveTip)
         {
             return new ConvergencePassResult(
-                ConvergenceStatus.Blocked, live, false, null, []);
+                ConvergenceStatus.Blocked, live, false, null, [], retiredIds);
         }
 
         IReadOnlyList<MessageRecord> witnessable = await WitnessableAsync(groupId, ct);
@@ -146,7 +172,7 @@ public sealed class ConvergencePass
         if (status != ConvergenceStatus.Settled)
         {
             return new ConvergencePassResult(
-                status, live, false, null, materialized.Refused);
+                status, live, false, null, materialized.Refused, retiredIds);
         }
 
         BranchSelectionTrace trace = BranchSelectionAudit.SelectCanonicalTraced(
@@ -158,13 +184,13 @@ public sealed class ConvergencePass
         if (trace.SelectedBranchId is null)
         {
             return new ConvergencePassResult(
-                ConvergenceStatus.Blocked, live, false, trace, materialized.Refused);
+                ConvergenceStatus.Blocked, live, false, trace, materialized.Refused, retiredIds);
         }
 
         if (string.Equals(trace.SelectedBranchId, liveTip.BranchId, StringComparison.Ordinal))
         {
             return new ConvergencePassResult(
-                ConvergenceStatus.Settled, live, false, trace, materialized.Refused);
+                ConvergenceStatus.Settled, live, false, trace, materialized.Refused, retiredIds);
         }
 
         BranchCandidate winner = materialized.Candidates.Single(
@@ -180,7 +206,7 @@ public sealed class ConvergencePass
         await AdoptAsync(groupId, winner, reorg, byId, ct);
 
         return new ConvergencePassResult(
-            ConvergenceStatus.Settled, reorg.Group, true, trace, materialized.Refused);
+            ConvergenceStatus.Settled, reorg.Group, true, trace, materialized.Refused, retiredIds);
     }
 
     /// <summary>
@@ -204,6 +230,48 @@ public sealed class ConvergencePass
                 record.Wire,
                 IsOurs: framed.Content.Sender.LeafIndex == live.MyLeafIndex)
             : null;
+
+    /// <summary>
+    /// Whether a commit forks further back than this member may ever rewind.
+    /// </summary>
+    /// <remarks>
+    /// <b>The same bound <see cref="BranchSelection.IsEligible"/> applies</b>,
+    /// asked before the work rather than after it — a branch the selector would
+    /// refuse as beyond the horizon need not be built to find that out.
+    /// Answering it here is also what makes the refusal permanent: eligibility
+    /// is measured from the current tip, and the tip only advances, so a commit
+    /// that fails this today fails it on every later pass too.
+    /// </remarks>
+    private bool BeyondHorizon(MlsGroup live, EpochId forkEpoch) =>
+        live.Epoch > forkEpoch.Value
+        && live.Epoch - forkEpoch.Value > _policy.MaxRewindCommits;
+
+    /// <summary>
+    /// Gives up on commits that can never be rebuilt.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="MessageRecordState.Failed"/> rather than deletion, and with a
+    /// reason: a branch abandoned because history moved on is something a user
+    /// may later ask about, and "we never saw it" is a different answer from
+    /// "we saw it too late".
+    /// </remarks>
+    private async Task RetireAsync(IReadOnlyList<MessageRecord> retired, CancellationToken ct)
+    {
+        DateTimeOffset now = _clock();
+
+        foreach (MessageRecord record in retired)
+        {
+            await _storage.PutMessageAsync(
+                record with
+                {
+                    State = MessageRecordState.Failed,
+                    UpdatedAt = now,
+                    Reason = $"forks at epoch {record.SourceEpoch.Value}, beyond the rewind "
+                        + $"horizon of {_policy.MaxRewindCommits}",
+                },
+                ct);
+        }
+    }
 
     /// <summary>The record read as a framed commit, or null if it is not one.</summary>
     private static PublicMessage? FramedCommit(MessageRecord record)
