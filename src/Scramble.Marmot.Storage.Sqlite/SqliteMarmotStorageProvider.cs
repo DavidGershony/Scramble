@@ -123,8 +123,8 @@ public sealed partial class SqliteMarmotStorageProvider : IMarmotStorageProvider
     {
         await using var cmd = Command($@"
             INSERT OR REPLACE INTO {_tp}messages
-                (id, group_id, transport_id, source_epoch, state, wire, attempts, reason, created_at, updated_at)
-            VALUES (@id, @group, @transport, @epoch, @state, @wire, @attempts, @reason, @created, @updated);");
+                (id, group_id, transport_id, source_epoch, state, wire, attempts, reason, created_at, updated_at, last_attempt_epoch)
+            VALUES (@id, @group, @transport, @epoch, @state, @wire, @attempts, @reason, @created, @updated, @lastAttempt);");
         cmd.Parameters.AddWithValue("@id", message.Id.Value);
         cmd.Parameters.AddWithValue("@group", message.GroupId.Value);
         cmd.Parameters.AddWithValue("@transport", (object?)message.TransportId ?? DBNull.Value);
@@ -135,6 +135,9 @@ public sealed partial class SqliteMarmotStorageProvider : IMarmotStorageProvider
         cmd.Parameters.AddWithValue("@reason", (object?)message.Reason ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@created", Iso(message.CreatedAt));
         cmd.Parameters.AddWithValue("@updated", Iso(message.UpdatedAt));
+        cmd.Parameters.AddWithValue(
+            "@lastAttempt",
+            message.LastAttemptEpoch is { } attempt ? (long)attempt.Value : DBNull.Value);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
@@ -228,6 +231,9 @@ public sealed partial class SqliteMarmotStorageProvider : IMarmotStorageProvider
         {
             Attempts = (int)GetInt64(r, "attempts"),
             Reason = GetString(r, "reason"),
+            LastAttemptEpoch = IsNull(r, "last_attempt_epoch")
+                ? null
+                : new EpochId((ulong)GetInt64(r, "last_attempt_epoch")),
         };
 
     // -- Outbound intents --

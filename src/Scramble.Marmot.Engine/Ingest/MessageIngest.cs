@@ -26,6 +26,11 @@ public sealed record IngestResult(IngestOutcome Outcome, ReceivedGroupMessage? M
 /// How many are still waiting. Not a failure: the commit that would make them
 /// readable may simply not have arrived.
 /// </param>
+/// <param name="Skipped">
+/// How many were passed over because nothing has changed that could make them
+/// readable, or because the pass hit its cap. They cost nothing and will be
+/// looked at again.
+/// </param>
 /// <param name="Retired">
 /// Messages given up on, because the epoch they were sent in has fallen out of
 /// the delivery window and the keys are gone.
@@ -33,7 +38,8 @@ public sealed record IngestResult(IngestOutcome Outcome, ReceivedGroupMessage? M
 public sealed record ReplayResult(
     IReadOnlyList<ReceivedGroupMessage> Delivered,
     int StillDeferred,
-    IReadOnlyList<MessageId> Retired);
+    IReadOnlyList<MessageId> Retired,
+    int Skipped);
 
 /// <summary>
 /// The single door every inbound MLS message comes through.
@@ -220,6 +226,25 @@ public sealed class MessageIngest(
     /// gone. Attempts are counted all the same — how often we tried is worth
     /// seeing — they are just not what decides.
     /// </para>
+    /// <para>
+    /// <b>The two held states are blocked on different things, and they clear
+    /// differently.</b> A buffered record was refused because the group could
+    /// not take input; a publish finishing or being rolled back clears that, and
+    /// neither moves the epoch, so those are always retried. A deferred record
+    /// was refused because its keys were unreachable, and only new group state
+    /// can change that — so it is retried only when the epoch differs from the
+    /// one it was last tried at. Asking again at the same epoch is asking a
+    /// question that has already been answered. The buffered exemption is
+    /// fail-safe rather than load-bearing — see the note at the call site.
+    /// </para>
+    /// <para>
+    /// <b>That is what makes a flood cost nothing</b>, and it is a security
+    /// property rather than a tidiness one: without it, a peer can leave a quiet
+    /// group holding any number of undecryptable messages and have every later
+    /// pass re-attempt all of them. <see cref="MaxAttemptsPerPass"/> then bounds
+    /// the burst when the epoch does move and a great many records become
+    /// eligible at once.
+    /// </para>
     /// </remarks>
     /// <param name="group">The group as it stands, after whatever changed.</param>
     /// <param name="groupId">Its Marmot group id.</param>
@@ -229,22 +254,44 @@ public sealed class MessageIngest(
         ArgumentNullException.ThrowIfNull(group);
 
         if (!_epochs.CanIngest(groupId))
-            return new ReplayResult([], 0, []);
+            return new ReplayResult([], 0, [], 0);
 
         if (await _storage.GetGroupAsync(groupId, ct) is not { Removed: false })
-            return new ReplayResult([], 0, []);
+            return new ReplayResult([], 0, [], 0);
+
+        var epoch = new EpochId(group.Epoch);
 
         // Oldest epoch first, and within an epoch the order they arrived in.
         // That is the best order available: where a message sits within its
         // epoch is inside the ciphertext, so until it is read there is nothing
         // else to sort on.
-        var held = (await _storage.ListMessagesByStateAsync(
-                groupId, MessageRecordState.PeelDeferred, ct))
-            .Concat(await _storage.ListMessagesByStateAsync(
-                groupId, MessageRecordState.Created, ct))
+        var deferred = await _storage.ListMessagesByStateAsync(
+            groupId, MessageRecordState.PeelDeferred, ct);
+
+        var buffered = await _storage.ListMessagesByStateAsync(
+            groupId, MessageRecordState.Created, ct);
+
+        // Nothing about a deferred message changes while the epoch stands
+        // still, so those are excluded outright rather than tried and refused.
+        //
+        // Buffered ones are kept whatever the epoch, because what blocked them
+        // was never the keys. That exemption is fail-safe rather than
+        // load-bearing, and it survives mutation: replay runs only when the
+        // group can ingest, and dispatch always re-files a record into some
+        // other state, so a buffered one cannot be attempted and still be
+        // buffered. Applying the skip to it would be harmless today and wrong
+        // the first time a path leaves one where it was.
+        var eligible = deferred
+            .Where(r => r.LastAttemptEpoch != epoch)
+            .Concat(buffered)
             .OrderBy(r => r.SourceEpoch.Value)
             .ThenBy(r => r.CreatedAt)
             .ToList();
+
+        int skipped = deferred.Count + buffered.Count - eligible.Count;
+
+        var held = eligible.Take(MaxAttemptsPerPass).ToList();
+        skipped += eligible.Count - held.Count;
 
         var delivered = new List<ReceivedGroupMessage>();
         var retired = new List<MessageId>();
@@ -282,7 +329,7 @@ public sealed class MessageIngest(
                 group, groupId, record.Id, record.SourceEpoch, record.Wire, message,
                 record.TransportId, ct);
 
-            await PreserveAsync(record, ct);
+            await PreserveAsync(record, epoch, ct);
 
             if (result.Message is { } readable)
                 delivered.Add(readable);
@@ -291,8 +338,21 @@ public sealed class MessageIngest(
                 stillDeferred++;
         }
 
-        return new ReplayResult(delivered, stillDeferred, retired);
+        return new ReplayResult(delivered, stillDeferred, retired, skipped);
     }
+
+    /// <summary>
+    /// How many held messages one replay pass will attempt.
+    /// </summary>
+    /// <remarks>
+    /// <b>A security bound, not a performance one</b>, and the same shape as
+    /// <see cref="Convergence.CandidateMaterializer.ReplayBudget"/>. Each
+    /// attempt is a decryption against material a peer chose, and the cost is
+    /// paid before we know the message is worthless. Whatever this leaves is
+    /// not lost: it was not attempted at this epoch, so the next pass takes it,
+    /// oldest first.
+    /// </remarks>
+    public const int MaxAttemptsPerPass = 256;
 
     /// <summary>
     /// Whether a message was sent too long ago for the group to still read it.
@@ -328,15 +388,22 @@ public sealed class MessageIngest(
     /// stamp a fresh arrival time onto bytes that have been held for hours, and
     /// the replay orders by that time. The attempt count is carried forward
     /// here too — it decides nothing, but how often a message has been tried is
-    /// worth being able to see.
+    /// worth being able to see — and the epoch we tried at is recorded, which
+    /// is what does decide whether it is worth trying again.
     /// </remarks>
-    private async Task PreserveAsync(MessageRecord before, CancellationToken ct)
+    private async Task PreserveAsync(MessageRecord before, EpochId attemptedAt, CancellationToken ct)
     {
         if (await _storage.GetMessageAsync(before.Id, ct) is not { } after)
             return;
 
         await _storage.PutMessageAsync(
-            after with { CreatedAt = before.CreatedAt, Attempts = before.Attempts + 1 }, ct);
+            after with
+            {
+                CreatedAt = before.CreatedAt,
+                Attempts = before.Attempts + 1,
+                LastAttemptEpoch = attemptedAt,
+            },
+            ct);
     }
 
     /// <summary>

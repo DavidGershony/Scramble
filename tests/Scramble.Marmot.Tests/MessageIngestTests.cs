@@ -825,6 +825,152 @@ public class MessageIngestTests : IDisposable
         Assert.NotEqual(held.CreatedAt, after.UpdatedAt);
     }
 
+    [Fact]
+    public async Task ADeferredMessageIsNotAskedAgainAtAnEpochThatAlreadyRefusedIt()
+    {
+        // Nothing about a held message changes while the epoch stands still, so
+        // a second attempt at the same epoch asks a question already answered.
+        // This is the property that makes a flood free: without it a peer can
+        // leave a quiet group holding any number of undecryptable messages and
+        // have every later pass re-attempt all of them.
+        Pair pair = await PairAsync();
+        EpochArchive archive = NewArchive();
+        MessageIngest ingest = NewIngest(archive);
+
+        var (_, _) = pair.Alice.Group.CommitPublic();
+        pair.Alice.Group.MergePendingCommit();
+        byte[] wire = AppMessage(pair, "unreadable here");
+
+        await ingest.IngestAsync(pair.Bob, pair.GroupId, wire);
+
+        ReplayResult first = await ingest.ReplayAsync(pair.Bob, pair.GroupId);
+        Assert.Equal(1, first.StillDeferred);
+        Assert.Equal(0, first.Skipped);
+
+        ReplayResult second = await ingest.ReplayAsync(pair.Bob, pair.GroupId);
+        Assert.Equal(0, second.StillDeferred);
+        Assert.Equal(1, second.Skipped);
+
+        // One attempt, not two -- the second pass never touched it.
+        Assert.Equal(
+            1,
+            (await _fixture.Provider.GetMessageAsync(MessageId.FromMlsBytes(wire)))!.Attempts);
+    }
+
+    [Fact]
+    public async Task ADeferredMessageIsAskedAgainOnceTheEpochMoves()
+    {
+        // The other half of the same rule. Skipping has to be about the epoch
+        // rather than about having been tried, or a message would be refused
+        // once and then never reconsidered -- which is the bug this is meant to
+        // avoid, not cause.
+        Pair pair = await PairAsync();
+        EpochArchive archive = NewArchive();
+        MessageIngest ingest = NewIngest(archive);
+
+        var (commit, _) = pair.Alice.Group.CommitPublic();
+        pair.Alice.Group.MergePendingCommit();
+        byte[] wire = AppMessage(pair, "readable once we catch up");
+
+        await ingest.IngestAsync(pair.Bob, pair.GroupId, wire);
+        Assert.Equal(1, (await ingest.ReplayAsync(pair.Bob, pair.GroupId)).StillDeferred);
+
+        // Catching up is exactly the change that can make it readable.
+        await ingest.IngestAsync(pair.Bob, pair.GroupId, Serialize(commit));
+
+        ReplayResult replayed = await ingest.ReplayAsync(pair.Bob, pair.GroupId);
+
+        ReceivedGroupMessage delivered = Assert.Single(replayed.Delivered);
+        Assert.Equal("readable once we catch up", delivered.Event.Content);
+        Assert.Equal(0, replayed.Skipped);
+    }
+
+    [Fact]
+    public async Task ABufferedMessageIsRetriedEvenThoughTheEpochDidNotMove()
+    {
+        // Buffered and deferred are blocked on different things. A publish being
+        // rolled back is what unblocks a buffered record, and it leaves the
+        // epoch exactly where it was -- so skipping on an unchanged epoch would
+        // strand every message that arrived mid-publish.
+        Pair pair = await PairAsync();
+        EpochArchive archive = NewArchive();
+        MessageIngest ingest = NewIngest(archive);
+
+        byte[] wire = AppMessage(pair, "arrived mid-publish");
+
+        var epoch = new EpochId(pair.Bob.Epoch);
+        PendingStateRef pending = _epochs.NextPendingRef();
+        _epochs.BeginPending(
+            pair.GroupId, epoch, new EpochId(epoch.Value + 1),
+            new StagedCommitHandle([1]), pending, PendingKind.GroupEvolution);
+
+        await ingest.IngestAsync(pair.Bob, pair.GroupId, wire);
+        _epochs.RollbackPublish(pending);
+
+        Assert.Equal(epoch.Value, pair.Bob.Epoch);
+
+        ReplayResult replayed = await ingest.ReplayAsync(pair.Bob, pair.GroupId);
+
+        Assert.Single(replayed.Delivered);
+        Assert.Equal(0, replayed.Skipped);
+    }
+
+    [Fact]
+    public async Task OnePassAttemptsNoMoreThanItsCap()
+    {
+        // A security bound rather than a performance one: every attempt is a
+        // decryption against material a peer chose, and the cost is paid before
+        // we know the message is worthless. What the cap leaves behind is not
+        // lost -- it was not attempted at this epoch, so the next pass takes it.
+        Pair pair = await PairAsync();
+        EpochArchive archive = NewArchive();
+        MessageIngest ingest = NewIngest(archive);
+
+        var (_, _) = pair.Alice.Group.CommitPublic();
+        pair.Alice.Group.MergePendingCommit();
+
+        // One genuinely undecryptable message, then copies of it differing only
+        // in a ciphertext byte. They parse as MLS and fail to decrypt, which is
+        // the shape a flood takes; building each one for real would test the
+        // sender rather than the cap.
+        byte[] original = AppMessage(pair, "flood");
+        int flood = MessageIngest.MaxAttemptsPerPass + 8;
+
+        for (int i = 0; i < flood; i++)
+        {
+            byte[] wire = (byte[])original.Clone();
+            wire[^1] ^= (byte)(i + 1);
+            wire[^2] ^= (byte)(i >> 8);
+
+            await _fixture.Provider.PutMessageAsync(
+                new MessageRecord(
+                    MessageId.FromMlsBytes(wire),
+                    pair.GroupId,
+                    null,
+                    new EpochId(pair.Bob.Epoch),
+                    MessageRecordState.PeelDeferred,
+                    wire,
+                    _now,
+                    _now));
+        }
+
+        ReplayResult replayed = await ingest.ReplayAsync(pair.Bob, pair.GroupId);
+
+        Assert.Equal(MessageIngest.MaxAttemptsPerPass, replayed.StillDeferred);
+        Assert.Equal(flood - MessageIngest.MaxAttemptsPerPass, replayed.Skipped);
+
+        IReadOnlyList<MessageRecord> tried = await _fixture.Provider.ListMessagesByStateAsync(
+            pair.GroupId, MessageRecordState.PeelDeferred);
+
+        Assert.Equal(
+            MessageIngest.MaxAttemptsPerPass,
+            tried.Count(r => r.LastAttemptEpoch is not null));
+
+        // And the remainder is picked up next time rather than stranded.
+        ReplayResult next = await ingest.ReplayAsync(pair.Bob, pair.GroupId);
+        Assert.Equal(flood - MessageIngest.MaxAttemptsPerPass, next.StillDeferred);
+    }
+
     // ---- The contract callers rely on ----
 
     [Fact]

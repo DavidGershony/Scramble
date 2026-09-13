@@ -15,6 +15,7 @@ internal static class MarmotSqliteMigrations
         (4, "Routing index", V004),
         (5, "Epoch archive", V005),
         (6, "Epoch archive tip", V006),
+        (7, "Replay attempt epoch", V007),
     };
 
     public static void Apply(SqliteConnection connection, string tablePrefix)
@@ -248,6 +249,20 @@ internal static class MarmotSqliteMigrations
             ALTER TABLE {tp}epoch_archive_new RENAME TO {tp}epoch_archive;
 
             CREATE INDEX {tp}idx_epoch_archive_group ON {tp}epoch_archive (group_id, epoch);");
+    }
+
+    private static void V007(SqliteConnection connection, string tp)
+    {
+        // The epoch a held message was last tried at. A message waiting on keys
+        // cannot become readable until the group's state moves, so without this
+        // every replay re-attempts every held record -- and a peer can leave a
+        // quiet group with as many of those as it likes.
+        //
+        // Nullable because "never tried" is not "tried at epoch zero", and the
+        // two must not be confused: the second would skip a brand new record in
+        // a group still at its first epoch.
+        Execute(connection, $@"
+            ALTER TABLE {tp}messages ADD COLUMN last_attempt_epoch INTEGER NULL;");
     }
 
     private static void Execute(SqliteConnection connection, string sql)
