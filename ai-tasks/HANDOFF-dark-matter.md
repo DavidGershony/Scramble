@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
 **Updated:** 2026-09-12 (eighteenth revision) · **Branch:** `feat/dark-matter`
-· **Last commit at time of writing:** `7021d84`
+· **Last commit at time of writing:** `c0efccd`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -24,7 +24,7 @@ is **no longer pinned to a fixed tag**: `scripts/build-marmot-peers.ps1`
 resolves the newest `wn-agent-vX.Y.Z` by semver on every run and caches on the
 resolved commit, so we track upstream as it moves (decided 2026-09-09 — they
 asked for interop testing now, so the newest is what matters). Latest verified:
-**`wn 0.9.20`**.
+**`wn 0.9.21`** — the exact commit the iOS and Android apps ship (§3aa, §3ab).
 
 Planning is finished. **P0, P1, P2, P3, P4, P6 and P7 are done.** **P8 is
 wired**: `ConvergencePass` reads the commits ingest could not apply, builds the
@@ -1729,7 +1729,7 @@ Both halves were mutated. Hardcoding the candidate's class fails
 ### 3z. The convergence pass is wired — and the wiring found three guesses
 
 2026-09-12. **1032 Marmot tests**, fast gate green (1032 / 516 core / 253 UI),
-**18/18 interop at `wn 0.9.20` with zero skips** (image `mdk.commit 2f44f6b6`,
+**18/18 interop at `wn 0.9.21` with zero skips** (image `mdk.commit fdd398a8`,
 checked rather than assumed — §3x). Twelve commits, `25cfb87`..`7021d84`.
 
 **P8's pieces have a caller now.** `ConvergencePass` reads the commits ingest
@@ -1911,17 +1911,55 @@ less.
 (`MARMOT_VERSION` for the three bound ones, `Cargo.lock` for Linux) and compares
 it to the `mdk.commit` label on our peer image. On 2026-09-13:
 
-| Client | mdk pin | vs a peer at `wn-agent-v0.9.20` |
+| Client | mdk pin | vs our peer, now at `wn-agent-v0.9.21` |
 |---|---|---|
-| `whitenoise-ios` | `fdd398a8` (`marmotkit-v0.9.21`) | 12 ahead |
-| `whitenoise-android` | `fdd398a8`, branch master | 12 ahead |
-| `whitenoise-mac` | `908780b3` (`marmotkit-v0.9.16`) | 80 behind |
-| `whitenoise-linux` | `c4530625` | 197 behind |
+| `whitenoise-ios` | `fdd398a8` (`marmotkit-v0.9.21`) | **same commit** |
+| `whitenoise-android` | `fdd398a8`, branch master | **same commit** |
+| `whitenoise-mac` | `908780b3` (`marmotkit-v0.9.16`) | 92 behind |
+| `whitenoise-linux` | `c4530625` | 209 behind |
 
-`wn-agent-v0.9.21` is **the same commit the phones ship**, so rebuilding the
-peers puts us exactly on what iOS and Android run. Note the direction that
-matters, which is the mirror of §3x: an *older* peer cannot find a disagreement,
-while a *newer* shipping client may already be somewhere we have never tested.
+**We now test against the exact commit the phones ship** (§3ab). Note the
+direction that matters, which is the mirror of §3x: an *older* peer cannot find
+a disagreement, while a *newer* shipping client may already be somewhere we have
+never tested — which is where iOS and Android were until this bump.
+
+### 3ab. Pinned to v0.9.21, and it made a silent bug fatal
+
+2026-09-13. Peers rebuilt onto `fdd398a8` = `wn-agent-v0.9.21`, **18/18 interop
+with zero skips**, container confirmed reporting `wn 0.9.21` rather than assumed.
+
+The §6 drift diff over the twelve commits from `v0.9.20` found one that touches
+us: `ed8b98b2`, *Refresh, validate, and migrate invitation KeyPackages*. It adds
+`validate_invitee_capabilities` in `cgka-engine/src/key_package.rs`, which
+**refuses any KeyPackage whose leaf advertises an extension in `1..=5` or a
+proposal type in `1..=7`** — the RFC 9420 §7.2 implicit ranges. Their own
+comment calls it an admission policy beyond §7.3, and notes the inviter cannot
+repair such a leaf because it is signed: the holder has to republish.
+
+**We pass it by four days.** `0x0003` is inside that range and we advertised it
+until 2026-09-09, when it was removed after reading their `v0.9.19` diff — at
+which point they had merely *stopped emitting* it and nothing rejected it.
+`MarmotLeaf.ExtensionTypes` records why it never surfaced as a failure: a peer
+reading our leaf adds the implicit types back itself. Had we waited for a test
+to go red, every KeyPackage we publish would now be refused at invite time and
+the account would look uninvitable with nothing to point at.
+
+That is the "read the peer's validation path, not only the spec" rule (§4)
+paying out in full, and it is worth noticing that the window was four days.
+
+Nothing else in the twelve is protocol-facing: app-level query bounds, search
+streaming, markdown parsing, telemetry, an agent stream API, and a nightly image
+fix. One is adjacent and worth remembering — `9a456077`, *drop epoch-gap
+backfill intents for groups this device is terminal in*, touches the backfill
+machinery the §5a question is about, though not the stall itself.
+
+**The suite ran in 1m02s against 0.9.21 where it took 13m56s against 0.9.20.**
+Same 18 tests, same zero skips. The difference is in setup wait-loops — chiefly
+`WaitForAsync` on the peer resolving our published account — not in any
+assertion, so it is a peer that becomes ready sooner rather than a suite doing
+less. It has **not** been chased further, and it is **not** evidence that
+anything about §3y's convergence finding changed: that would need the test to
+assert what it currently, deliberately, does not.
 
 ### 3d. Non-code items still open (not blocking)
 
@@ -2124,7 +2162,8 @@ without the interop suite running).
 | Letting `CreateKeyPackage` pick the lifetime | `dotnet-mls` defaults to `(0, ulong.MaxValue)`; `wn-agent` refuses it before reading anything else | Always pass a window from `KeyPackageLifetimePolicy`. The bound is OpenMLS's `MAX_LEAF_NODE_LIFETIME_RANGE_SECONDS`, not a Marmot rule, and no Marmot document restates it. |
 | Adding headroom to the KeyPackage validity | The default already sits exactly on the acceptable range; anything above it is refused | The window is `margin + validity` and the peer's check is `<=`. There is no room above. |
 | Hashing the published bytes to get a KeyPackageRef | The `MLSMessage` framing adds a version and wire format, so the ref matches nobody | `hash_ref` over the inner `KeyPackage` struct only. |
-| Advertising `0x8009` as a leaf extension capability | It is the Legacy profile's shape; a Current peer reads it as a Legacy leaf | Current leaf capabilities are extensions `{0x0003, 0x0006}`, proposals `{0x0008}`. |
+| Advertising `0x8009` as a leaf extension capability | It is the Legacy profile's shape; a Current peer reads it as a Legacy leaf | Components are not MLS capabilities. A Current leaf advertises the Marmot dictionary extension and the agent stream roles, proposals `{0x0008, 0x000a}` — see `MarmotLeaf.ExtensionTypes`, never a remembered list. |
+| Advertising any extension in `1..=5` or proposal in `1..=7` | RFC 9420 §7.2 makes those implicit, so advertising one is malformed rather than redundant — and since `wn-agent-v0.9.21` it is a hard refusal at invite time (`validate_invitee_capabilities`), leaving an account uninvitable for no visible reason | We stopped advertising `0x0003` on 2026-09-09, four days before it became fatal, by reading their diff rather than waiting for a failure. A signed leaf cannot be repaired by the inviter; the holder must republish. |
 | Omitting `safe_aad` from a *leaf* dictionary because it is refused in a GroupContext | Two different surfaces with opposite rules; the leaf must carry it, empty | `0x0002` with an empty component list in the leaf; an error as GroupContext state. |
 | A 500-character hostname in a URL-length test | .NET's own host-length limit trips first, so the test asserts the wrong thing | Pad the path instead; the relay profile permits one. |
 | Literal U+2028/U+2029 in C# source | They are line terminators — the file will not compile | Build such strings at runtime from char codes. |

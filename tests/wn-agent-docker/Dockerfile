@@ -15,7 +15,7 @@
 # local, and report what you find back to them.
 #
 # To reproduce a specific build, override the ref:
-#   $env:MDK_REF = "wn-agent-v0.9.20"
+#   $env:MDK_REF = "wn-agent-v0.9.21"
 #   docker compose -f docker-compose.test.yml build wn-agent
 
 FROM rust:1.91-bookworm AS builder
@@ -35,7 +35,7 @@ ARG MDK_REPO_URL=https://github.com/marmot-protocol/mdk.git
 # This default is only a fallback for a hand-run `docker compose build`. The
 # normal path is scripts/build-marmot-peers.ps1, which resolves the newest
 # wn-agent-vX.Y.Z tag and passes both MDK_REF and MDK_COMMIT.
-ARG MDK_REF=wn-agent-v0.9.20
+ARG MDK_REF=wn-agent-v0.9.21
 
 # The commit MDK_REF resolved to when the build was launched.
 #
