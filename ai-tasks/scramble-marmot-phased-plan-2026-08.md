@@ -358,12 +358,24 @@ unnecessary is worse than not asking, because it invites the change to be made.
 
 ## 5. Questions for Whitenoise — send early
 
-These gate real decisions, and two of them can *remove* work. Send with the date
-answer, not after it.
+**Two are left.** The rest were closed by decisions of ours or answered by
+building the thing — see each entry. What remains is Q4 and the convergence
+question in §5a, and only Q4 moves the date.
 
-1. **Which mdk tag is your deployed fleet running?** (We have re-pinned to
-   `wn-agent-v0.9.10`; HEAD has moved 84 commits past it.) — *Decides what we
-   test interop against, and whether our pin is already behind yours.*
+**Scope decided (user, 2026-09-13): Dark Matter is the only version that
+matters. There will be no dual-running window, and backwards compatibility is
+not a goal.** That closes Q1 and half of Q3 without asking anyone, and it means
+no compatibility shim, no 0.7/0.8-era path, and no second wire format is to be
+built at any point. The one consequence worth holding on to: our cutover cannot
+usefully land before Whitenoise flips, because after it there is nothing left in
+Scramble that can talk to an unflipped peer. That makes their flip date a
+constraint on *our* schedule rather than on our scope.
+
+1. ~~**Which mdk tag is your deployed fleet running?**~~ **CLOSED
+   (2026-09-13).** Moot twice over. `scripts/build-marmot-peers.ps1` no longer
+   pins at all — it resolves the newest `wn-agent-vX.Y.Z` by semver on every
+   run — and with no backwards compatibility to maintain, what their fleet ran
+   before the flip does not constrain anything we build.
 2. ~~**Do any production groups still require the legacy `0xf2f1`
    account-identity proof?**~~ **DECIDED (user, 2026-08-10): Legacy is out of
    scope.** We assume WN drops `0xf2f1` and always will, until they tell us
@@ -373,16 +385,53 @@ answer, not after it.
    contradiction surfaces early — but it is no longer a question that gates the
    plan. **Reversal cost if WN contradicts us: +S** (step-4 §2 has the full
    construction pinned; only the vectors would need generating).
-3. **When does deployed Whitenoise flip to Dark Matter, and is there a
-   dual-running window?** — *This is our hard deadline. It also decides whether
-   Scramble needs any 0.7/0.8-era compatibility during transition.*
+3. **When does deployed Whitenoise flip to Dark Matter?** — *A scheduling
+   input now, not a scope question.* The dual-running half is **closed
+   (2026-09-13)**: there will be no window on our side and no transitional
+   compatibility is being built. What is left is the date itself, which bounds
+   how early our own cutover is worth landing.
 4. **Do you intend to stabilise the wire before that flip — i.e. is there a
    freeze point or a "wire-stable" tag we can build against?** — *At 7–8
    commits/day, this is the single biggest driver of our pessimistic arm (§6).
    A stable tag we can target moves our expected date earlier and narrows the
    band substantially.*
-5. **Is `Disband` (component `0x800c`) required for interop, or optional?** —
-   *Decides whether P12 stays deferred or moves before cutover.*
+5. ~~**Is `Disband` (component `0x800c`) required for interop, or
+   optional?**~~ **ANSWERED by reading their source, 2026-08 (handoff §3h).**
+   The component is in `default_group_components()`, so the *state* was
+   mandatory all along in both directions — it is built. The disband *protocol*
+   is still P12 and still deferred; whether that flow must work before cutover
+   is a scheduling call of ours, not a question for them.
+
+---
+
+## 5a. The one technical question outstanding
+
+**Does a member that has committed past an epoch ever replay history to peel a
+competing commit framed at it — and is `epoch_stall.rs`'s
+`EPOCH_STALL_BACKFILL_THRESHOLD = 8` the only path back?**
+
+Found building P6's exit criterion (handoff §3y,
+`tests/Scramble.Diagnostics/DarkMatterInterop/ConvergenceInteropTests.cs`). In a
+genuine same-epoch race against `wn 0.9.20` the peer rewinds to the fork epoch,
+abandons its own commit, and stops. It never folds ours; repeated `sync` and
+`run-maintenance` passes do not move it.
+
+Three things worth saying when we ask, the last of which is new:
+
+- **Our comparator matches their reference model line for line** —
+  `crates/cgka-conformance-simulator/src/reference_convergence.rs:521-526`,
+  with the last three tie-breaks reversed. This is not a disagreement about
+  which branch wins.
+- **A kind-445 envelope is sealed under its epoch's exporter secret**, so a
+  member past that epoch cannot peel a competing commit from it until something
+  replays history. The *order* of events therefore decides whether a fork is
+  visible at all.
+- **We have now built the mechanism we suspect is missing on their side**
+  (handoff §3z): commits that fail to apply are kept, reconsidered as branch
+  candidates on a later pass, and retired only once they fall beyond the rewind
+  horizon. If they have an equivalent we would like to know what triggers it;
+  if they do not, that is a concrete difference to put in front of them rather
+  than a symptom.
 
 ---
 

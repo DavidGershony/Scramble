@@ -1906,8 +1906,19 @@ standing in for a caller that does not exist. Removing the new call now fails
   matching the reference byte for byte (§3j).
 - **Watch the interop step's cost in CI.** It is the slowest step in
   `integration.yml`; §3g says what to do if it becomes the reason PRs are slow.
-- **Send Whitenoise the questions** in plan §5 (deployed tag, flip date,
-  wire-stable tag, disband-for-interop). Q2 on legacy proofs is closed.
+- **Send Whitenoise the two questions that are left** — plan §5 Q4 (is there a
+  freeze point or a wire-stable tag before the flip) and §5a (does a member past
+  an epoch ever replay history to peel a competing commit from it). Q4 is the
+  single biggest lever on the date band in §7; §5a is the convergence question
+  below, now askable as a difference rather than a symptom.
+  **The rest are closed.** Q1 (deployed tag) and half of Q3 (dual-running
+  window) fell to a scope decision — **Dark Matter only, no window, backwards
+  compatibility is not a goal (user, 2026-09-13)** — which also means no
+  compatibility shim is to be built at any point. Q2 (legacy proof) was decided
+  2026-08-10. Q5 (disband) was answered by reading their source, §3h. What is
+  left of Q3 is the flip date as a scheduling input: our cutover cannot usefully
+  land before it, because afterwards nothing in Scramble can talk to an
+  unflipped peer.
 - **Ask Max why a rewound peer never folds the winning commit.** Found
   2026-09-11 building P6's exit criterion
   (`tests/Scramble.Diagnostics/DarkMatterInterop/ConvergenceInteropTests.cs`).
