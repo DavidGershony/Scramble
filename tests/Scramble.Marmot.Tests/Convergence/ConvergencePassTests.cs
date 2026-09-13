@@ -379,6 +379,51 @@ public class ConvergencePassTests : IDisposable
             delivered.SenderIdentity);
     }
 
+    [Fact]
+    public async Task APassDoesNothingWhileOurOwnCommitIsInFlight()
+    {
+        // Ingest refuses input mid-publish because applying an inbound commit
+        // while ours is staged and unacknowledged forks us from the epoch we
+        // are about to ask everyone to adopt. A reorg is that same mistake with
+        // the volume turned up: it moves the group to another branch entirely,
+        // while a commit built on the branch we left may already be on a relay.
+        //
+        // It also strands the publish. SetStable replaces the state without
+        // releasing the pending reference, so the confirmation that arrives
+        // afterwards has nothing legal to do.
+        EpochArchive archive = NewArchive();
+        Fork fork = await ForkAsync(archive);
+        MessageIngest ingest = NewIngest(archive);
+
+        byte[] carols = Commit(fork.Carol);
+        byte[] hersFirst = Commit(fork.Alice.Group);
+        byte[] hersSecond = Commit(fork.Alice.Group);
+
+        await ingest.IngestAsync(fork.Us, fork.GroupId, carols);
+        await ingest.IngestAsync(fork.Us, fork.GroupId, hersFirst);
+        await ingest.IngestAsync(fork.Us, fork.GroupId, hersSecond);
+
+        ulong before = fork.Us.Epoch;
+
+        var epoch = new EpochId(fork.Us.Epoch);
+        PendingStateRef pending = _epochs.NextPendingRef();
+        _epochs.BeginPending(
+            fork.GroupId, epoch, new EpochId(epoch.Value + 1),
+            new StagedCommitHandle([7]), pending, PendingKind.GroupEvolution);
+
+        Quiesce();
+        ConvergencePassResult result = await NewPass(archive).RunAsync(fork.Us, fork.GroupId);
+
+        Assert.Equal(ConvergenceStatus.Syncing, result.Status);
+        Assert.False(result.Reorged);
+        Assert.Equal(before, fork.Us.Epoch);
+
+        // And the publish is still a publish, so its confirmation still has
+        // somewhere to land.
+        Assert.IsType<EpochState.PendingPublish>(_epochs.GetState(fork.GroupId));
+        Assert.Equal(fork.GroupId, _epochs.GroupForPending(pending));
+    }
+
     // ---- When it declines to decide ----
 
     [Fact]

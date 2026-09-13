@@ -115,6 +115,22 @@ public sealed class ConvergencePass
     {
         ArgumentNullException.ThrowIfNull(live);
 
+        // A group mid-publish is holding a commit that may already be on a
+        // relay. Moving it onto another branch now abandons that commit while
+        // leaving the publish looking live: SetStable replaces the state
+        // without releasing the pending reference, so the confirmation that
+        // follows has nothing legal left to do. Ingest refuses input here for
+        // the smaller version of the same reason — applying somebody else's
+        // commit mid-publish forks us from the epoch we are about to ask
+        // everyone to adopt — and a reorg is that mistake with the volume up.
+        //
+        // Syncing rather than Blocked, because a publish finishing is exactly
+        // the kind of thing waiting resolves. Checked before anything is read,
+        // since it is the cheapest refusal available.
+        if (!_epochs.CanIngest(groupId))
+            return new ConvergencePassResult(
+                ConvergenceStatus.Syncing, live, false, null, [], []);
+
         IReadOnlyList<MessageRecord> retryable =
             await _storage.ListMessagesByStateAsync(groupId, MessageRecordState.Retryable, ct);
 
