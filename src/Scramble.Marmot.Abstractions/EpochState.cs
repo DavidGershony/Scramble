@@ -26,6 +26,22 @@ public readonly record struct PendingStateRef(ulong Value)
 }
 
 /// <summary>
+/// What kind of operation a pending publish represents.
+/// </summary>
+/// <remarks>
+/// Beside the state machine rather than with the manager that uses it, because
+/// it is part of what a pending publish has to be restored from: a commit
+/// recovered after a restart has to be reconciled as the operation it was, and
+/// a disband cannot be retried as a group evolution.
+/// </remarks>
+public enum PendingKind
+{
+    CreateGroup,
+    GroupEvolution,
+    Disband,
+}
+
+/// <summary>
 /// Raised when a caller attempts a transition the state machine forbids.
 /// </summary>
 public sealed class InvalidEpochTransitionException : InvalidOperationException

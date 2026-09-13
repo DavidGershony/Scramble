@@ -16,6 +16,7 @@ internal static class MarmotSqliteMigrations
         (5, "Epoch archive", V005),
         (6, "Epoch archive tip", V006),
         (7, "Replay attempt epoch", V007),
+        (8, "Epoch states", V008),
     };
 
     public static void Apply(SqliteConnection connection, string tablePrefix)
@@ -263,6 +264,50 @@ internal static class MarmotSqliteMigrations
         // a group still at its first epoch.
         Execute(connection, $@"
             ALTER TABLE {tp}messages ADD COLUMN last_attempt_epoch INTEGER NULL;");
+    }
+
+    private static void V008(SqliteConnection connection, string tp)
+    {
+        // The epoch state machine, for the three states a restart cannot
+        // otherwise recover. Nothing writes Stable, Merging or Recovering --
+        // EpochStateRecord says why for each. So a row here always means the
+        // group is refusing something, and an absent row means it is ordinary,
+        // which is what EpochManager already reads a group it has no state for
+        // as.
+        //
+        // Keyed by the group, not by the pending reference: a group has one
+        // state, and a second row for it would make which one describes the
+        // group a coin flip at exactly the moment -- session open, after a
+        // crash -- when nobody is there to arbitrate.
+        //
+        // The CHECK is the pending fields standing or falling together. Four
+        // fields that are meaningless apart: a row with the epoch and no staged
+        // commit reads back as a reconcilable publish with nothing to publish.
+        // It cannot be tripped through EpochStateRecord, whose factories refuse
+        // the same shape earlier and with a better message -- it is here for a
+        // writer that is not that type, which is the only kind of writer a
+        // schema can still catch.
+        Execute(connection, $@"
+            CREATE TABLE {tp}epoch_states (
+                group_id      BLOB    NOT NULL PRIMARY KEY,
+                kind          INTEGER NOT NULL,
+                epoch         INTEGER NOT NULL,
+                prior_epoch   INTEGER NULL,
+                staged_commit BLOB    NULL,
+                pending_ref   INTEGER NULL,
+                pending_kind  INTEGER NULL,
+                updated_at    TEXT    NOT NULL,
+                CHECK (
+                    (kind =  1 AND prior_epoch   IS NOT NULL
+                               AND staged_commit IS NOT NULL
+                               AND pending_ref   IS NOT NULL
+                               AND pending_kind  IS NOT NULL)
+                 OR (kind <> 1 AND prior_epoch   IS NULL
+                               AND staged_commit IS NULL
+                               AND pending_ref   IS NULL
+                               AND pending_kind  IS NULL)
+                )
+            );");
     }
 
     private static void Execute(SqliteConnection connection, string sql)

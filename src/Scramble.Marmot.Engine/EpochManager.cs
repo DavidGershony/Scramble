@@ -1,16 +1,6 @@
 namespace Scramble.Marmot.Engine;
 
 /// <summary>
-/// What kind of operation a pending publish represents.
-/// </summary>
-public enum PendingKind
-{
-    CreateGroup,
-    GroupEvolution,
-    Disband,
-}
-
-/// <summary>
 /// Owns the epoch state of every group, and the bookkeeping that lets the
 /// engine tell its own commits apart from other members'.
 /// </summary>
