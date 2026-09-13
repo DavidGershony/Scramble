@@ -1889,6 +1889,40 @@ standing in for a caller that does not exist. Removing the new call now fails
 - **A vector that distinguishes a tie-break winner** — still not closable with
   what upstream ships (§3v). Unchanged.
 
+### 3aa. The live apps, and why they are not the interop peer
+
+2026-09-13. Max mentioned new repos; they are real and active —
+`marmot-protocol/whitenoise-{ios,android,mac,linux}`, with the Flutter app,
+`whitenoise-rs` and `whitenoise-desktop` all archived on 2026-08-05.
+
+**They cannot replace `mdk-cli` as the peer, and the reason is not effort.**
+Every one of them is a *consumer* of mdk rather than an independent
+implementation: Android and Linux build `marmot-app` / `cgka-traits` straight
+from `marmot-protocol/mdk` `branch = master`, and iOS and Mac vendor a
+`MarmotKit` binding over the same source. Driving them would exercise the
+protocol code we already test against, wrapped in a UI. They are also all GUI
+clients — Compose, SwiftUI, and on Linux a Rust desktop app pulling `rfd`,
+`resvg` and `rodio` — so none is headlessly drivable, and we would be trading a
+scriptable CLI with zero-skip enforcement for emulator automation that proves
+less.
+
+**What they are good for is answering what actually ships.**
+`./scripts/check-shipped-pins.ps1` reads each client's recorded pin
+(`MARMOT_VERSION` for the three bound ones, `Cargo.lock` for Linux) and compares
+it to the `mdk.commit` label on our peer image. On 2026-09-13:
+
+| Client | mdk pin | vs a peer at `wn-agent-v0.9.20` |
+|---|---|---|
+| `whitenoise-ios` | `fdd398a8` (`marmotkit-v0.9.21`) | 12 ahead |
+| `whitenoise-android` | `fdd398a8`, branch master | 12 ahead |
+| `whitenoise-mac` | `908780b3` (`marmotkit-v0.9.16`) | 80 behind |
+| `whitenoise-linux` | `c4530625` | 197 behind |
+
+`wn-agent-v0.9.21` is **the same commit the phones ship**, so rebuilding the
+peers puts us exactly on what iOS and Android run. Note the direction that
+matters, which is the mirror of §3x: an *older* peer cannot find a disagreement,
+while a *newer* shipping client may already be somewhere we have never tested.
+
 ### 3d. Non-code items still open (not blocking)
 
 - **Open a PR for `feat/dark-matter`.** **104 commits** ahead of `master` and
@@ -1975,6 +2009,7 @@ dotnet test tests/Scramble.Diagnostics/ --filter "Category=Integration|Category=
 # matches neither "Passed!" nor "Failed!". stage6 fails on any skip for exactly
 # that reason; do not read a bare dotnet test result yourself.
 ./scripts/build-marmot-peers.ps1          # resolves the newest wn-agent tag, caches on its commit
+./scripts/check-shipped-pins.ps1          # what the live iOS/Android/Mac/Linux apps actually ship
 ./.claude/skills/run-tests/scripts/stage6-dark-matter.ps1
 
 # Driving the mdk-cli peer by hand. The binary is `wn`, not `mdk-cli`, and under
@@ -2070,6 +2105,8 @@ without the interop suite running).
 | Invalidating a reorg's losing history by epoch alone | At the fork epoch a message survives (both branches share its keys) and a commit does not (only one branch head survives) | Sweep by epoch above the fork, then invalidate commits *at* the fork by kind. |
 | Filing a message under the epoch you were at when it arrived | A competing commit was framed against the epoch you have left; recording yours describes every fork as starting wherever you happened to be | Both wire formats carry the epoch in the clear. Read it, and decode before the ingestibility gate so a buffered record gets it too. |
 | Testing a read-before-apply rule with an Add commit | Its proposals are inline and its committer keeps its leaf, so the case cannot tell the orderings apart — the test passes either way | Use a commit that cites a proposal by hash. A departure commit does. |
+| Taking the version our peer was built from as the version users run | On 2026-09-13 the iOS and Android apps were 12 commits *ahead* of the newest `wn-agent` tag, while Mac was 80 behind it and Linux 197 | `./scripts/check-shipped-pins.ps1`. Each client records its own mdk pin; read those rather than the tag list. |
+| Reaching for a White Noise app as the interop peer | They consume mdk rather than implementing the protocol, so they exercise code the CLI peer already covers — and every one of them is a GUI | Keep `mdk-cli`. Use the apps to answer what ships, not to test the wire. |
 | Reaching for `whitenoise-rs` or `wn-agent` as the interop peer | The first is archived and legacy-only; the second never subscribes, so it cannot receive an invite | Use `tests/mdk-cli-docker` — mdk's own CLI. |
 | Expecting `wn-agent` to fetch anything without a held subscription | Its relay connection sits at `sent: 0 events`; `subscribe_inbound` is streaming and the subscription dies with the connection | Hold it open, and keep the pipe's writer alive — `printf \| socat` half-closes at EOF. |
 | Polling `group_info` while holding a subscription | A held subscription starves the agent's small control pool and the query returns nothing at all | Read the stream while subscribed; query after releasing. |

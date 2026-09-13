@@ -371,11 +371,20 @@ usefully land before Whitenoise flips, because after it there is nothing left in
 Scramble that can talk to an unflipped peer. That makes their flip date a
 constraint on *our* schedule rather than on our scope.
 
-1. ~~**Which mdk tag is your deployed fleet running?**~~ **CLOSED
-   (2026-09-13).** Moot twice over. `scripts/build-marmot-peers.ps1` no longer
-   pins at all — it resolves the newest `wn-agent-vX.Y.Z` by semver on every
-   run — and with no backwards compatibility to maintain, what their fleet ran
-   before the flip does not constrain anything we build.
+1. ~~**Which mdk tag is your deployed fleet running?**~~ **CLOSED as a
+   question (2026-09-13) — it is now something we read.** With no backwards
+   compatibility to maintain, what their fleet ran *before* the flip constrains
+   nothing we build. What the shipping Dark Matter clients pin *now* is a
+   different matter, and every one of them records it in its own repository:
+   `./scripts/check-shipped-pins.ps1` reads all four and compares them to the
+   commit our peer image was built from. No answer to wait for, and none that
+   can go stale in a document.
+
+   The spread on 2026-09-13, which is the reason it is worth a script:
+   `whitenoise-ios` and `whitenoise-android` both on mdk `fdd398a8`
+   (`marmotkit-v0.9.21`), `whitenoise-mac` 80 commits behind that,
+   `whitenoise-linux` 197 behind. A suite green against one point on that range
+   says less about the others than it looks.
 2. ~~**Do any production groups still require the legacy `0xf2f1`
    account-identity proof?**~~ **DECIDED (user, 2026-08-10): Legacy is out of
    scope.** We assume WN drops `0xf2f1` and always will, until they tell us
