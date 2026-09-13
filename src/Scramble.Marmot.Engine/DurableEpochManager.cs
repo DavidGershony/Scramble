@@ -234,11 +234,18 @@ public sealed class DurableEpochManager
     /// has moved out of Unrecoverable must not come back frozen from a row
     /// nobody cleared.
     /// </remarks>
-    public async Task DetectForkAsync(
+    public async Task<bool> DetectForkAsync(
         GroupId groupId, IReadOnlyList<MessageId> buffered, CancellationToken ct = default)
     {
-        _epochs.DetectFork(groupId, buffered);
+        // Cleared only if the group actually moved. A refused detection that
+        // cleared anyway would erase the very refusal that caused it, and the
+        // group would come back ingesting -- the in-memory mistake made
+        // permanent, and silent, because the state it should have kept is gone.
+        if (!_epochs.DetectFork(groupId, buffered))
+            return false;
+
         await _storage.ClearEpochStateAsync(groupId, ct);
+        return true;
     }
 
     /// <summary>

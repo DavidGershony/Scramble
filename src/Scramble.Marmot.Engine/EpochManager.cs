@@ -203,11 +203,25 @@ public sealed class EpochManager
         return (meta.GroupId, meta.PriorEpoch);
     }
 
-    /// <summary>Moves a group into Recovering. Legal from any state.</summary>
-    public void DetectFork(GroupId groupId, IReadOnlyList<MessageId> buffered)
+    /// <summary>
+    /// Moves a group into Recovering.
+    /// </summary>
+    /// <remarks>
+    /// Refuses a group that is Unrecoverable or Disbanded, the same way
+    /// <see cref="SetStable"/> does and for the same reason: those states exist
+    /// to stop ordinary traffic from resuming a group, and a fork detection is
+    /// ordinary traffic. Reported rather than thrown, because the caller here is
+    /// an inbound path where a refusal is an outcome and not a bug.
+    /// </remarks>
+    /// <returns>True if the group moved; false if it was refused.</returns>
+    public bool DetectFork(GroupId groupId, IReadOnlyList<MessageId> buffered)
     {
+        if (IsUnrecoverable(groupId) || IsDisbanded(groupId))
+            return false;
+
         var previous = GetState(groupId) ?? new EpochState.Stable(new EpochId(0));
         _states[groupId] = previous.DetectFork(buffered);
+        return true;
     }
 
     /// <summary>

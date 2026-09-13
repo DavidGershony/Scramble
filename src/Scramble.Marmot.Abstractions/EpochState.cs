@@ -188,9 +188,39 @@ public abstract record EpochState
             ? new Stable(nextEpoch)
             : throw Illegal(nameof(Stable), "merging requires Merging");
 
-    /// <summary>To Recovering. Always legal — a fork can be discovered at any time.</summary>
+    /// <summary>
+    /// To Recovering, from any state the group is still running in.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A fork can be discovered at any time, and from a live group this is
+    /// always the right move: <see cref="Recovering"/> keeps ingesting, because
+    /// convergence needs the inputs to choose a branch.
+    /// </para>
+    /// <para>
+    /// <b>Refused from <see cref="Unrecoverable"/> and <see cref="Disbanded"/>,
+    /// which is what those two states are for.</b> Recovering ingests — so
+    /// allowing this would let inbound traffic restart a group frozen pending a
+    /// verified repair, or resurrect one that is terminally gone.
+    /// <see cref="RepairToStable"/> is documented as the only way out of the
+    /// first and the second has no way out at all, and a transition that walks
+    /// around both is not a smaller mistake for being a quiet one.
+    /// </para>
+    /// <para>
+    /// Nothing is lost by refusing. A frozen group froze precisely because no
+    /// branch could be validated from what it retained, so being told that
+    /// there is a fork is not news to it.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="InvalidEpochTransitionException">
+    /// The group is frozen or disbanded.
+    /// </exception>
     public EpochState DetectFork(IReadOnlyList<MessageId> buffered) =>
-        new Recovering(CurrentEpoch, buffered);
+        this is Unrecoverable or Disbanded
+            ? throw Illegal(
+                nameof(Recovering),
+                "a frozen or disbanded group does not reopen on ordinary traffic")
+            : new Recovering(CurrentEpoch, buffered);
 
     /// <summary>To Unrecoverable. Always legal; freezes the current epoch.</summary>
     public EpochState ToUnrecoverable() => new Unrecoverable(CurrentEpoch);

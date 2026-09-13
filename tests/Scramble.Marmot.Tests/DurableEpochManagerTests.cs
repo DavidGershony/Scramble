@@ -374,19 +374,47 @@ public class DurableEpochManagerTests
     }
 
     [Fact]
-    public async Task AForkedGroupDoesNotComeBackFrozenEither()
+    public async Task AFrozenGroupIsNotReopenedByAForkDetection()
     {
-        // Recovering is not stored -- it ingests, and its buffered ids are
-        // already durable as message rows -- but a group leaving Unrecoverable
-        // this way must not be restored into the state it just left.
+        // This asserted the opposite until the state machine was fixed: a fork
+        // detection moved a frozen group to Recovering, which ingests, so
+        // ordinary traffic lifted a freeze that RepairToStable is documented to
+        // be the only exit from.
+        //
+        // The durable half matters just as much. Clearing the row on a refused
+        // detection would erase the refusal that caused it, and the group would
+        // come back ingesting -- the same mistake, made permanent and silent.
         var group = NewGroup();
         (DurableEpochManager durable, EpochManager epochs, TracingStore store) = NewManager();
         await durable.MarkUnrecoverableAsync(group);
 
-        await durable.DetectForkAsync(group, Array.Empty<MessageId>());
+        Assert.False(await durable.DetectForkAsync(group, Array.Empty<MessageId>()));
+
+        Assert.IsType<EpochState.Unrecoverable>(epochs.GetState(group));
+
+        var restarted = new EpochManager();
+        await new DurableEpochManager(restarted, store, Clock).RestoreAsync();
+
+        Assert.True(restarted.IsUnrecoverable(group));
+        Assert.False(restarted.CanIngest(group));
+    }
+
+    [Fact]
+    public async Task AForkDetectionOnALiveGroupStillClearsWhatItWasHolding()
+    {
+        // The other side of that guard: a detection that is accepted must still
+        // clear, or a group that was mid-publish when the fork arrived comes
+        // back pending a commit its branch no longer has.
+        var group = NewGroup();
+        (DurableEpochManager durable, EpochManager epochs, TracingStore store) = NewManager();
+
+        epochs.SetStable(group, new EpochId(4));
+        await durable.BeginPendingAsync(
+            group, new EpochId(4), new EpochId(5), Staged, PendingKind.GroupEvolution);
+
+        Assert.True(await durable.DetectForkAsync(group, Array.Empty<MessageId>()));
 
         Assert.IsType<EpochState.Recovering>(epochs.GetState(group));
-        Assert.Equal(0, store.Count);
 
         var restarted = new EpochManager();
         await new DurableEpochManager(restarted, store, Clock).RestoreAsync();

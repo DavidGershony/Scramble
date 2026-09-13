@@ -338,17 +338,42 @@ public class EpochManagerTests
     }
 
     [Fact]
-    public void ForkDetectionIsAcceptedFromAnyState()
+    public void ForkDetectionIsAcceptedFromAnyRunningState()
     {
         var group = NewGroup();
         AtEpoch(group, 4, out var manager);
         manager.BeginPending(group, new EpochId(4), new EpochId(5), Staged,
             manager.NextPendingRef(), PendingKind.GroupEvolution);
 
-        manager.DetectFork(group, Array.Empty<MessageId>());
+        Assert.True(manager.DetectFork(group, Array.Empty<MessageId>()));
 
         // Recovering still accepts ingest — convergence needs the inputs.
         Assert.True(manager.CanIngest(group));
         Assert.Equal(new EpochId(5), manager.GetEpoch(group));
+    }
+
+    [Fact]
+    public void ForkDetectionIsRefusedByAGroupThatHasBeenStopped()
+    {
+        // Refused rather than thrown: the caller is an inbound path, where a
+        // group that will not reopen is an outcome and not a bug. Reported all
+        // the same, because a silent no-op here reads exactly like success.
+        var frozen = NewGroup();
+        var gone = NewGroup();
+        AtEpoch(frozen, 4, out var manager);
+        AtEpoch(gone, 6, out _);
+
+        manager.SetStable(gone, new EpochId(6));
+        manager.MarkUnrecoverable(frozen);
+        manager.DetectFork(gone, Array.Empty<MessageId>());
+        manager.MarkDisbanded(gone, new EpochId(6));
+
+        Assert.False(manager.DetectFork(frozen, Array.Empty<MessageId>()));
+        Assert.False(manager.DetectFork(gone, Array.Empty<MessageId>()));
+
+        Assert.False(manager.CanIngest(frozen));
+        Assert.False(manager.CanIngest(gone));
+        Assert.True(manager.IsUnrecoverable(frozen));
+        Assert.True(manager.IsDisbanded(gone));
     }
 }

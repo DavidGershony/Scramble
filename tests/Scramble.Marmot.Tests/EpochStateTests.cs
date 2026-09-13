@@ -35,6 +35,25 @@ public class EpochStateTests
         { nameof(EpochState.Disbanded), Disbanded() },
     };
 
+    /// <summary>The states a group is still running in.</summary>
+    public static TheoryData<string, EpochState> RunningStates() => new()
+    {
+        { nameof(EpochState.Stable), Stable() },
+        { nameof(EpochState.PendingPublish), Pending() },
+        { nameof(EpochState.Merging), Merging() },
+        { nameof(EpochState.Recovering), Recovering() },
+    };
+
+    /// <summary>
+    /// The two states that exist to stop a group, whose whole purpose is that
+    /// ordinary traffic cannot lift them.
+    /// </summary>
+    public static TheoryData<string, EpochState> StoppedStates() => new()
+    {
+        { nameof(EpochState.Unrecoverable), Unrecoverable() },
+        { nameof(EpochState.Disbanded), Disbanded() },
+    };
+
     // -- Legal transitions --
 
     [Fact]
@@ -89,8 +108,8 @@ public class EpochStateTests
     }
 
     [Theory]
-    [MemberData(nameof(AllStates))]
-    public void ForkDetectionIsLegalFromEveryState(string name, EpochState state)
+    [MemberData(nameof(RunningStates))]
+    public void ForkDetectionIsLegalFromEveryRunningState(string name, EpochState state)
     {
         Assert.NotNull(name);
 
@@ -98,6 +117,22 @@ public class EpochStateTests
 
         // The last stable epoch carries across, whatever we came from.
         Assert.Equal(state.CurrentEpoch, Assert.IsType<EpochState.Recovering>(next).LastStableEpoch);
+    }
+
+    [Theory]
+    [MemberData(nameof(StoppedStates))]
+    public void ForkDetectionDoesNotReopenAStoppedGroup(string name, EpochState state)
+    {
+        // This theory used to run over every state and assert the opposite,
+        // which made the defect the specification. Recovering ingests, so a
+        // fork detection -- ordinary inbound traffic -- would have restarted a
+        // group frozen pending a verified repair, or resurrected one that is
+        // terminally gone. RepairToStable is documented as the only way out of
+        // the first, and the second has none.
+        Assert.NotNull(name);
+
+        Assert.Throws<InvalidEpochTransitionException>(
+            () => state.DetectFork(Array.Empty<MessageId>()));
     }
 
     [Theory]
