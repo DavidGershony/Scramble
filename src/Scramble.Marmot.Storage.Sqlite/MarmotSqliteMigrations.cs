@@ -17,6 +17,7 @@ internal static class MarmotSqliteMigrations
         (6, "Epoch archive tip", V006),
         (7, "Replay attempt epoch", V007),
         (8, "Epoch states", V008),
+        (9, "Commit publish attempts", V009),
     };
 
     public static void Apply(SqliteConnection connection, string tablePrefix)
@@ -307,6 +308,42 @@ internal static class MarmotSqliteMigrations
                                AND pending_ref   IS NULL
                                AND pending_kind  IS NULL)
                 )
+            );");
+    }
+
+    private static void V009(SqliteConnection connection, string tp)
+    {
+        // Publish intent for commits. StagedCommit.Publishing() draws the line
+        // that decides crash recovery -- before it the commit is ours alone and
+        // clearing it is free, after it a relay may hold it and clearing it
+        // locally is the one move that guarantees a fork -- and that line is a
+        // private field in an in-memory object. This table is what remembers
+        // which side of it a dead process was on.
+        //
+        // Separate from epoch_states rather than a column on it, because the
+        // two rows record different moments and are cleared at different ones:
+        // the epoch-state row says a commit was STAGED and is dropped the
+        // instant a publish is confirmed, which is exactly the instant this
+        // fact -- the relay took it, we have not applied it yet -- becomes the
+        // only thing standing between a restart and abandoning a live commit.
+        //
+        // Keyed by the group because MLS refuses a second staged commit, so a
+        // second row could only describe one that no longer exists.
+        //
+        // No CHECK on `state`, unlike V008's. V008 pins four fields that are
+        // meaningless apart; here every column is required in every state, so
+        // the only CHECK available would enumerate the known values -- and
+        // SQLite cannot alter a CHECK, so the day a fifth state is added it
+        // would cost a table rebuild to say something the reader already
+        // refuses, with a better message.
+        Execute(connection, $@"
+            CREATE TABLE {tp}commit_publish_attempts (
+                group_id      BLOB    NOT NULL PRIMARY KEY,
+                commit_id     BLOB    NOT NULL,
+                new_epoch     INTEGER NOT NULL,
+                state         INTEGER NOT NULL,
+                handed_off_at TEXT    NOT NULL,
+                updated_at    TEXT    NOT NULL
             );");
     }
 

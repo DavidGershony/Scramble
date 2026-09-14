@@ -66,6 +66,15 @@ public sealed class StagedCommit : IDisposable
             ?? throw new InvalidOperationException(
                 "A staged commit did not frame a commit. This is a bug in the caller "
                 + "that built it, not something the wire can cause.");
+
+        // Also read here and nowhere later, for the same reason as the class
+        // above: the group is still at the old epoch while the commit is
+        // staged, so a property computing this on demand would answer
+        // correctly right up until Applied(), then start naming the epoch
+        // after the one this commit produces. CommitPublisher writes it into
+        // the durable publish record, and a record naming the wrong epoch
+        // tells a recovering session the commit has not landed when it has.
+        NewEpoch = new EpochId(checked(group.Epoch + 1));
     }
 
     /// <summary>The commit, framed as a PublicMessage.</summary>
@@ -83,6 +92,9 @@ public sealed class StagedCommit : IDisposable
     /// the commit produces.
     /// </remarks>
     public CommitOrderingPriority OrderingPriority { get; }
+
+    /// <summary>The epoch the group reaches once this commit is applied.</summary>
+    public EpochId NewEpoch { get; }
 
     /// <summary>
     /// The Welcome for the added members, or null when nobody was added.
@@ -146,6 +158,14 @@ public sealed class StagedCommit : IDisposable
     /// after this point is deliberately left staged rather than tidied away,
     /// because a stranded pending commit is recoverable and a silent fork is
     /// not.
+    /// </para>
+    /// <para>
+    /// <b>This flag does not survive the process, and on its own it cannot.</b>
+    /// A restart that finds a staged commit has no way to tell which side of
+    /// this line it was on, and the two sides want opposite answers.
+    /// <see cref="CommitPublisher"/> is what writes it down — call this through
+    /// that rather than by hand, or the durable record and the in-memory flag
+    /// will disagree in the one direction that forks the group.
     /// </para>
     /// </remarks>
     public void Publishing() => _state = State.Publishing;
