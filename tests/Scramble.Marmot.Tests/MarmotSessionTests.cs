@@ -44,7 +44,7 @@ public class MarmotSessionTests : IDisposable
     private const ulong Now = 1_760_000_000;
     private static readonly string[] Relays = ["wss://relay.example.com"];
 
-    private readonly DateTimeOffset _now = DateTimeOffset.UnixEpoch.AddSeconds(Now);
+    private DateTimeOffset _now = DateTimeOffset.UnixEpoch.AddSeconds(Now);
 
     public void Dispose() => _fixture.Dispose();
 
@@ -556,6 +556,77 @@ public class MarmotSessionTests : IDisposable
         Assert.Equal(ConvergenceStatus.Settled, result.Status);
         Assert.False(result.Reorged);
         Assert.Empty(replay.Delivered);
+    }
+
+    [Fact]
+    public async Task AReorgMovesTheSessionAndDeliversWhatTheBranchItAdoptedSaid()
+    {
+        // The reorg half of ConvergeAsync had no test at all: every existing
+        // case returns early on Reorged == false, so keeping the pre-reorg
+        // group, never persisting the move, and skipping the replay it owes all
+        // passed the suite untouched.
+        Pair pair = await PairAsync(new FixedRelay(CommitPublishOutcome.Accepted));
+
+        // They take a longer path and talk on it. Depth decides the branch, so
+        // the outcome follows from the rule rather than from whichever keys
+        // this run generated.
+        byte[] theirsFirst = TheirCommit(pair);
+        byte[] theirsSecond = TheirCommit(pair);
+        byte[] saidOnTheirBranch = AppMessage(pair, "over here");
+
+        // We commit once from the epoch we shared -- depth 1 against their 2.
+        await RotateAsync(pair.Us);
+        ulong ours = pair.Us.Group.Epoch;
+
+        await pair.Us.IngestAsync(theirsFirst);
+        await pair.Us.IngestAsync(theirsSecond);
+
+        IngestResult held = await pair.Us.IngestAsync(saidOnTheirBranch);
+        Assert.Null(held.Message);
+
+        _now = _now.AddMilliseconds(ConvergencePolicy.V1SettlementQuiescenceMs + 1);
+
+        var (result, replay) = await pair.Us.ConvergeAsync();
+
+        Assert.True(result.Reorged);
+
+        // The session is on the branch it chose, not the one it came in on.
+        Assert.Equal(pair.Them.Epoch, pair.Us.Group.Epoch);
+        Assert.NotEqual(ours, pair.Us.Group.Epoch);
+
+        // And what that branch carried is delivered, which is the whole reason
+        // a reorg owes a replay: those messages were refused while we were on
+        // the other branch, and ingest deduplicates on content.
+        ReceivedGroupMessage delivered = Assert.Single(replay.Delivered);
+        Assert.Equal("over here", delivered.Event.Content);
+    }
+
+    [Fact]
+    public async Task AReorgSurvivesTheRestartThatFollowsIt()
+    {
+        // Moving the live group without writing it down leaves a session that
+        // is correct until the process ends and wrong immediately afterwards --
+        // back on a branch the group abandoned, with the messages it delivered
+        // unreadable.
+        Pair pair = await PairAsync(new FixedRelay(CommitPublishOutcome.Accepted));
+
+        byte[] theirsFirst = TheirCommit(pair);
+        byte[] theirsSecond = TheirCommit(pair);
+
+        await RotateAsync(pair.Us);
+        await pair.Us.IngestAsync(theirsFirst);
+        await pair.Us.IngestAsync(theirsSecond);
+
+        _now = _now.AddMilliseconds(ConvergencePolicy.V1SettlementQuiescenceMs + 1);
+
+        var (result, _) = await pair.Us.ConvergeAsync();
+        Assert.True(result.Reorged);
+
+        ulong adopted = pair.Us.Group.Epoch;
+
+        MarmotSession revived = (await RestartAsync(pair.GroupId))!;
+
+        Assert.Equal(adopted, revived.Group.Epoch);
     }
 
     [Fact]

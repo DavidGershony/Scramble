@@ -167,9 +167,20 @@ public sealed class MarmotSessionHost
     /// </summary>
     /// <remarks>
     /// <b>The record is written before the archive is captured</b>, so a crash
-    /// between them leaves a group whose durable state is its own record — the
-    /// state hydration reads first. The reverse order leaves a checkpoint for a
-    /// group nothing knows about.
+    /// between them leaves a group whose durable state is its own record —
+    /// <c>ToRecord</c> carries <c>LiveState</c>, so that one write is
+    /// self-sufficient and the group opens from it alone. The reverse order
+    /// loses the group outright: the checkpoint lands for a group no record
+    /// mentions, and hydration starts from the record.
+    /// <para>
+    /// <b>This ordering is load-bearing and has no test.</b> Swapping the two
+    /// writes passes the whole suite, because the difference is only observable
+    /// in a crash between them — which needs a storage double that fails one
+    /// call, and none exists. Stated here rather than left to look covered. The
+    /// same gap applies to the ordering claims in <c>CommitPublisher</c> and
+    /// <c>DurableEpochManager</c>, so one fault-injecting provider would pay
+    /// for itself three times over.
+    /// </para>
     /// </remarks>
     public async Task<MarmotSession> AdoptAsync(
         GroupRecord record, MlsGroup group, CancellationToken ct = default)
@@ -273,6 +284,13 @@ public sealed class MarmotSessionHost
             if (verdict == StrandedCommitVerdict.Abandon)
             {
                 await _storage.ClearStagedCommitAsync(groupId, ct);
+
+                // Hygiene, not a guard, and it survives mutation: the attempt
+                // row is only ever read through ClassifyAsync, which is only
+                // consulted when a staged commit exists. Clearing that first
+                // puts this row out of reach, and the next publish replaces it
+                // regardless. Left in because an unreachable row that outlives
+                // its group is still worth not keeping.
                 await _storage.ClearCommitPublishAttemptAsync(groupId, ct);
             }
             else if (Restore(staged.GroupState) is { } advanced)
