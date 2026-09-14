@@ -442,6 +442,46 @@ Three things worth saying when we ask, the last of which is new:
   if they do not, that is a concrete difference to put in front of them rather
   than a symptom.
 
+### Probed against `wn 0.9.21` on 2026-09-14 — the behaviour changed
+
+A temporary probe was added to the race test, run, and reverted. It is not in
+the tree; what it found is here because the finding is what matters.
+
+**Evidence.** After the race settles, with both members talking down their own
+branches for six `sync` + `run-maintenance` cycles:
+
+```
+racing from epoch 1
+we applied our own commit, now at epoch 2
+we selected 02168b16 (decisive tip_priority)
+we settled at epoch 2, named 'race e6244e00903b4a5'
+PROBE 0..5: peer epoch=3 name='raced'   (unchanged across all six)
+```
+
+**The peer no longer rewinds.** §3y recorded it rewinding to the fork epoch,
+abandoning its own commit, and stopping. At `0.9.21` it does not: it stays on
+its own branch and carries on, reaching epoch 3. That is a real behaviour change
+between `0.9.20` and `0.9.21` and it removes the symptom the question was
+originally written about.
+
+**They still do not converge, and the likely reason is now ours, not theirs.**
+This part is inference and is labelled as such. We selected our own branch on
+`tip_priority` — our self-update is Ordinary, their rename is admin-gated and so
+Privileged, and the comparator is reversed, so Ordinary wins. At the moment we
+chose, both branches were one commit deep. The peer's branch subsequently
+reached epoch 3, which is depth 2 — and **effective commit depth is the first
+rule, above every tie-break**. So a member evaluating the same candidates *now*
+should pick the peer's branch, and we would too. We simply never look again:
+`ConvergencePass` runs when it is called, and nothing calls it a second time as
+a competing branch grows.
+
+**So the question to ask upstream has narrowed, and may not need asking.** What
+looked like a peer that could not fold a branch looks instead like two members
+sampling different candidate sets at different times. Closing it needs repeated
+passes driven as new commits arrive — which is the session layer (§0 of
+`remaining-work-2026-09.md`), not a protocol difference. **Re-run this probe
+once that exists before spending a question on Max.**
+
 ---
 
 ## 6. Date with confidence band

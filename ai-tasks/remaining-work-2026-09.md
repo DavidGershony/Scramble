@@ -129,10 +129,13 @@ estimating:
 - **Ask Whitenoise §5 Q4** — is there a freeze point or wire-stable tag before
   the flip. Per §7 this is the single biggest lever on the date band, and the
   band is wide because of upstream velocity rather than any unknown work.
-- **Ask about §5a** — whether a member past an epoch ever replays history to
-  peel a competing commit framed at it. Now askable as a concrete difference
-  rather than a symptom, because we have built the retry path we suspect is
-  missing.
+- **§5a may not need asking at all.** Probed against `wn 0.9.21` on 2026-09-14
+  (plan §5a): the peer no longer rewinds to the fork epoch and stop — that was
+  `0.9.20` behaviour and it is gone. The two still do not converge, but the
+  likely cause is now on our side: we choose once and never look again, while
+  the peer's branch keeps growing deeper, and depth outranks every tie-break.
+  **Re-run the probe after the session layer exists, before spending a question
+  on Max.**
 - **Watch the interop step's cost in CI** (§3g).
 - **Two storage gaps found while reviewing, neither urgent.** The snapshot
   capture/restore in `SqliteMarmotStorageProvider.Snapshots.cs` covers groups,
