@@ -125,12 +125,105 @@ public class MarmotSessionTests : IDisposable
         return new Pair(session, them, theirSigner, new GroupId(us.GroupId));
     }
 
+    // ---- Why an open failed ----
+
+    [Fact]
+    public async Task AGroupWeDoNotHaveIsNotTheSameAsOneWeCannotRebuild()
+    {
+        // These were one answer -- null -- until 2026-09-14. The first is
+        // routine; the second is a group whose history we are holding and
+        // cannot reach, which somebody has to see.
+        MarmotSessionHost host = Host(new UnreachableRelay());
+
+        SessionOpenResult missing = await host.OpenAsync(StorageFixture.NewGroupId());
+
+        Assert.False(missing.Opened);
+        Assert.Equal(SessionOpenRefusal.NotStored, missing.Refusal);
+    }
+
+    [Fact]
+    public async Task AGroupWhoseStateWillNotLoadIsRefusedRatherThanThrown()
+    {
+        // The defect this replaced quarantine for. MlsGroup.Import reads
+        // straight into a TlsReader, so corrupt state threw out of OpenAsync --
+        // and in the per-group loop the app layer will write, that one throw
+        // takes down every other group with it.
+        Pair pair = await PairAsync(new UnreachableRelay());
+        await pair.Us.CloseAsync();
+
+        GroupRecord stored = (await _fixture.Provider.GetGroupAsync(pair.GroupId))!;
+        Assert.NotNull(stored.LiveState);
+
+        await _fixture.Provider.PutGroupAsync(
+            stored with { LiveState = [0xff, 0xff, 0xff, 0xff] });
+
+        MarmotSessionHost host = Host(new UnreachableRelay());
+        await host.RestoreAsync();
+
+        SessionOpenResult broken = await host.OpenAsync(pair.GroupId);
+
+        Assert.False(broken.Opened);
+        Assert.Equal(SessionOpenRefusal.StateUnreadable, broken.Refusal);
+    }
+
+    [Fact]
+    public async Task AGroupWithNothingRetainedSaysSoRatherThanReadingAsAbsent()
+    {
+        // A record written before live state was durable, whose archived epochs
+        // have since been pruned past. Distinct from NotStored: we are still in
+        // this group, and cannot get to it.
+        var groupId = StorageFixture.NewGroupId();
+        await _fixture.Provider.PutGroupAsync(StorageFixture.Group(groupId));
+
+        MarmotSessionHost host = Host(new UnreachableRelay());
+        await host.RestoreAsync();
+
+        SessionOpenResult nothing = await host.OpenAsync(groupId);
+
+        Assert.False(nothing.Opened);
+        Assert.Equal(SessionOpenRefusal.NoRetainedState, nothing.Refusal);
+    }
+
+    [Fact]
+    public async Task OneUnopenableGroupDoesNotTakeDownTheOpenOfAnother()
+    {
+        // The loop P11 will write, and the reason the distinction is worth a
+        // type. Upstream needed a quarantine container for this because its
+        // hydration is eager and account-wide; ours only needs the open to
+        // return rather than throw.
+        Pair good = await PairAsync(new UnreachableRelay());
+        await good.Us.CloseAsync();
+
+        var broken = StorageFixture.NewGroupId();
+        await _fixture.Provider.PutGroupAsync(
+            StorageFixture.Group(broken) with { LiveState = [0x01, 0x02] });
+
+        MarmotSessionHost host = Host(new UnreachableRelay());
+        await host.RestoreAsync();
+
+        var opened = new List<GroupId>();
+        var refused = new List<SessionOpenRefusal>();
+
+        foreach (GroupId id in new[] { broken, good.GroupId })
+        {
+            SessionOpenResult result = await host.OpenAsync(id);
+
+            if (result.Session is { } session)
+                opened.Add(session.GroupId);
+            else
+                refused.Add(result.Refusal!.Value);
+        }
+
+        Assert.Equal([good.GroupId], opened);
+        Assert.Equal([SessionOpenRefusal.StateUnreadable], refused);
+    }
+
     /// <summary>The group as a fresh process would find it.</summary>
     private async Task<MarmotSession?> RestartAsync(GroupId groupId)
     {
         MarmotSessionHost host = Host(new UnreachableRelay());
         await host.RestoreAsync();
-        return await host.OpenAsync(groupId);
+        return (await host.OpenAsync(groupId)).Session;
     }
 
     private static byte[] Serialize(PublicMessage message) =>
@@ -534,7 +627,7 @@ public class MarmotSessionTests : IDisposable
         MarmotSessionHost host = Host(new FixedRelay(CommitPublishOutcome.Indeterminate));
         await host.RestoreAsync();
 
-        MarmotSession session = (await host.OpenAsync(record.Id))!;
+        MarmotSession session = (await host.OpenAsync(record.Id)).Require();
         ulong before = session.Group.Epoch;
 
         Assert.Equal(CommitPublishOutcome.Indeterminate, await RotateAsync(session));

@@ -150,7 +150,7 @@ public class CrashRecoveryTests : IDisposable
 
         await host.RestoreAsync();
 
-        return (await host.OpenAsync(groupId))?.Group;
+        return (await host.OpenAsync(groupId)).Session?.Group;
     }
 
     /// <summary>A transport that is not there, which is what a restart has.</summary>

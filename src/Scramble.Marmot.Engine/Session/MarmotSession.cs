@@ -22,6 +22,71 @@ namespace Scramble.Marmot.Engine.Session;
 /// group was moved onto the commit and the answer is still owed.
 /// </param>
 /// <param name="Epoch">The epoch the group came back on.</param>
+/// <summary>Why a group could not be opened.</summary>
+/// <remarks>
+/// <para>
+/// <b>"We do not have it" and "we have it and cannot rebuild it" are different
+/// answers</b>, and collapsing them was the defect this type exists to fix. The
+/// first is routine — a group we were never in, or have left. The second is a
+/// group whose history we are holding and cannot reach, which is a fault
+/// somebody has to see.
+/// </para>
+/// <para>
+/// The distinction matters most in the loop the app layer will write:
+/// <c>foreach (id in ids) await OpenAsync(id)</c>. One group that cannot be
+/// rebuilt must not take the others down with it, and the caller can only
+/// arrange that if it can tell the two apart. Upstream reaches the same place
+/// from the other side, quarantining a group whose hydration fails so the
+/// account still opens — see `remaining-work-2026-09.md` §7 for why we do not
+/// need its machinery, only its distinction.
+/// </para>
+/// <para>
+/// Every member here is producible. Nothing is named for symmetry with
+/// upstream's larger set: a refusal this build cannot reach would be a promise
+/// to a caller that nothing keeps.
+/// </para>
+/// </remarks>
+public enum SessionOpenRefusal
+{
+    /// <summary>No record of the group. Routine, and not a fault.</summary>
+    NotStored,
+
+    /// <summary>
+    /// The record is here and its stored MLS state will not load.
+    /// </summary>
+    /// <remarks>
+    /// Corruption, or a blob written by a build whose serialisation this one
+    /// cannot read. Upstream calls this <c>OpenMlsLoadFailed</c>.
+    /// </remarks>
+    StateUnreadable,
+
+    /// <summary>
+    /// The record is here, carries no usable state, and nothing retained can
+    /// rebuild it.
+    /// </summary>
+    /// <remarks>
+    /// Upstream's <c>OpenMlsGroupMissing</c>. Reachable for a record written
+    /// before live state was durable whose archived epochs have since been
+    /// pruned past.
+    /// </remarks>
+    NoRetainedState,
+}
+
+/// <summary>The result of trying to open a group.</summary>
+/// <param name="Session">The open session, or null when refused.</param>
+/// <param name="Refusal">Why, when refused. Null when opened.</param>
+public sealed record SessionOpenResult(MarmotSession? Session, SessionOpenRefusal? Refusal)
+{
+    /// <summary>Whether the group opened.</summary>
+    public bool Opened => Session is not null;
+
+    /// <summary>The session, for a caller that has already checked.</summary>
+    /// <exception cref="InvalidOperationException">The open was refused.</exception>
+    public MarmotSession Require() =>
+        Session ?? throw new InvalidOperationException(
+            $"The group could not be opened: {Refusal}.");
+}
+
 public sealed record SessionRecovery(StrandedCommitVerdict? Verdict, EpochId Epoch)
 {
     /// <summary>Whether the relay still has to be asked what became of a commit.</summary>
@@ -159,12 +224,27 @@ public sealed class MarmotSessionHost
     /// group standing on a commit nobody can any longer ask about.
     /// </para>
     /// </remarks>
-    public async Task<MarmotSession?> OpenAsync(GroupId groupId, CancellationToken ct = default)
+    public async Task<SessionOpenResult> OpenAsync(
+        GroupId groupId, CancellationToken ct = default)
     {
         if (await _storage.GetGroupAsync(groupId, ct) is not { } record)
-            return null;
+            return new SessionOpenResult(null, SessionOpenRefusal.NotStored);
 
-        MlsGroup? group = Restore(record.LiveState);
+        MlsGroup? group;
+        try
+        {
+            group = Restore(record.LiveState);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Classified, not thrown. MlsGroup.Import reads straight into a
+            // TlsReader, so a corrupt blob throws whatever the codec throws --
+            // and a throw out of here takes down every other group in the
+            // caller's open loop, which is precisely the blast radius this
+            // method is supposed to contain.
+            _ = ex;
+            return new SessionOpenResult(null, SessionOpenRefusal.StateUnreadable);
+        }
 
         // The fallback, for a record written before groups carried their own
         // state. Newest first: the furthest epoch we have a state for is the
@@ -182,7 +262,7 @@ public sealed class MarmotSessionHost
         }
 
         if (group is null)
-            return null;
+            return new SessionOpenResult(null, SessionOpenRefusal.NoRetainedState);
 
         SessionRecovery? recovery = null;
 
@@ -212,8 +292,10 @@ public sealed class MarmotSessionHost
         // fork from, and nothing else would have archived it.
         await Archive.CaptureIfAbsentAsync(groupId, group, ct);
 
-        return new MarmotSession(
-            this, _storage, _cs, _policy, _clock, groupId, group, recovery);
+        return new SessionOpenResult(
+            new MarmotSession(
+                this, _storage, _cs, _policy, _clock, groupId, group, recovery),
+            null);
     }
 
     /// <summary>
