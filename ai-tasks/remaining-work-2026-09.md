@@ -8,7 +8,23 @@ what* — and it should be deleted or rewritten rather than allowed to drift.
 
 ---
 
-## 0. The finding that shapes everything below
+## 0. The finding that shaped everything below — now addressed, with debt
+
+`8ef1729` landed the session layer. **It carries debt that is real and must not
+be forgotten**, so it is stated here as well as in the commit:
+
+- **The mutation pass was never finished.** Its author reported **seven
+  surviving mutations** and was cut off before resolving them. By this repo's
+  own rule a guard that survives mutation is not the guard doing the work, so
+  seven of those tests may cover nothing. **Finishing that pass is the highest
+  priority item in this document.**
+- **Two known defects** in `OpenAsync` / `Restore`, described in §7.
+- It landed as one ~15-file commit under a recorded
+  `Landing-Discipline-Exempt` trailer rather than an unverifiable split.
+
+The original finding, kept because it explains why this mattered:
+
+## 0a. The finding
 
 **The engine is essentially complete and nothing calls it.** Verified, not
 assumed: no file outside `src/Scramble.Marmot.*` references the engine at all.
@@ -48,8 +64,8 @@ caller.
 | Deferred-peel retry lifecycle + flood cap | **done** (`1d210a5`); the retry budget was dropped with its reasoning recorded |
 | Epoch-state persistence | **done** (`b47f438`) |
 | Durable publish intent | **done** (`bef320a`) — `CommitPublisher` owns the `Publishing()` seam; `ClassifyAsync` returns the Abandon / Reconcile / Adopt verdict item 3 needs |
-| Session-open hydration | **not started** — blocked on §0 |
-| Stranded-pending-commit crash recovery | **not started** — blocked on §0 and on publish intent |
+| Session-open hydration | **landed** (`8ef1729`) — `MarmotSessionHost` / `MarmotSession`; live MLS state now persists on the group record |
+| Stranded-pending-commit crash recovery | **landed** (`8ef1729`) — both P9 crash criteria green in `CrashRecoveryTests` |
 | Quarantine | **dropped 2026-09-14**, and the decision was already made once — see §7. Replaced by an S-sized legibility fix on `OpenAsync`. |
 | Snapshot-fallback peel | **not started**. `ISnapshotStorage` exists and nothing peels through it. This is the epoch-boundary case: a kind-445 sealed under an exporter secret from an epoch we have left. |
 | Queued-intent drain polish | **not started** — follows publish intent |
