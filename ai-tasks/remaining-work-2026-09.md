@@ -47,7 +47,7 @@ caller.
 |---|---|
 | Deferred-peel retry lifecycle + flood cap | **done** (`1d210a5`); the retry budget was dropped with its reasoning recorded |
 | Epoch-state persistence | **done** (`b47f438`) |
-| Durable publish intent | **in flight** |
+| Durable publish intent | **done** (`bef320a`) — `CommitPublisher` owns the `Publishing()` seam; `ClassifyAsync` returns the Abandon / Reconcile / Adopt verdict item 3 needs |
 | Session-open hydration | **not started** — blocked on §0 |
 | Stranded-pending-commit crash recovery | **not started** — blocked on §0 and on publish intent |
 | Quarantine | **not started**, and undefined: nothing in the tree implements it and the plan does not say what it isolates or on what evidence. Needs a decision before an estimate. |
@@ -134,6 +134,16 @@ estimating:
   rather than a symptom, because we have built the retry path we suspect is
   missing.
 - **Watch the interop step's cost in CI** (§3g).
+- **Two storage gaps found while reviewing, neither urgent.** The snapshot
+  capture/restore in `SqliteMarmotStorageProvider.Snapshots.cs` covers groups,
+  messages, intents and leave requests only — so a rollback leaves an
+  `epoch_states` or `commit_publish_attempts` row describing a commit from a
+  future the group no longer has. Nothing in the file says the omission is
+  deliberate, which is the part that makes it look like a gap rather than a
+  choice. And `IOutboundIntentStorage` is now dead code twice over: it has a
+  table, two indexes and snapshot plumbing, and no production caller — worth
+  deciding whether it is still the intended design for app-message sends before
+  it accretes more support.
 - **The branch is ~125 commits ahead of `master` with no PR.** Recorded because
   I4 names exactly this shape as the risk; the decision not to open one is the
   user's and is not being re-litigated.
@@ -142,10 +152,12 @@ estimating:
 
 ## 6. Suggested order, and why
 
-1. **Finish the publish-intent piece** (in flight). It is what lets recovery
-   tell "never left this device" from "may be on a relay", and every crash-path
-   decision below depends on that distinction.
-2. **Scope and build the session layer (§0).** Everything else is behind it, and
+1. ~~Finish the publish-intent piece~~ **done.** Recovery can now tell "never
+   left this device" from "may be on a relay" from "the relay took it" —
+   `CommitPublisher.ClassifyAsync` answers Abandon / Reconcile / Adopt, which
+   is exactly the discrimination `CrashRecoveryTests` needs.
+2. **Scope and build the session layer (§0).** Now the only thing between the
+   engine and P9's exit criterion. Everything else is behind it, and
    it is currently nobody's. It does not need to be large to unblock: hydrate,
    archive our own commits, drive publish, run a pass, replay.
 3. **P9's remainder** — hydration and crash recovery fall out of §0 almost
