@@ -50,7 +50,7 @@ caller.
 | Durable publish intent | **done** (`bef320a`) — `CommitPublisher` owns the `Publishing()` seam; `ClassifyAsync` returns the Abandon / Reconcile / Adopt verdict item 3 needs |
 | Session-open hydration | **not started** — blocked on §0 |
 | Stranded-pending-commit crash recovery | **not started** — blocked on §0 and on publish intent |
-| Quarantine | **not started**, and undefined: nothing in the tree implements it and the plan does not say what it isolates or on what evidence. Needs a decision before an estimate. |
+| Quarantine | **dropped 2026-09-14**, and the decision was already made once — see §7. Replaced by an S-sized legibility fix on `OpenAsync`. |
 | Snapshot-fallback peel | **not started**. `ISnapshotStorage` exists and nothing peels through it. This is the epoch-boundary case: a kind-445 sealed under an exporter secret from an epoch we have left. |
 | Queued-intent drain polish | **not started** — follows publish intent |
 
@@ -172,3 +172,47 @@ estimating:
 The one thing worth deciding early rather than late is **what the session layer
 is**, because P11's shape is downstream of it and P11 is the phase with the
 history.
+
+---
+
+## 7. Quarantine: investigated and dropped (2026-09-14)
+
+**What it was.** Upstream's per-group *hydration* quarantine
+(`crates/traits/src/engine.rs:481`): "Hydration is best-effort per group: one
+corrupt, missing, or validation-failing group must not abort opening the whole
+account." It quarantines a **group**, triggered **only** by session-open
+hydration failure — never by inbound traffic — gates every read path through
+`ensure_group_live`, and is left by a successful re-hydration. Not durable; it
+is re-derived at each open.
+
+**Why the plan had it, and why that was an accident of compression.** The row
+came from `survives-rewrite-diff-2026-07.md:169`. **Line 321 of that same
+document already ruled it out**: "v1 can drop forensics, quarantine hardening,
+and deferred-peel caps." P9's scope kept the noun and lost the decision. In our
+tree the concept exists only as two deliberately-unproduced enum members
+(`IngestOutcome.cs:52`, `:99`) — verified by a full sweep of `src/`, `tests/`
+and `lib/`; nothing produces, consumes, stores or tests it, and `marmot-cs` has
+no equivalent under any name.
+
+**Why it should stay dropped.** The need is a consequence of upstream's shape,
+not of the protocol. Its `AccountDeviceSession::open` hydrates every group
+eagerly, so one bad group aborts the account and it needs a container plus an
+accessor gate on roughly twelve read paths — a footgun its own `AGENTS.md`
+warns about. Ours is lazy and per-group: `MarmotSessionHost.OpenAsync(GroupId)`
+returns a session that *is* the capability, so no session means no send, no
+converge, no ingest. Failure isolation is the caller's loop, and costs nothing.
+Note too that quarantine is in P9's *scope* but not its *exit criteria*.
+
+**What is genuinely missing, and replaces it (S).** `OpenAsync` cannot say why
+it failed: it returns `null` both for "no such group" and for "the record is
+there and cannot be rebuilt", and `Restore` calls `MlsGroup.Import` uncaught, so
+corrupt state **throws out of `OpenAsync`** rather than being classified — which
+in the `foreach (id in ids) await OpenAsync(id)` that P11 will write reproduces
+upstream's hazard at our app layer. Give it a three-way outcome carrying
+upstream's reason values (a good taxonomy, worth keeping comparable) without the
+state machine, the durable flag, the accessor gate, or a retry entry point:
+**re-calling `OpenAsync` is the retry**, since it reads storage fresh.
+
+Touches `Session/MarmotSession.cs`, one small type beside it, and its tests. No
+schema, `EpochState` or `IngestOutcome` change. **Fold it into the session-layer
+review rather than doing it concurrently.**
