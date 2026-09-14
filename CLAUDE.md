@@ -208,5 +208,7 @@ dotnet test tests/Scramble.Diagnostics/ --filter "Category=Integration|Category=
   status checks.
 - `AGENTS.md` — agent-specific notes (unchanged).
 - `src/Scramble.Android/OBSOLETE.md` — legacy-head deprecation notice.
+- `ai-tasks/remaining-work-2026-09.md` — what is left on the Dark Matter
+  migration, in dependency order.
 - `ai-tasks/` — per-feature planning docs. Completed ones under
   `ai-tasks/completed/`.

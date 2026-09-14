@@ -9,10 +9,14 @@ before P0–P2 landed.
 
 **Orientation (read once, in this order):**
 1. This file.
-2. `ai-tasks/scramble-marmot-phased-plan-2026-08.md` — the authoritative plan.
+2. `ai-tasks/remaining-work-2026-09.md` — what is left, in dependency order,
+   and the one structural finding behind most of it: three phases are each
+   blocked on a session layer no phase owns.
+3. `ai-tasks/scramble-marmot-phased-plan-2026-08.md` — the authoritative plan.
    §3 is the phase table; §4 the `dotnet-mls` asks; §5 the Whitenoise
-   questions; §7 the binding cutover rules.
-3. `CLAUDE.md` — repo invariants (I1–I5) and the Dark Matter cutover rules.
+   questions; §5a the one technical question outstanding; §7 the binding
+   cutover rules.
+4. `CLAUDE.md` — repo invariants (I1–I5) and the Dark Matter cutover rules.
 
 ---
 
