@@ -33,11 +33,18 @@ public sealed record CreatedGroup(
     NostrRouting Routing,
     byte[] SignaturePrivateKey)
 {
-    /// <summary>Builds the durable Marmot-layer record beside the MLS state.</summary>
+    /// <summary>Builds the durable record, carrying the MLS state with it.</summary>
+    /// <remarks>
+    /// <b>The state goes in here and not in a later step, because there is no
+    /// later step.</b> A group we created is committed in only by us, so
+    /// nothing on the inbound path ever archives it; until this carried
+    /// <see cref="GroupRecord.LiveState"/>, a freshly created group had a
+    /// durable record naming a group nothing could reconstruct.
+    /// </remarks>
     public GroupRecord ToRecord(DateTimeOffset createdAt) =>
         new(
             new GroupId(GroupId),
-            new EpochId(0),
+            new EpochId(Group.Epoch),
             ProtocolProfile.Current,
             createdAt,
             createdAt)
@@ -48,6 +55,8 @@ public sealed record CreatedGroup(
 
             // One leaf, and we just built its proof. Nothing to re-verify.
             ValidatedTree = true,
+
+            LiveState = Group.Export(),
         };
 }
 

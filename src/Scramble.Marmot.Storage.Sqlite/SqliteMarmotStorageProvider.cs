@@ -59,8 +59,10 @@ public sealed partial class SqliteMarmotStorageProvider : IMarmotStorageProvider
     {
         await using var cmd = Command($@"
             INSERT OR REPLACE INTO {_tp}groups
-                (group_id, epoch, profile, removed, join_epoch, validated_tree, created_at, updated_at)
-            VALUES (@id, @epoch, @profile, @removed, @join_epoch, @validated, @created, @updated);");
+                (group_id, epoch, profile, removed, join_epoch, validated_tree, created_at,
+                 updated_at, live_state)
+            VALUES (@id, @epoch, @profile, @removed, @join_epoch, @validated, @created,
+                    @updated, @live);");
         cmd.Parameters.AddWithValue("@id", group.Id.Value);
         cmd.Parameters.AddWithValue("@epoch", (long)group.Epoch.Value);
         cmd.Parameters.AddWithValue("@profile", (int)group.Profile);
@@ -70,6 +72,7 @@ public sealed partial class SqliteMarmotStorageProvider : IMarmotStorageProvider
         cmd.Parameters.AddWithValue("@validated", group.ValidatedTree ? 1 : 0);
         cmd.Parameters.AddWithValue("@created", Iso(group.CreatedAt));
         cmd.Parameters.AddWithValue("@updated", Iso(group.UpdatedAt));
+        cmd.Parameters.AddWithValue("@live", (object?)group.LiveState ?? DBNull.Value);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
@@ -115,6 +118,7 @@ public sealed partial class SqliteMarmotStorageProvider : IMarmotStorageProvider
             Removed = GetInt64(r, "removed") != 0,
             JoinEpoch = IsNull(r, "join_epoch") ? null : new EpochId((ulong)GetInt64(r, "join_epoch")),
             ValidatedTree = GetInt64(r, "validated_tree") != 0,
+            LiveState = IsNull(r, "live_state") ? null : Blob(r, "live_state"),
         };
 
     // -- Messages --

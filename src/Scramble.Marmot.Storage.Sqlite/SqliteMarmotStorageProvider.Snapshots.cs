@@ -199,6 +199,18 @@ public sealed partial class SqliteMarmotStorageProvider
         public DateTimeOffset CreatedAt { get; set; }
         public DateTimeOffset UpdatedAt { get; set; }
 
+        /// <summary>
+        /// The exported MLS group, carried so a rollback restores the state the
+        /// rest of the snapshot describes.
+        /// </summary>
+        /// <remarks>
+        /// Omitting it would roll the Marmot-layer rows back to an earlier
+        /// epoch while leaving the group standing on a later one — a member
+        /// holding history it cannot read and keys for history it no longer
+        /// has.
+        /// </remarks>
+        public byte[]? LiveState { get; set; }
+
         public static GroupDto From(GroupRecord r) => new()
         {
             Id = r.Id.Value,
@@ -209,6 +221,7 @@ public sealed partial class SqliteMarmotStorageProvider
             ValidatedTree = r.ValidatedTree,
             CreatedAt = r.CreatedAt,
             UpdatedAt = r.UpdatedAt,
+            LiveState = r.LiveState,
         };
 
         public GroupRecord ToRecord() =>
@@ -217,6 +230,7 @@ public sealed partial class SqliteMarmotStorageProvider
                 Removed = Removed,
                 JoinEpoch = JoinEpoch is { } e ? new EpochId(e) : null,
                 ValidatedTree = ValidatedTree,
+                LiveState = LiveState,
             };
     }
 

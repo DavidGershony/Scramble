@@ -4,6 +4,7 @@ using DotnetMls.Types;
 using Scramble.Marmot.AppComponents;
 using Scramble.Marmot.Engine.Convergence;
 using Scramble.Marmot.Engine.KeyPackages;
+using Scramble.Marmot.Engine.Session;
 using Scramble.Marmot.Identity;
 using MarmotDictionary = Scramble.Marmot.AppComponents.AppDataDictionary;
 
@@ -41,6 +42,7 @@ namespace Scramble.Marmot.Engine.Groups;
 public sealed class StagedCommit : IDisposable
 {
     private readonly MlsGroup _group;
+    private readonly GroupJournal? _journal;
     private State _state = State.Staged;
 
     internal StagedCommit(
@@ -75,6 +77,19 @@ public sealed class StagedCommit : IDisposable
         // the durable publish record, and a record naming the wrong epoch
         // tells a recovering session the commit has not landed when it has.
         NewEpoch = new EpochId(checked(group.Epoch + 1));
+
+        // Only for a group a session has taken durable custody of; an unbound
+        // group behaves exactly as it did before this existed.
+        //
+        // The derivation merges the commit into `group`, because that is the
+        // only way to compute the state it produces -- see GroupJournal.Prepare
+        // -- and the session's answer is to stop pointing at this instance
+        // until the publish is confirmed. So `group` is a throwaway from here
+        // on and the session's live group is a fresh import of the state it
+        // held before. Publish-before-apply is intact: what the session shows
+        // its caller is still the old epoch.
+        _journal = GroupJournal.For(group);
+        PreparedState = _journal?.Prepare(group, Commit, NewEpoch, OrderingPriority);
     }
 
     /// <summary>The commit, framed as a PublicMessage.</summary>
@@ -95,6 +110,20 @@ public sealed class StagedCommit : IDisposable
 
     /// <summary>The epoch the group reaches once this commit is applied.</summary>
     public EpochId NewEpoch { get; }
+
+    /// <summary>
+    /// The exported state this commit produces, or null for a group no session
+    /// owns.
+    /// </summary>
+    /// <remarks>
+    /// <b>Null is the pre-session behaviour and it is the unrecoverable one.</b>
+    /// A crash between publishing this commit and applying it leaves no way to
+    /// reach the epoch the rest of the group has moved to: MLS refuses to let a
+    /// member process a commit it authored, so our own bytes coming back off a
+    /// relay are no help. Non-null means the state was written down before the
+    /// bytes left, which is the only form recovery can take.
+    /// </remarks>
+    public byte[]? PreparedState { get; }
 
     /// <summary>
     /// The Welcome for the added members, or null when nobody was added.
@@ -121,10 +150,21 @@ public sealed class StagedCommit : IDisposable
     /// <summary>
     /// Applies the commit, advancing the group to the new epoch.
     /// </summary>
-    /// <remarks>Call only once the commit is durably published.</remarks>
+    /// <remarks>
+    /// <para>Call only once the commit is durably published.</para>
+    /// <para>
+    /// <b>A prepared commit has already been merged</b> — deriving the state it
+    /// produces is what merged it — so there is nothing left to do to the MLS
+    /// object and this only closes the state machine. Confirming it durably,
+    /// and pointing the session's live group at the new state, is the session's
+    /// half: this class holds no storage and never has.
+    /// </para>
+    /// </remarks>
     public void Applied()
     {
-        _group.MergePendingCommit();
+        if (PreparedState is null)
+            _group.MergePendingCommit();
+
         _state = State.Resolved;
     }
 
@@ -139,6 +179,14 @@ public sealed class StagedCommit : IDisposable
     public void Discard()
     {
         _group.ClearPendingCommit();
+
+        // A prepared commit leaves a row describing a state the group is not
+        // going to reach, and a later session that read it without asking what
+        // happened to the commit would adopt an epoch nobody else has. Dropped
+        // here rather than left for recovery, because a discard is a caller
+        // saying the commit provably never landed.
+        _journal?.Abandon();
+
         _state = State.Resolved;
     }
 
@@ -168,7 +216,16 @@ public sealed class StagedCommit : IDisposable
     /// will disagree in the one direction that forks the group.
     /// </para>
     /// </remarks>
-    public void Publishing() => _state = State.Publishing;
+    public void Publishing()
+    {
+        _state = State.Publishing;
+
+        // Written down before the caller can send anything, because this is the
+        // line recovery has to know which side of. Without it, the prepared
+        // state above is indistinguishable from one belonging to a commit that
+        // never left the device -- and those two want opposite answers.
+        _journal?.HandedToTransport(CommitPublisher.CommitIdOf(Commit), NewEpoch);
+    }
 
     /// <summary>
     /// Clears the commit if it was staged and never went anywhere.
@@ -191,7 +248,16 @@ public sealed class StagedCommit : IDisposable
     public void Dispose()
     {
         if (_state == State.Staged)
+        {
             _group.ClearPendingCommit();
+
+            // Same reasoning as Discard, and the same narrow condition: only a
+            // commit nobody could have seen. A crash gets no disposal at all,
+            // which is why recovery does not rely on this -- it asks whether a
+            // publish was ever attempted, and a prepared commit with no attempt
+            // behind it is abandoned whether or not this ran.
+            _journal?.Abandon();
+        }
 
         _state = State.Resolved;
     }

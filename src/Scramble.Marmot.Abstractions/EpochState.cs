@@ -80,9 +80,18 @@ public abstract record EpochState
     public sealed record Stable(EpochId Epoch) : EpochState;
 
     /// <summary>
-    /// A commit is staged locally and published, but not yet confirmed.
+    /// A commit is staged locally and its fate is not yet settled.
     /// <paramref name="Epoch"/> is the epoch the group reaches once confirmed.
     /// </summary>
+    /// <remarks>
+    /// <b>Entered at staging, before anything is published</b> — which this
+    /// said the opposite of until 2026-09-14, and the difference is the one
+    /// that decides how a crash is recovered. Read as "staged and published",
+    /// a recovering session would reconcile against a relay for a commit that
+    /// never left the device, when the only safe answer there is to abandon it.
+    /// This state cannot tell those apart and is not meant to;
+    /// <c>CommitPublishAttempt</c> is what answers it.
+    /// </remarks>
     public sealed record PendingPublish(
         EpochId Epoch,
         StagedCommitHandle StagedCommit,

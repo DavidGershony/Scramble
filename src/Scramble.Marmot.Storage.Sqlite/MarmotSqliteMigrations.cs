@@ -18,6 +18,7 @@ internal static class MarmotSqliteMigrations
         (7, "Replay attempt epoch", V007),
         (8, "Epoch states", V008),
         (9, "Commit publish attempts", V009),
+        (10, "Durable live group state", V010),
     };
 
     public static void Apply(SqliteConnection connection, string tablePrefix)
@@ -344,6 +345,52 @@ internal static class MarmotSqliteMigrations
                 state         INTEGER NOT NULL,
                 handed_off_at TEXT    NOT NULL,
                 updated_at    TEXT    NOT NULL
+            );");
+    }
+
+    private static void V010(SqliteConnection connection, string tp)
+    {
+        // Two halves of one fact: where a group actually is.
+        //
+        // groups.live_state is the exported MLS group the engine last
+        // confirmed. Until now nothing persisted it at all -- the epoch archive
+        // is fed from the inbound commit path, so a group whose own member does
+        // all the committing had nothing durable behind it and a restart could
+        // not reconstruct the group its own record described. Nullable because
+        // this is an ALTER on a live table and rows written before it exist;
+        // a null reads as "no durable state", which is what those rows mean.
+        //
+        // staged_commits is the state a commit of OURS produces, written before
+        // the commit is published. It is the one thing a crash between publish
+        // and apply cannot reconstruct: MLS refuses to let a member process a
+        // commit it authored, so the bytes coming back off a relay are no help,
+        // and an export of the live group drops a staged-but-unmerged commit.
+        //
+        // Separate from commit_publish_attempts rather than a column on it,
+        // because they answer different questions and are written at different
+        // moments: this row says what the commit would make the group, and
+        // exists from the moment it is staged; that row says how far it got
+        // towards a relay, and exists only once something tried to send it. A
+        // restart needs both, and needs them in that order -- adopt the state
+        // only if the attempt says somebody else may have seen the commit.
+        //
+        // tip_priority, tip_commit and tip_committer are NOT NULL here, unlike
+        // in epoch_archive. That table has to describe epochs no commit of ours
+        // produced -- a group's first, or one a Welcome admitted us at. This
+        // one describes a commit we authored and are holding, so all three are
+        // readable by definition, and a null would mean the row was built
+        // somewhere it could not have been.
+        Execute(connection, $@"
+            ALTER TABLE {tp}groups ADD COLUMN live_state BLOB NULL;
+
+            CREATE TABLE {tp}staged_commits (
+                group_id      BLOB    NOT NULL PRIMARY KEY,
+                new_epoch     INTEGER NOT NULL,
+                group_state   BLOB    NOT NULL,
+                tip_priority  INTEGER NOT NULL,
+                tip_commit    BLOB    NOT NULL,
+                tip_committer BLOB    NOT NULL,
+                created_at    TEXT    NOT NULL
             );");
     }
 

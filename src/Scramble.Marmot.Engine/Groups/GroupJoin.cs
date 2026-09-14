@@ -46,6 +46,11 @@ public sealed record JoinedGroup(
             // Every leaf's proof still needs verifying; we have checked only our
             // own. Claiming otherwise would skip the check permanently.
             ValidatedTree = false,
+
+            // The state we were admitted at. Nothing else will write it: the
+            // epoch archive is fed from the inbound commit path, and no commit
+            // has arrived yet.
+            LiveState = Group.Export(),
         };
     }
 }

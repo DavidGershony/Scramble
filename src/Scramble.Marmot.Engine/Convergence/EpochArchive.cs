@@ -1,5 +1,6 @@
 using DotnetMls.Crypto;
 using DotnetMls.Group;
+using Scramble.Marmot.Engine.Session;
 using Scramble.Marmot.Storage;
 
 namespace Scramble.Marmot.Engine.Convergence;
@@ -90,6 +91,17 @@ public sealed class EpochWindow
 /// the policy already refuses, or — the failure that matters — quietly short of
 /// the horizon at the moment a fork arrives.
 /// </para>
+/// <para>
+/// <b>Capturing is also where a live group is taken into durable custody.</b>
+/// Every path that produces a group the engine owns passes through here — group
+/// creation, a Welcome, session-open hydration, a reorg, and every applied
+/// inbound commit — which makes this the one place a <see cref="GroupJournal"/>
+/// can be attached without every caller being taught to do it. The binding is
+/// what lets a commit staged on that group be written down at the moment it is
+/// staged; see <see cref="GroupJournal"/> for why that moment is the only one
+/// available. A caller whose storage is not a whole provider gets no binding
+/// and the archive behaves as it always did.
+/// </para>
 /// </remarks>
 public sealed class EpochArchive(
     IEpochArchiveStorage storage,
@@ -141,6 +153,8 @@ public sealed class EpochArchive(
     {
         ArgumentNullException.ThrowIfNull(group);
 
+        Adopt(groupId, group);
+
         var epoch = new EpochId(group.Epoch);
 
         await _storage.PutEpochCheckpointAsync(
@@ -180,6 +194,11 @@ public sealed class EpochArchive(
     {
         ArgumentNullException.ThrowIfNull(group);
 
+        // Custody does not depend on whether there is anything to write. An
+        // epoch already archived is the ordinary case at session open, and a
+        // group left unbound there is one whose next commit goes unrecorded.
+        Adopt(groupId, group);
+
         if (await _storage.GetEpochCheckpointAsync(groupId, new EpochId(group.Epoch), ct) is null)
             await CaptureAsync(groupId, group, tip: null, ct);
     }
@@ -187,6 +206,23 @@ public sealed class EpochArchive(
     /// <summary>
     /// Reads the retained window for a convergence pass.
     /// </summary>
+    /// <summary>
+    /// Binds a live group to its durable record, if this archive has one.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately a type test rather than a second constructor parameter. The
+    /// archive is constructed from an <see cref="IEpochArchiveStorage"/> in
+    /// several places that have no reason to know about sessions, and requiring
+    /// a provider there would push a session dependency into convergence, which
+    /// has none. A caller holding only the archive slice gets what it always
+    /// got.
+    /// </remarks>
+    private void Adopt(GroupId groupId, MlsGroup group)
+    {
+        if (_storage is IMarmotStorageProvider provider)
+            GroupJournal.Bind(group, groupId, provider, _clock);
+    }
+
     public async Task<EpochWindow> LoadWindowAsync(
         GroupId groupId, EpochId currentEpoch, CancellationToken ct = default) =>
         new(
