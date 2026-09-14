@@ -13,14 +13,25 @@ what* — and it should be deleted or rewritten rather than allowed to drift.
 `8ef1729` landed the session layer. **It carries debt that is real and must not
 be forgotten**, so it is stated here as well as in the commit:
 
-- **The mutation pass was never finished.** Its author reported **seven
-  surviving mutations** and was cut off before resolving them. By this repo's
-  own rule a guard that survives mutation is not the guard doing the work, so
-  seven of those tests may cover nothing. **Finishing that pass is the highest
-  priority item in this document.**
-- **Two known defects** in `OpenAsync` / `Restore`, described in §7.
+- ~~The mutation pass was never finished~~ **done** (`798a65e`). Nine mutations,
+  five survivors. Three were one hole — nothing drove a reorg through
+  `ConvergeAsync`, so keeping the pre-reorg group, never persisting the move and
+  skipping the replay it owes all passed untouched; two tests close them. Two
+  got a verdict instead of a test: the Abandon-path attempt clear is hygiene
+  (labelled), and **`AdoptAsync`'s write ordering is load-bearing and still
+  uncovered** — see below.
+- ~~Two known defects in `OpenAsync` / `Restore`~~ **fixed** (`eab4303`), with
+  the three-way refusal agreed in §7.
 - It landed as one ~15-file commit under a recorded
   `Landing-Discipline-Exempt` trailer rather than an unverifiable split.
+
+**One thing is now owed that was not visible before.** Three ordering claims —
+`AdoptAsync`'s record-before-archive, and the equivalents in `CommitPublisher`
+and `DurableEpochManager` — are each load-bearing and each untestable with what
+exists, because the difference only shows in a crash between two storage writes.
+**A storage provider that fails one nominated call would cover all three**, and
+is small. Until it exists those three comments say plainly that they are
+uncovered, rather than reading as verified.
 
 The original finding, kept because it explains why this mattered:
 
