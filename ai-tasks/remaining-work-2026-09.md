@@ -193,11 +193,10 @@ estimating:
 3. ~~Build the send path (§8)~~ **done** (`4fcbf74`), split-and-mutate: brief,
    implementer, independent tests, then twelve mutations — all caught.
    `IOutboundIntentStorage` has a caller at last.
-4. **A storage double that fails one nominated call.** Small, and it now closes
-   **four** ordering claims — `AdoptAsync`, `CommitPublisher`,
-   `DurableEpochManager`, and the send path's ratchet persistence — each
-   load-bearing, each currently uncovered, each only observable in a crash
-   between two writes. This is the best value left on the list.
+4. ~~A storage double that fails one nominated call~~ **done** (`0fc2f0a`), and
+   it found a real bug on the way (`065ce31`, §9). Only one of the four claims
+   actually needed it; two were already covered and one cannot be tested that
+   way at all.
 5. **P9's remainder** — snapshot-fallback peel, and snapshot coverage for the
    two newest tables. Quarantine is dropped (§7).
 6. **P10's remainder** — small, and independent of the rest.
@@ -332,3 +331,41 @@ whole premise is that `Scramble.Core` has something to call.
   MLS bytes do not exist at queue time, and hashing the event collides for two
   identical messages a second apart, so the second would silently never send. A
   distinct `IntentId` wrapper is the right shape if this is ever cleaned up.
+
+---
+
+## 9. The ordering audit found a live bug (2026-09-15)
+
+`CommitPublisher` cleared its attempt row after `staged.Applied()`, and *"cleared
+last, never first"* was true inside `PublishAsync` and **false where it
+mattered**. `Applied()` closes an in-memory state machine; the move a restart can
+see — the archived checkpoint and the group's live state — belongs to
+`MarmotSessionHost.ConfirmAsync` and had not happened yet.
+
+Between them lay a window in which the relay had the commit, every other member
+applied it, and we came back with **no attempt row**. `ClassifyAsync` reads that
+absence as the positive claim *nobody can have seen this commit*, abandons it,
+and MLS will not let a member process a commit it authored — so it was
+unrecoverable. Measured over real SQLite by killing at each write of one
+`CommitAsync`: **two of nine kill points revived an epoch behind**, having
+discarded a commit the group had adopted.
+
+Fixed by not clearing there. `ConfirmAsync` already drops both rows after the
+durable move, so the ordering was right everywhere except in doing it twice, the
+first time too early.
+
+**Three things worth carrying forward:**
+
+- **A comment can be true at its own scope and false at the one that matters.**
+  The rule was correct within the method that stated it. Nothing in that method
+  could see that the move it was ordering against was not the move a restart
+  observes.
+- **Two tests had encoded the old behaviour**, one asserting outright that an
+  accepted publish leaves no row behind. The sixth instance in this repo of a
+  test pinning a defect as the contract.
+- **The audit's premise was half wrong, which is the cheaper finding.** Only
+  `AdoptAsync` needed fault injection. `CommitPublisher` and
+  `DurableEpochManager` were already covered by probes at their seams, and
+  `DurableEpochManager` *cannot* use fault injection — its second step is an
+  in-memory move, not a write, so a crash-after-the-row test would pass under
+  both orderings. That test was correctly not written.
