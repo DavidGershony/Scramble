@@ -198,8 +198,9 @@ estimating:
    it found a real bug on the way (`065ce31`, §9). Only one of the four claims
    actually needed it; two were already covered and one cannot be tested that
    way at all.
-5. **P9's remainder** — snapshot-fallback peel, and snapshot coverage for the
-   two newest tables. Quarantine is dropped (§7).
+5. ~~P9's remainder~~ **done.** The fallback peel landed (§10); the snapshot
+   coverage turned out to be a deliberate choice and now says so in the file.
+   Quarantine was dropped (§7). **P9 is complete.**
 6. **P10's remainder** — small, and independent of the rest.
 7. **P11** — last, deliberately, and under I4/I5 rather than alongside them.
 
