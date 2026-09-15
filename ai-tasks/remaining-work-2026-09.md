@@ -102,10 +102,29 @@ branch would break the gate, and marking it skipped is not available to us
   decision — Dark Matter only, no dual-running window, backwards compatibility
   is not a goal — removes it for good.
 
-**And the upgrade flow is dead too** (checked 2026-09-15). `ProtocolProfile` has
-exactly two values and `Legacy` is documented "deliberately not implemented", so
-an upgrade flow has no source profile to upgrade *from*. The 2026-09-13 scope
-decision finishes it off.
+**The upgrade flow is inert, not dead — and my first reading of it was wrong.**
+I took "upgrade flow" to mean a *profile* upgrade, because it sits beside
+`legacy_compatibility_profile` in P10's row, and concluded it died with `Legacy`.
+That is the same mistake this document keeps cataloguing, made from the other
+side: a noun read by its neighbour rather than by its provenance.
+
+The referent is the **capability** upgrade.
+`survives-rewrite-diff-2026-07.md:249` — *"Capabilities/feature registry +
+upgrade flow … the full upgrade/auto-negotiation flow can trail"* — and
+`mdk-parity-plan-2026-07.md:277`, Session 8: `group_capability_upgrade_status`,
+`upgrade_group_capabilities`, *"lets an admin upgrade a mixed group to require
+SelfRemove once all members are modern."* It is alive upstream at the pin
+(`crates/cgka-engine/src/upgrade.rs`, `FeatureStatus::Upgradeable`), and the
+2026-09-13 scope decision has no bearing on it.
+
+**It still should not be built now**, for a reason that has nothing to do with
+profiles: we have no *optional* group components. `desired` is always
+`DefaultComponents` and `MandatoryComponents` is the same set, so no capability
+can occupy the "advertised by every member, not yet required" state the flow
+exists to promote. **It becomes real the first time something is
+desired-but-not-mandatory**, and the candidates — `0x8005` retention, `0x8006`
+QUIC, `0x800b` media v2 — are all P12. Recorded as inert rather than closed so
+P12 does not rediscover it.
 
 **Left: the exit criterion alone** — capability-mismatch rejections matching
 mdk's error taxonomy. Today every component and capability refusal funnels
@@ -472,3 +491,29 @@ written for was not adopted** — convergence rebuilds from the archive and
 *invalidates* superseded records rather than rolling a table back. Recorded as
 a finding; not deleted, because the reasoning in it is worth more than the rows
 it would save.
+
+---
+
+## 11. We do not check an invitee's capabilities the way peers check ours
+
+Found 2026-09-15 while classifying refusals; **not built**, because it changes
+who can join and that deserves its own commit rather than riding a typing
+change.
+
+Upstream's `validate_invitee_capabilities`
+(`crates/cgka-engine/src/key_package.rs:340-369` at `fdd398a8`) refuses a
+KeyPackage whose leaf advertises anything in RFC 9420 §7.2's implicit ranges —
+*"an intentional admission policy beyond RFC 9420 section 7.3 / OpenMLS
+validation"*. §3ab records us discovering this the hard way: we stopped
+advertising `0x0003` on 2026-09-09, four days before upstream made it fatal.
+
+**We fixed our own advertisement and never built the check.**
+`MarmotLeaf.DefaultExtensionTypes` and `DefaultProposalTypes` exist, and are only
+ever used to assert our *own* leaf — never to judge an invitee's. So Scramble
+would add a member that every current peer refuses to add, and the group would
+then differ depending on who did the inviting.
+
+It has a single call site upstream, in the KeyPackage-for-membership path rather
+than in ingest, so this is an admission-policy divergence and not a fork. When it
+lands it is the natural second variant of `AppComponentRejection`: upstream's
+`InvalidKeyPackageCapabilities { member }` / `invalid_key_package_capabilities`.
