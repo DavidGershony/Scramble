@@ -78,7 +78,7 @@ caller.
 | Session-open hydration | **landed** (`8ef1729`) — `MarmotSessionHost` / `MarmotSession`; live MLS state now persists on the group record |
 | Stranded-pending-commit crash recovery | **landed** (`8ef1729`) — both P9 crash criteria green in `CrashRecoveryTests` |
 | Quarantine | **dropped 2026-09-14**, and the decision was already made once — see §7. Replaced by an S-sized legibility fix on `OpenAsync`. |
-| Snapshot-fallback peel | **not started**. `ISnapshotStorage` exists and nothing peels through it. This is the epoch-boundary case: a kind-445 sealed under an exporter secret from an epoch we have left. |
+| Snapshot-fallback peel | **done** — and it is the *archive*, not `ISnapshotStorage`. Third stale noun. See §10. |
 | Queued-intent drain polish | **misnamed**: there is no drain to polish, and no send path at all. See §8. |
 
 **Exit criterion, from the plan:** kill between stage and confirm, and between
@@ -165,16 +165,17 @@ estimating:
   **Re-run the probe after the session layer exists, before spending a question
   on Max.**
 - **Watch the interop step's cost in CI** (§3g).
-- **Two storage gaps found while reviewing, neither urgent.** The snapshot
-  capture/restore in `SqliteMarmotStorageProvider.Snapshots.cs` covers groups,
-  messages, intents and leave requests only — so a rollback leaves an
-  `epoch_states` or `commit_publish_attempts` row describing a commit from a
-  future the group no longer has. Nothing in the file says the omission is
-  deliberate, which is the part that makes it look like a gap rather than a
-  choice. And `IOutboundIntentStorage` is now dead code twice over: it has a
-  table, two indexes and snapshot plumbing, and no production caller — worth
-  deciding whether it is still the intended design for app-message sends before
-  it accretes more support.
+- ~~**Two storage gaps found while reviewing**~~ — the intent queue got a caller
+  (§8), and the snapshot omission was investigated and is a **choice**, now
+  written into the file rather than left to look like an oversight. See §10.
+- **`IRoutingIndexStorage` has no production caller either**, and unlike the
+  intent queue nothing is scheduled to give it one. It is the rotation-aware
+  routing-id → group map, which is the first lookup a real receive path makes;
+  `MarmotSession.ReceiveAsync` sidesteps it because a session already knows
+  which group it is. Whoever writes the fan-in above the session (P11) is its
+  caller. `HasTransportSeenAsync` is in the same position: it exists, its doc
+  says it is the pre-filter that avoids re-peeling a duplicate envelope, and
+  nothing reads it.
 - **The branch is ~125 commits ahead of `master` with no PR.** Recorded because
   I4 names exactly this shape as the risk; the decision not to open one is the
   user's and is not being re-litigated.
@@ -369,3 +370,85 @@ first time too early.
   `DurableEpochManager` *cannot* use fault injection — its second step is an
   in-memory move, not a write, so a crash-after-the-row test would pass under
   both orderings. That test was correctly not written.
+
+---
+
+## 10. Snapshot-fallback peel, and the snapshot tables (2026-09-15)
+
+Two P9 items, investigated together because both turned on the same question:
+which durable thing actually holds past-epoch state.
+
+### The plan named the wrong source, and it is the third stale noun
+
+"Snapshot-fallback peel" said `ISnapshotStorage`. It could never have worked.
+
+- **What fails is the transport wrap, not MLS.** `MlsGroup.RetainCurrentEpoch`
+  keeps a past epoch's secret tree so an application message sent in it stays
+  readable, and **deliberately drops that epoch's exporter secret** along with
+  the init, membership and confirmation secrets — "retaining them would let old
+  key material be used to act in the present". So the inner MLS message is
+  readable and the kind-445 seal around it is not.
+- **`ISnapshotStorage` holds Marmot-layer rows plus the group's *current* live
+  state.** The current state is the one that already failed. It has no
+  per-epoch MLS state at all.
+- **`EpochArchive` holds exactly the right thing.** A checkpoint is
+  `MlsGroup.Export()`, which writes all fourteen key-schedule secrets, so an
+  import yields a group whose `ExportSecret` is that epoch's.
+- **A test had already hand-rolled it.** `ConvergenceInteropTests`
+  `WaitForCompetingCommitAsync` keeps its own epoch → export dictionary and
+  peels through it, commenting "reading the race epoch's exporter secret needs
+  the group as it was then." The mechanism was proven against a live peer
+  before the engine had it.
+
+So: `MarmotSession.ReceiveAsync`, backed by `RetainedTransportKeys`. Try the
+live key, and on a retryable failure try each retained epoch's, newest first.
+
+### It is not mainly about chat, which is how the scope was mis-stated
+
+The criterion says "epoch-boundary **messages** survive". The larger case is
+commits. A competing commit is framed at the epoch it forks from and sealed
+under that epoch's key — so **without this, a fork is invisible at the
+transport layer**: nothing peels, no `Retryable` record is written,
+`ConvergencePass` reads an empty candidate list, and a split group reports
+itself settled. Convergence was reachable only because every test peeled with
+the sender's own group.
+
+### The bound needed no new constant
+
+`MaxRewindCommits`, `AppMessagePastEpochLimit` and `MarmotGroupSettings.MaxPastEpochs`
+are all 5, and `RequireWindowMatches` already refuses a policy where they
+disagree. The archive's retention window is therefore exactly the set of epochs
+whose inner messages the group can still read. Retrying is additionally gated on
+the envelope naming an address this group has used inside that window, so
+somebody else's traffic costs one signature check rather than six.
+
+**Not covered, and cannot be:** an envelope sealed under an epoch we have *not
+yet reached*. No key exists for it and nothing keeps the envelope — the durable
+records are MLS bytes, and there are none until it peels. Left to redelivery.
+
+### The snapshot tables are a choice, not a gap
+
+Investigated and **deliberately left out**, now written into
+`SqliteMarmotStorageProvider.Snapshots.cs` so it is not re-opened. Two reasons:
+
+- **`epoch_states`, `commit_publish_attempts`, `staged_commits` describe a
+  commit's exposure to the outside world.** A rollback can undo what this device
+  knows; nothing local undoes what a relay holds. An attempt row's absence is a
+  positive claim `ClassifyAsync` abandons on — §9's bug at one write's distance,
+  which cost two of nine kill points an epoch. `epoch_states` adds its own
+  reason: it is the write-through shadow of an in-memory `EpochManager` a
+  storage rollback does not touch.
+- **`epoch_archive` is key material whose destruction is deliberate.** Restoring
+  a snapshot taken at epoch N while at N+3 resurrects checkpoints the
+  forward-only prune had already destroyed — whole exported groups. Its window
+  is anchored on the live tip, not on the snapshot's epoch, besides.
+
+And the file's own header was **stale in the opposite direction**: it said
+snapshots "deliberately do NOT capture MLS state" while `GroupDto.LiveState`
+has carried the exported group since V010. Corrected.
+
+**Nothing in production calls `CreateSnapshotAsync`, and the design it was
+written for was not adopted** — convergence rebuilds from the archive and
+*invalidates* superseded records rather than rolling a table back. Recorded as
+a finding; not deleted, because the reasoning in it is worth more than the rows
+it would save.

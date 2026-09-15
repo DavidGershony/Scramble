@@ -4,12 +4,21 @@ namespace Scramble.Marmot.Storage;
 /// Epoch-anchored snapshots of a group's stored state.
 /// </summary>
 /// <remarks>
-/// This is the primitive both fork recovery and convergence replay are built
-/// on: take a snapshot before applying a commit, and roll back to it if a
-/// competing branch wins. Snapshots are anchored to the epoch they were taken
-/// at — not merely counted — because recovery needs to find "the snapshot for
-/// epoch N", and pruning is bounded by the convergence rewind horizon rather
-/// than by a fixed number of retained snapshots.
+/// <para>
+/// Snapshots are anchored to the epoch they were taken at — not merely counted
+/// — because a caller needs to find "the snapshot for epoch N", and pruning is
+/// bounded by the convergence rewind horizon rather than by a fixed number of
+/// retained snapshots.
+/// </para>
+/// <para>
+/// <b>This was written as the primitive fork recovery and convergence replay
+/// would be built on, and neither was.</b> A convergence pass restores a branch
+/// from <see cref="IEpochArchiveStorage"/> and invalidates the message records
+/// the branch it left had delivered; it never rolls a table back. So nothing in
+/// production calls any of these today. The Sqlite implementation carries the
+/// reasoning, including why four later tables are deliberately outside a
+/// snapshot — read it before adding a fifth.
+/// </para>
 /// </remarks>
 public interface ISnapshotStorage
 {

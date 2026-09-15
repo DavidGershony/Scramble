@@ -8,10 +8,69 @@ namespace Scramble.Marmot.Storage.Sqlite;
 /// Epoch-anchored snapshot support.
 /// </summary>
 /// <remarks>
-/// A snapshot captures the Marmot-layer rows for one group as a JSON document.
-/// It deliberately does NOT capture MLS state: that lives in MLS storage and is
-/// snapshotted by exporting the group there. Rolling back both together is the
-/// engine's job, which is why rollback runs inside a transaction here.
+/// <para>
+/// A snapshot captures one group's Marmot-layer rows as a JSON document: the
+/// group record, its messages, its queued outbound intents and its leave
+/// request. Restoring has to be all-or-nothing, which is why rollback runs
+/// inside a transaction here.
+/// </para>
+/// <para>
+/// <b>It does carry MLS state, contrary to what this comment used to say.</b>
+/// <c>GroupDto.LiveState</c> is the exported MLS group, and it has to be:
+/// rolling the rows back to an earlier epoch while leaving the group standing
+/// on a later one produces a member holding history it cannot read and keys for
+/// history it no longer has. What is not carried is the per-epoch archive, for
+/// reasons below.
+/// </para>
+/// <para>
+/// <b>Nothing in production calls this.</b> Checked rather than assumed: every
+/// caller of <see cref="CreateSnapshotAsync"/> and
+/// <see cref="RollbackToSnapshotAsync"/> in the tree is a test. The design it
+/// was written for -- snapshot before applying a commit, roll back if a
+/// competing branch wins -- is not the one convergence arrived at.
+/// <c>ConvergencePass</c> rebuilds a branch from <c>EpochArchive</c> and then
+/// <i>invalidates</i> the superseded message records rather than deleting them,
+/// so the reorg path is forward-only and touches no other table. That is
+/// context for anyone extending this, not an argument for deleting it: the
+/// mechanism is sound and simply unreached.
+/// </para>
+/// <para>
+/// <b>Four tables added since are deliberately not captured.</b> Stated here so
+/// the omission is not re-opened as a gap. They divide into two reasons.
+/// </para>
+/// <para>
+/// <b>epoch_states, commit_publish_attempts and staged_commits describe a
+/// commit's exposure to the outside world.</b> A snapshot can roll back what
+/// this device knows; nothing local can roll back what a relay holds. An
+/// attempt row's absence is a positive claim -- <c>CommitPublisher</c> reads it
+/// as "nobody can have seen this commit" and abandons on it, and MLS refuses to
+/// let a member process a commit it authored, so that move cannot be undone.
+/// Creating or destroying that claim by rollback, at an arbitrary distance from
+/// the publish it is about, is the same bug that cost two of nine kill points a
+/// whole epoch when it was only one write early. <c>epoch_states</c> carries a
+/// second reason of its own: it is the write-through shadow of an in-memory
+/// <c>EpochManager</c> that a storage rollback does not touch, so restoring it
+/// alone leaves the durable and live halves of one fact disagreeing about
+/// whether the group is mid-publish.
+/// </para>
+/// <para>
+/// <b>epoch_archive is retained key material whose destruction is
+/// deliberate.</b> Its rows are pruned forward-only as the group advances, and
+/// that prune is what bounds how far back this member can still read. A
+/// snapshot taken at epoch N and restored at N+3 would resurrect checkpoints
+/// the prune had already destroyed -- whole exported groups, key schedules
+/// included -- so the rollback would quietly undo an erasure. Its window is
+/// anchored on the group's <i>current</i> tip rather than on the snapshot's
+/// epoch besides, so what came back would not be the window the policy asks
+/// for. That it is bulk MLS state passing through a JSON document is the least
+/// of the objections, not the main one.
+/// </para>
+/// <para>
+/// <b>If a table is ever added here</b>, <see cref="RestoreAsync"/> must delete
+/// its rows for the group before reinserting, as it does for the three it
+/// already covers. Restore writes what was captured and never removes what was
+/// not, so a table captured but not cleared rolls forward rather than back.
+/// </para>
 /// </remarks>
 public sealed partial class SqliteMarmotStorageProvider
 {
