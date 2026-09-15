@@ -89,6 +89,16 @@ public class MessageSendTests : IDisposable
         /// <summary>What that question answered, per send.</summary>
         public List<int> QueuedAtSendTime { get; } = [];
 
+        /// <summary>
+        /// Run at the moment the bytes would leave the device.
+        /// </summary>
+        /// <remarks>
+        /// The general form of <see cref="QueuedRightNow"/>, for a rule whose
+        /// evidence is not a row count. Anything a crash here would have left
+        /// behind is readable from inside this callback and nowhere else.
+        /// </remarks>
+        public Func<Task>? AtSendTime { get; set; }
+
         public async Task<MessageSendOutcome> SendAsync(
             string envelope, CancellationToken ct = default)
         {
@@ -96,6 +106,9 @@ public class MessageSendTests : IDisposable
 
             if (QueuedRightNow is not null)
                 QueuedAtSendTime.Add(await QueuedRightNow());
+
+            if (AtSendTime is not null)
+                await AtSendTime();
 
             return _answers.Count > 0 ? _answers.Dequeue() : _default;
         }
@@ -398,5 +411,53 @@ public class MessageSendTests : IDisposable
 
         Assert.Equal(1, queued.Attempts);
         Assert.Equal("app-message", queued.IntentKind);
+    }
+
+    // ---- Rule 9: the ratchet is durable before the envelope leaves ----
+
+    [Fact]
+    public async Task TheAdvancedRatchetIsDurableBeforeTheEnvelopeLeaves()
+    {
+        // Sealing an envelope moves the MLS sender ratchet, and it moves it in
+        // memory. A crash between the seal and the next persist brings the
+        // generation counter back rewound, and the next message is encrypted
+        // under a key and nonce this one has already used. That is AEAD nonce
+        // reuse: it surrenders both plaintexts and the authenticity of
+        // everything else sealed under that key, and no receiver behaviour
+        // repairs it.
+        //
+        // No fault injection is needed to see this, and building some would be
+        // the wrong instinct. The state a crash would leave behind is whatever
+        // storage holds at the moment the transport is called, which a probe at
+        // the transport seam can simply read -- and then restart from, which is
+        // the part that makes this a test about the ratchet rather than about a
+        // byte array changing.
+        var relay = new ProbeRelay(MessageSendOutcome.Accepted);
+        Pair pair = await PairAsync(relay);
+
+        byte[]? durableWhenItLeft = null;
+
+        relay.AtSendTime = async () =>
+            durableWhenItLeft = (await _fixture.Provider.GetGroupAsync(pair.GroupId))!.LiveState;
+
+        await pair.Us.SendAsync(Chat(pair, "first"));
+
+        Assert.NotNull(durableWhenItLeft);
+
+        // The recovered process, from the only bytes a crash would have left.
+        MlsGroup recovered = MlsGroup.Import(durableWhenItLeft!, _cs);
+
+        string second = GroupMessages.Send(
+            recovered,
+            new NostrGroupPeeler(),
+            Chat(pair, "second"),
+            pair.OurSigner.AccountPublicKey.Span);
+
+        // Read on the other member, in order, as two distinct messages. A
+        // rewound ratchet seals the second at the generation the first already
+        // spent, and the receiver -- which has consumed that key -- cannot open
+        // it at all.
+        Assert.Equal("first", ReadOnThem(pair, Assert.Single(relay.Envelopes)));
+        Assert.Equal("second", ReadOnThem(pair, second));
     }
 }
