@@ -79,8 +79,8 @@ interop testing keeps its keys and loses its groups.
 
 ## 3. Sequence
 
-Each step is separately verifiable and separately revertible. Steps 1–3 change
-no behaviour.
+Each step is separately verifiable and separately revertible. **Step 1 changes
+no behaviour; step 2 is where the app starts using the new engine.**
 
 1. **Build the fan-in.** The session layer is per-group; nothing routes an
    inbound envelope to a group. `IRoutingIndexStorage` (rotation-aware routing
@@ -110,7 +110,7 @@ touched only if a step above forces it, and then in its own commit.
 ## 4. The invariants, decided now
 
 **I4 — no flag-day rewrites.** Every step above is one subsystem. The step most
-likely to breach it is 3, because porting twenty members tempts a single commit.
+likely to breach it is 2, because porting twenty members tempts a single commit.
 Split it: the no-op adapter first, verified by the full integration suite, then
 the behaviour. If a step genuinely cannot be split, it takes a
 `Landing-Discipline-Exempt` trailer naming why — auditable, not silent.
