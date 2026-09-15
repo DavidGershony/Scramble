@@ -300,6 +300,21 @@ public static class MarmotGroupInvite
     /// <summary>
     /// Checks one KeyPackage against what a group requires of a new member.
     /// </summary>
+    /// <remarks>
+    /// Every refusal here that means <i>this invitee cannot join</i> carries
+    /// <see cref="AppComponentRejection.MissingRequiredCapabilities"/>, so a
+    /// caller can offer to drop them and retry without reading the message. The
+    /// two that do not are not about the invitee's capabilities at all: an
+    /// unverifiable KeyPackage is malformed input, and a group with no
+    /// <c>required_capabilities</c> extension is our own state being wrong.
+    /// Classifying those the same way would tell a caller to drop an invitee
+    /// who is not at fault.
+    ///
+    /// <b>Which invitee</b> is the caller's own loop index — this takes exactly
+    /// one KeyPackage — which is why no subject is carried. Contrast
+    /// <see cref="MarmotGroupProfile.Negotiate"/>, which sees every member at
+    /// once and must name one.
+    /// </remarks>
     /// <param name="group">The group being joined.</param>
     /// <param name="cs">The group's ciphersuite.</param>
     /// <param name="keyPackage">The invitee's KeyPackage.</param>
@@ -328,13 +343,27 @@ public static class MarmotGroupInvite
         // RFC 9420 §12.1.1. The library defines this check and never runs it, so
         // a leaf advertising neither our version nor our ciphersuite would be
         // added and then be unable to process anything.
+        //
+        // Both gates are UNTESTED, and so are their reasons — deleting either
+        // check, or dropping its reason, leaves the suite green. Not an
+        // oversight: `MlsGroup.CreateKeyPackage` takes no version or ciphersuite
+        // argument, so a correctly signed leaf that omits one cannot be built,
+        // and editing a valid leaf breaks its signature so the KeyPackage is
+        // refused as malformed before either gate runs. Same reason the
+        // required-EXTENSION gate below has no negative test. They are written
+        // from the RFC, not from a failure anyone has seen here.
         if (!leaf.Capabilities.Versions.Contains(ProtocolVersion.Mls10))
-            throw new AppComponentException("The invitee does not advertise MLS 1.0.");
+        {
+            throw new AppComponentException(
+                "The invitee does not advertise MLS 1.0.",
+                AppComponentRejection.MissingRequiredCapabilities);
+        }
 
         if (!leaf.Capabilities.CipherSuites.Contains(cs.Id))
         {
             throw new AppComponentException(
-                $"The invitee does not advertise ciphersuite 0x{cs.Id:x4}.");
+                $"The invitee does not advertise ciphersuite 0x{cs.Id:x4}.",
+                AppComponentRejection.MissingRequiredCapabilities);
         }
 
         RequiredCapabilities required =
@@ -343,10 +372,15 @@ public static class MarmotGroupInvite
 
         foreach (ushort extensionType in required.ExtensionTypes)
         {
+            // Untested, and its reason with it — see
+            // ALeafCarryingTheDictionaryAlwaysAdvertisesIt, which records why no
+            // leaf omitting 0x0006 can be constructed. The proposal gate below
+            // is the one that is actually exercised.
             if (!leaf.Capabilities.Extensions.Contains(extensionType))
             {
                 throw new AppComponentException(
-                    $"The invitee does not advertise required extension 0x{extensionType:x4}.");
+                    $"The invitee does not advertise required extension 0x{extensionType:x4}.",
+                    AppComponentRejection.MissingRequiredCapabilities);
             }
         }
 
@@ -355,7 +389,8 @@ public static class MarmotGroupInvite
             if (!leaf.Capabilities.Proposals.Contains(proposalType))
             {
                 throw new AppComponentException(
-                    $"The invitee does not advertise required proposal 0x{proposalType:x4}.");
+                    $"The invitee does not advertise required proposal 0x{proposalType:x4}.",
+                    AppComponentRejection.MissingRequiredCapabilities);
             }
         }
 
@@ -372,7 +407,8 @@ public static class MarmotGroupInvite
             {
                 throw new AppComponentException(
                     $"The invitee does not advertise app component 0x{componentId:x4}, " +
-                    "which this group requires.");
+                    "which this group requires.",
+                    AppComponentRejection.MissingRequiredCapabilities);
             }
         }
 

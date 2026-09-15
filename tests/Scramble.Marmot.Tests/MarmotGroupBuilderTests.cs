@@ -272,6 +272,11 @@ public class MarmotGroupBuilderTests
         // guard would be doing no work.
         Assert.Contains("bob", ex.Message);
         Assert.DoesNotContain("alice", ex.Message);
+
+        // The name is for a human; the reason is for the caller. Both are
+        // needed — the reason alone cannot say who to drop, and the message
+        // alone cannot be branched on.
+        Assert.Equal(AppComponentRejection.MissingRequiredCapabilities, ex.Reason);
     }
 
     [Fact]
@@ -287,6 +292,11 @@ public class MarmotGroupBuilderTests
             () => MarmotGroupProfile.Negotiate(withoutAdminPolicy, []));
 
         Assert.Contains("negotiated out", ex.Message);
+
+        // Same reason as the named guard. To a caller this is still somebody
+        // being unable to support what the group requires; what is lost is only
+        // the ability to say who.
+        Assert.Equal(AppComponentRejection.MissingRequiredCapabilities, ex.Reason);
     }
 
     [Fact]

@@ -160,9 +160,46 @@ public static class AppComponent
 /// schema forbids.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Component state is signed group state: every member must reach the same
 /// decision about the same bytes. So a violation is an error rather than
 /// something to repair locally — a receiver that silently normalises what it
 /// was given has forked its view of the group from everyone else's.
+/// </para>
+/// <para>
+/// <b>Every one of these is terminal.</b> The same bytes judged again by the
+/// same build reach the same verdict, so there is nothing for a retry loop to
+/// do. That is stated rather than enforced: there is no <c>IsRetryable</c> here
+/// to mirror <c>IngestOutcome</c>'s, because a predicate that answers the same
+/// way for every instance tells a caller nothing it did not already know from
+/// the type.
+/// </para>
 /// </remarks>
-public sealed class AppComponentException(string message) : Exception(message);
+public sealed class AppComponentException : Exception
+{
+    /// <summary>An unclassified refusal.</summary>
+    public AppComponentException(string message)
+        : this(message, AppComponentRejection.Unclassified)
+    {
+    }
+
+    /// <summary>A refusal a caller can branch on.</summary>
+    public AppComponentException(string message, AppComponentRejection reason)
+        : base(message) => Reason = reason;
+
+    /// <summary>
+    /// Why this was refused, in a form a caller can branch on.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="AppComponentRejection.Unclassified"/> unless the throwing site
+    /// said otherwise, which most do not — see
+    /// <see cref="AppComponentRejection"/> for why that is the honest default
+    /// rather than a gap to be filled in.
+    /// </remarks>
+    public AppComponentRejection Reason { get; }
+
+    /// <summary>
+    /// The stable token for <see cref="Reason"/>, spelled as upstream spells it.
+    /// </summary>
+    public string Kind => AppComponentRejections.Kind(Reason);
+}

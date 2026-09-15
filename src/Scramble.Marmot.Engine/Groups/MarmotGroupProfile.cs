@@ -100,7 +100,8 @@ public static class MarmotGroupProfile
                 {
                     throw new AppComponentException(
                         $"Member {member.Label} does not advertise mandatory component " +
-                        $"0x{mandatory:x4}, so it cannot be negotiated out and they cannot join.");
+                        $"0x{mandatory:x4}, so it cannot be negotiated out and they cannot join.",
+                        AppComponentRejection.MissingRequiredCapabilities);
                 }
             }
 
@@ -111,8 +112,14 @@ public static class MarmotGroupProfile
         {
             if (!negotiated.Contains(mandatory))
             {
+                // Same reason as the guard above, and deliberately so: to a
+                // caller this is still "somebody cannot support what the group
+                // requires". What it cannot add is the name — which is the
+                // whole difference between the two checks, and why the token
+                // alone is not a substitute for reading the message.
                 throw new AppComponentException(
-                    $"Mandatory component 0x{mandatory:x4} was negotiated out of a new group.");
+                    $"Mandatory component 0x{mandatory:x4} was negotiated out of a new group.",
+                    AppComponentRejection.MissingRequiredCapabilities);
             }
         }
 

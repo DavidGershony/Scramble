@@ -198,9 +198,16 @@ public static class CurrentProfile
 
             if (!KnownGroupComponents.Contains(componentId))
             {
+                // The other side of the invite gate, and the same reason as far
+                // as a caller is concerned: somebody cannot honour what this
+                // group requires, and here that somebody is us. Upstream files
+                // both under one variant for exactly this reason —
+                // group_lifecycle.rs raises MissingRequiredCapabilities both for
+                // an invitee's KeyPackage and for its own `self_missing` set.
                 throw new AppComponentException(
                     $"Invalid Current-profile {what}: required component 0x{componentId:x4} " +
-                    "is not supported by this implementation.");
+                    "is not supported by this implementation.",
+                    AppComponentRejection.MissingRequiredCapabilities);
             }
 
             if (!context.Dictionary.Contains(componentId))

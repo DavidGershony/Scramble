@@ -159,6 +159,12 @@ public class MarmotGroupInviteTests
 
         Assert.Contains($"0x{AppComponent.GroupAdminPolicy:x4}", ex.Message);
         Assert.Contains("requires", ex.Message);
+
+        // And the caller can act on it without reading the sentence: this is
+        // the refusal a UI turns into "ask them to update, or invite somebody
+        // else", and a substring match on the message would stop working the
+        // first time anyone reworded it.
+        Assert.Equal(AppComponentRejection.MissingRequiredCapabilities, ex.Reason);
     }
 
     [Fact]
@@ -177,6 +183,7 @@ public class MarmotGroupInviteTests
             () => MarmotGroupInvite.ValidateInvitee(group.Group, _cs, invitee));
 
         Assert.Contains($"required proposal 0x{MarmotLeaf.AppDataUpdateProposalType:x4}", ex.Message);
+        Assert.Equal(AppComponentRejection.MissingRequiredCapabilities, ex.Reason);
     }
 
     [Fact]
@@ -248,6 +255,12 @@ public class MarmotGroupInviteTests
             () => MarmotGroupInvite.ValidateInvitee(group.Group, _cs, invitee.KeyPackage));
 
         Assert.Contains("KeyPackage is invalid", ex.Message);
+
+        // Unclassified, and deliberately: a KeyPackage that does not verify is
+        // malformed input, not a member who lacks a capability. Blaming this on
+        // capabilities would send a caller off to check what the invitee
+        // supports, when the answer is that nothing it claims can be believed.
+        Assert.Equal(AppComponentRejection.Unclassified, ex.Reason);
     }
 
     [Fact]
