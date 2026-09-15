@@ -102,8 +102,24 @@ branch would break the gate, and marking it skipped is not available to us
   decision — Dark Matter only, no dual-running window, backwards compatibility
   is not a goal — removes it for good.
 
-**Left:** the profile upgrade flow, and making capability-mismatch rejections
-match mdk's error taxonomy.
+**And the upgrade flow is dead too** (checked 2026-09-15). `ProtocolProfile` has
+exactly two values and `Legacy` is documented "deliberately not implemented", so
+an upgrade flow has no source profile to upgrade *from*. The 2026-09-13 scope
+decision finishes it off.
+
+**Left: the exit criterion alone** — capability-mismatch rejections matching
+mdk's error taxonomy. Today every component and capability refusal funnels
+through `AppComponentException(string message)`: one type, carrying only prose.
+Upstream classifies (§6 records a refusal moving from an unclassified `Other`
+bucket to `UnknownMember`, naming the key at fault).
+
+Two reasons it is worth doing rather than dropping, and they pull the same way.
+A caller has to branch on the reason — P11 puts this behind `Scramble.Core`, and
+a UI needs "this invitee lacks a mandatory component" to be distinguishable,
+while the cutover rules forbid Marmot types reaching `Scramble.Presentation`. And
+error typing has bitten this project before: §3a, *"malformed input escaped as
+the wrong exception type, bypassing the retryable/terminal classification the
+engine branches on."*
 
 ---
 
