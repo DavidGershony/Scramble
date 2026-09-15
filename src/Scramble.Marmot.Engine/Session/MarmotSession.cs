@@ -3,6 +3,7 @@ using DotnetMls.Group;
 using Scramble.Marmot.Engine.Convergence;
 using Scramble.Marmot.Engine.Groups;
 using Scramble.Marmot.Engine.Ingest;
+using Scramble.Marmot.Ingest;
 using Scramble.Marmot.Engine.Messages;
 using Scramble.Marmot.Storage;
 using Scramble.Marmot.Wire.Nostr;
@@ -465,6 +466,7 @@ public sealed class MarmotSession
     private readonly ConvergencePolicy _policy;
     private readonly Func<DateTimeOffset> _clock;
     private readonly MessageIngest _ingest;
+    private readonly RetainedTransportKeys _keys;
 
     private MlsGroup _group;
 
@@ -489,6 +491,7 @@ public sealed class MarmotSession
         Recovery = recovery;
 
         _ingest = new MessageIngest(storage, host.Epochs.Epochs, clock, host.Archive);
+        _keys = new RetainedTransportKeys(host.Archive);
     }
 
     /// <summary>The group's Marmot id.</summary>
@@ -524,6 +527,155 @@ public sealed class MarmotSession
 
         return result;
     }
+
+    /// <summary>
+    /// Peels one transport envelope for this group and puts it through ingest.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The epoch-boundary case is the reason this exists.</b> A kind-445
+    /// envelope is sealed under the exporter secret of the epoch it was sent
+    /// in, and a member who had not yet seen our latest commit seals under the
+    /// epoch we have just left. Peeled against the live key alone, that message
+    /// fails at the transport layer and ingest never sees MLS bytes — so it is
+    /// not deferred, not stored and not replayed: it is gone, with no record
+    /// that it existed. Falling back through
+    /// <see cref="RetainedTransportKeys"/> is what makes it survive.
+    /// </para>
+    /// <para>
+    /// <b>It matters more for commits than for chat.</b> A competing commit is
+    /// framed at the epoch it forks from and sealed under that epoch's key, so
+    /// without this fallback a fork is invisible at the transport layer:
+    /// nothing reaches ingest, no <c>Retryable</c> record is written, and
+    /// <c>ConvergencePass</c> reads an empty candidate list and reports a
+    /// settled group that has in fact split.
+    /// </para>
+    /// <para>
+    /// <b>What is not covered, and cannot be.</b> An envelope sealed under an
+    /// epoch we have not yet reached opens under no key we hold, and nothing
+    /// here keeps the envelope — the durable records are MLS bytes, and there
+    /// are none until it peels. That case is left to the relay redelivering.
+    /// </para>
+    /// <para>
+    /// <b>The retry cost is bounded by the archive window and by the address.</b>
+    /// Only an envelope whose signature verifies and whose <c>h</c> tag names an
+    /// address this group has used inside the retained window is retried at all,
+    /// and then at most once per retained epoch. Each retry re-parses and
+    /// re-verifies the envelope, because <see cref="ITransportPeeler.Peel"/>
+    /// takes one secret and decides everything else itself; widening that seam
+    /// to take several would save those checks and cost a breaking change to
+    /// every implementation and interop caller, which the bound does not yet
+    /// justify.
+    /// </para>
+    /// </remarks>
+    /// <param name="envelope">The transport envelope, as it came off the wire.</param>
+    public async Task<IngestResult> ReceiveAsync(
+        string envelope, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+
+        IReadOnlyList<RetainedTransportKey> keys =
+            await _keys.NewestFirstAsync(GroupId, _group, ct);
+
+        PeelAttempt attempt = TryPeel(envelope, keys[0]);
+
+        // The first attempt answers two questions, which is why it is not a
+        // loop iteration like the rest. It tries the key an envelope almost
+        // always wants, and it reports which address the envelope names -- a
+        // tag nothing outside the peeler may read, because the peeler verifies
+        // the event's signature before any field of it is trustworthy.
+        if (attempt.Peeled is null && attempt.Retryable && attempt.AddressedTo is { } address)
+        {
+            List<RetainedTransportKey> older = keys
+                .Skip(1)
+                .Where(k => address.SequenceEqual(k.TransportGroupId))
+                .ToList();
+
+            // Not ours, as far as this member can tell, and that qualifier is
+            // the honest one: an address from beyond the retained window is
+            // indistinguishable from another group's, and both are equally
+            // unusable. Answered before the retries rather than after, so
+            // somebody else's traffic costs one signature check and not six.
+            if (older.Count == 0 && !address.SequenceEqual(keys[0].TransportGroupId))
+                return Refuse(InputRejectionCategory.WrongRecipient);
+
+            foreach (RetainedTransportKey key in older)
+            {
+                attempt = TryPeel(envelope, key);
+                if (attempt.Peeled is not null || !attempt.Retryable)
+                    break;
+            }
+        }
+
+        if (attempt.Peeled is not { } peeled)
+        {
+            // Retryable and terminal are kept apart because the caller acts on
+            // them differently, and because the peeler is the only thing that
+            // can tell them apart: a malformed or unsigned envelope will never
+            // become valid, while one we simply have no key for might.
+            return new IngestResult(
+                attempt.Retryable
+                    ? new IngestOutcome.TransportDeferred(GroupId)
+                    : new IngestOutcome.Ignored(InputRejectionCategory.InvalidEncoding),
+                null);
+        }
+
+        // A Welcome opens without any group key at all, so it can reach here
+        // addressed to nobody in particular. It is joined from rather than
+        // ingested into a group, and this door is a group's.
+        if (peeled.Kind != PeeledContentKind.GroupMessage)
+            return Refuse(InputRejectionCategory.WrongRecipient);
+
+        return await IngestAsync(peeled.MlsBytes, peeled.TransportId, ct);
+    }
+
+    /// <summary>One peel attempt under one key.</summary>
+    /// <param name="Peeled">What came out, or null if nothing did.</param>
+    /// <param name="AddressedTo">
+    /// The routing id the envelope named, or null when the peeler refused
+    /// before reading it.
+    /// </param>
+    /// <param name="Retryable">Whether another key could do better.</param>
+    private readonly record struct PeelAttempt(
+        PeeledMessage? Peeled, byte[]? AddressedTo, bool Retryable);
+
+    private PeelAttempt TryPeel(string envelope, RetainedTransportKey key)
+    {
+        byte[]? addressedTo = null;
+
+        try
+        {
+            PeeledMessage peeled = _host.Peeler.Peel(
+                envelope,
+                id =>
+                {
+                    addressedTo = id;
+
+                    // Exact equality, never a prefix or a nearest match. A
+                    // routing id is public and appears on every kind-445 event,
+                    // so anything looser is a way to steer one group's traffic
+                    // into another group's keys.
+                    //
+                    // Fail-safe rather than load-bearing, and it survives
+                    // mutation: handing the key over regardless still refuses a
+                    // foreign envelope, because the AEAD fails and the address
+                    // check below then answers WrongRecipient on the same
+                    // evidence. That check is the one doing the work. This one
+                    // is kept so the refusal also holds at the point the key
+                    // would leave, which is where it is cheapest to be sure of.
+                    return id.SequenceEqual(key.TransportGroupId) ? key.ExporterSecret : null;
+                });
+
+            return new PeelAttempt(peeled, addressedTo, false);
+        }
+        catch (PeelFailedException ex)
+        {
+            return new PeelAttempt(null, addressedTo, ex.Retryable);
+        }
+    }
+
+    private static IngestResult Refuse(InputRejectionCategory category) =>
+        new(new IngestOutcome.Ignored(category), null);
 
     /// <summary>
     /// Re-runs the messages that were held rather than delivered.
@@ -967,5 +1119,17 @@ public sealed class MarmotSession
         GroupJournal.Unbind(_group);
         GroupJournal.Bind(group, GroupId, _storage, _clock);
         _group = group;
+
+        // The retained transport keys describe the branch we are leaving. See
+        // RetainedTransportKeys.Invalidate for why the epoch alone does not
+        // settle this.
+        //
+        // This line is UNCOVERED and removing it passes the suite. The case
+        // that needs it is a reorg onto a branch of equal depth, which lands on
+        // an epoch numbered the same as the one it left -- and which branch
+        // wins a tie is decided by commit ordering over freshly generated keys,
+        // so a test that reproduced it would be deciding the tie by luck. The
+        // invalidation itself is tested; its being called from here is not.
+        _keys.Invalidate();
     }
 }
