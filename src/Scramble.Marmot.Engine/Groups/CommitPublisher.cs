@@ -266,11 +266,27 @@ public sealed class CommitPublisher
                 return outcome;
         }
 
-        // Cleared last, never first. The row is what says a commit may be out
-        // there; it has to outlive the local move it authorised. A crash
-        // between the clear and the move would come back with no record of a
-        // commit whose fate we knew and whose application we cannot vouch for.
-        await _storage.ClearCommitPublishAttemptAsync(groupId, ct).ConfigureAwait(false);
+        // Cleared here only for a refusal, and that asymmetry is the whole
+        // point. A refused commit has no durable consequence pending: nothing
+        // else will be written about it, so the row has nothing left to
+        // outlive.
+        //
+        // An ACCEPTED one does. Applied() closes an in-memory state machine,
+        // and the move a restart can actually see -- the archived checkpoint
+        // and the group's live state -- belongs to the caller and has not
+        // happened yet. Clearing here opened a window in which the relay had
+        // the commit, every other member applied it, and we came back with no
+        // attempt row: ClassifyAsync reads that absence as the positive claim
+        // "nobody can have seen this commit", abandons it, and MLS will not let
+        // us re-process a commit we authored. Unrecoverable, and it was real --
+        // see CrashRecoveryTests.ACommitTheRelayTookIsNotAbandonedByACrashBeforeTheDurableMove.
+        //
+        // So the caller clears it, and already does: MarmotSessionHost's
+        // ConfirmAsync writes the checkpoint and the live state and only then
+        // drops this row and the staged one. Nothing new was needed here except
+        // to stop doing it twice, the first time too early.
+        if (outcome == CommitPublishOutcome.Rejected)
+            await _storage.ClearCommitPublishAttemptAsync(groupId, ct).ConfigureAwait(false);
 
         return outcome;
     }

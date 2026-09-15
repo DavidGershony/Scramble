@@ -242,40 +242,45 @@ public class CommitPublishIntentTests
     }
 
     [Fact]
-    public async Task TheRowIsClearedOnlyAfterTheGroupHasActuallyMoved()
+    public async Task AnAcceptedCommitKeepsItsRowForWhoeverOwnsTheDurableMove()
     {
-        // Cleared first, a crash in between comes back with no record of a
-        // commit that was confirmed and whose local apply we cannot vouch for
-        // -- so the next session abandons a commit every other member holds.
+        // This asserted the row was cleared here, and that was the defect: the
+        // apply it waited for is an in-memory one, while the move a restart can
+        // see -- the checkpoint and the live state -- belongs to the caller and
+        // has not happened yet. A crash in between came back with no attempt
+        // row, which ClassifyAsync reads as "nobody saw this commit", and the
+        // commit was abandoned though the whole group had applied it.
         Fixture f = await NewAsync();
-        f.Store.FailClears = true;
 
         using StagedCommit staged = MarmotSelfUpdate.Stage(f.Group.Group);
 
-        await Assert.ThrowsAsync<IOException>(
-            () => f.Publisher.PublishAsync(f.GroupId, staged, Wrap(f, staged)));
+        Assert.Equal(
+            CommitPublishOutcome.Accepted,
+            await f.Publisher.PublishAsync(f.GroupId, staged, Wrap(f, staged)));
 
-        // The apply happened despite the clear failing, and the row that
-        // survives says the commit is live -- which is exactly what a restart
-        // needs in order to notice that only the clear was lost.
         Assert.Equal(1u, f.Group.Group.Epoch);
         Assert.Equal(CommitPublishState.Accepted, f.Store.Row(f.GroupId)?.State);
         Assert.Equal(new EpochId(1), f.Store.Row(f.GroupId)?.NewEpoch);
+
+        // It goes when that move lands -- MarmotSessionHost.ConfirmAsync
+        // writes the checkpoint and the live state and only then drops it.
     }
 
     [Fact]
-    public async Task AResolvedPublishLeavesNoRowBehind()
+    public async Task ARefusedPublishLeavesNoRowBehind()
     {
-        // The row's job is to classify a STRANDED commit. One that has been
-        // applied is not stranded, and a row left behind for it would tell the
-        // next session to adopt a commit it has already adopted.
+        // A refusal has no durable consequence pending -- nothing further will
+        // be written about this commit -- so the row has nothing left to
+        // outlive and goes immediately. An accepted one is the opposite case,
+        // and used to be treated the same way; see the test above.
         Fixture f = await NewAsync();
+        f.Relay.Answer = () => CommitPublishOutcome.Rejected;
 
         using StagedCommit staged = MarmotSelfUpdate.Stage(f.Group.Group);
         CommitPublishOutcome outcome =
             await f.Publisher.PublishAsync(f.GroupId, staged, Wrap(f, staged));
 
-        Assert.Equal(CommitPublishOutcome.Accepted, outcome);
+        Assert.Equal(CommitPublishOutcome.Rejected, outcome);
         Assert.Equal(0, f.Store.Count);
         Assert.Equal(StrandedCommitVerdict.Abandon, await f.Publisher.ClassifyAsync(f.GroupId));
     }

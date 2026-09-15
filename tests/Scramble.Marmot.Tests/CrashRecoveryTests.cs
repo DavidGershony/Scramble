@@ -29,6 +29,14 @@ namespace Scramble.Marmot.Tests;
 /// the group — one way we advance alone, the other way we stay behind alone.
 /// </para>
 /// <para>
+/// <b>The later kills are between two storage writes, and those need
+/// <see cref="CrashingStorage"/>.</b> The first two above are staged by simply
+/// not calling the next method; a crash that lands between two writes inside one
+/// method cannot be. Where a probe at a seam would do instead, it is used
+/// instead — see <c>MessageSendTests</c> for the send path's ordering, which
+/// needs no fault at all.
+/// </para>
+/// <para>
 /// <b>A restart may read only what is durable.</b> That is the whole point, and
 /// it is why <see cref="RestartAsync"/> deliberately goes back to storage rather
 /// than keeping a reference to anything: an <see cref="MlsGroup"/> is an
@@ -161,6 +169,34 @@ public class CrashRecoveryTests : IDisposable
             throw new NotSupportedException("Hydration must not need a relay.");
     }
 
+    /// <summary>A transport that takes everything, which is the dangerous case.</summary>
+    private sealed class AcceptingRelay : ICommitRelay
+    {
+        public Task<CommitPublishOutcome> PublishAsync(
+            string envelope, CancellationToken ct = default) =>
+            Task.FromResult(CommitPublishOutcome.Accepted);
+    }
+
+    /// <summary>
+    /// A host over storage that stops working at a nominated write.
+    /// </summary>
+    /// <remarks>
+    /// The provider underneath is the fixture's own, so everything written
+    /// before the nominated call is on the same disk <see cref="RestartAsync"/>
+    /// reads from. That is what makes the kill a crash rather than a
+    /// hypothetical: the surviving rows are real SQLite rows, written by the
+    /// real provider, and the restart has no idea anything unusual happened.
+    /// </remarks>
+    private (MarmotSessionHost Host, CrashingStorage Crash) CrashingHost(ICommitRelay relay)
+    {
+        (IMarmotStorageProvider storage, CrashingStorage crash) =
+            CrashingStorage.Over(_fixture.Provider);
+
+        return (
+            new MarmotSessionHost(storage, _cs, relay, ConvergencePolicy.V1, () => _now),
+            crash);
+    }
+
     // ---- The gap underneath both ----
 
     [Fact]
@@ -253,5 +289,114 @@ public class CrashRecoveryTests : IDisposable
             GroupMessages.Receive(revived, AppMessage(pair, "carried on without you"));
 
         Assert.Equal("carried on without you", received.Event.Content);
+    }
+
+    // ---- Killed between the record and the checkpoint ----
+
+    [Fact]
+    public async Task AGroupKilledBetweenItsRecordAndItsCheckpointStillOpens()
+    {
+        // AdoptAsync writes twice and only one of the two writes is
+        // self-sufficient. The record carries LiveState, so a group whose
+        // record landed opens from it alone and archives itself on the way in.
+        // A checkpoint that landed first would be a checkpoint for a group no
+        // record mentions, and hydration starts from the record -- so the group
+        // would be gone, with its state sitting unread in the archive.
+        CreatedGroup us = await MarmotGroupBuilder.CreateAsync(
+            _cs, new LocalSigner(), "Rakes", "", Now, Relays);
+
+        var groupId = new GroupId(us.GroupId);
+        (MarmotSessionHost host, CrashingStorage crash) = CrashingHost(new UnreachableRelay());
+
+        // The first write of the two, whichever one that is. Nominated by
+        // position rather than by name on purpose: a name would follow the call
+        // if the order were swapped, and this test would then kill the same
+        // write in both worlds and prove nothing.
+        crash.DieAfterWrite(1);
+
+        await Assert.ThrowsAsync<StorageCrashException>(
+            () => host.AdoptAsync(us.ToRecord(_now), us.Group));
+
+        // The kill really did land between the two. Checked before the restart,
+        // because OpenAsync archives whatever it settles on and would otherwise
+        // manufacture the checkpoint this asserts is missing.
+        Assert.Null(
+            await _fixture.Provider.GetEpochCheckpointAsync(
+                groupId, new EpochId(us.Group.Epoch)));
+
+        MlsGroup? revived = await RestartAsync(groupId);
+
+        Assert.True(revived is not null, "The group was lost between its two adoption writes.");
+        Assert.Equal(us.Group.Epoch, revived!.Epoch);
+
+        // Opened, not merely present: a revived group has to be able to carry
+        // on, and staging a commit is the cheapest proof that what came back is
+        // an MLS group and not a shape of one. The epoch is read first because
+        // hydration bound the group to its journal, and staging on a bound
+        // group merges in order to derive the state the commit produces.
+        ulong standing = revived.Epoch;
+
+        using StagedCommit next = MarmotSelfUpdate.Stage(revived);
+        Assert.Equal(standing + 1, next.NewEpoch.Value);
+    }
+
+    // ---- Killed between the relay's answer and the durable move ----
+
+    [Fact]
+    public async Task ACommitTheRelayTookIsNotAbandonedByACrashBeforeTheDurableMove()
+    {
+        // CommitPublisher clears the publish-attempt row last, which is correct
+        // inside PublishAsync: the row outlives staged.Applied(). But Applied()
+        // only closes an in-memory state machine. The move that a restart can
+        // see is the session's -- ConfirmAsync's archive capture and live-state
+        // write -- and that happens AFTER PublishAsync has returned, so after
+        // the row is already gone.
+        //
+        // Observed, over real storage: killing the process immediately after
+        // that clear leaves a staged commit with no attempt row behind it.
+        // ClassifyAsync reads no row as the positive statement "nobody else can
+        // have seen this commit", so hydration abandons a commit the relay
+        // accepted and every other member has applied -- and it cannot be
+        // reissued, because MLS refuses to let a member process a commit it
+        // authored. The window is two writes wide: a kill after the archive
+        // capture that follows it does the same thing, with the epoch's state
+        // sitting in the archive, unread.
+        //
+        // The neighbouring windows behave: killed one write earlier, at the
+        // resolved-Accepted row, the group comes back at the new epoch with
+        // verdict Adopt.
+        Pair pair = await PairAsync();
+
+        (MarmotSessionHost host, CrashingStorage crash) = CrashingHost(new AcceptingRelay());
+        await host.RestoreAsync();
+        MarmotSession session = (await host.OpenAsync(pair.GroupId)).Session!;
+
+        byte[]? wire = null;
+
+        // Named rather than counted: the question here is what survives a crash
+        // at a point the engine names, not which of two writes went first.
+        crash.DieAfterWrite(nameof(IMarmotStorageProvider.ClearCommitPublishAttemptAsync));
+
+        await Assert.ThrowsAsync<StorageCrashException>(() => session.CommitAsync(
+            MarmotSelfUpdate.Stage,
+            staged =>
+            {
+                wire = Serialize(staged.Commit);
+                return "envelope";
+            }));
+
+        // The rest of the group moved, which is what makes abandoning it a fork
+        // rather than a tidy-up.
+        Apply(pair.Them, wire!);
+
+        MlsGroup? revived = await RestartAsync(pair.GroupId);
+
+        Assert.True(revived is not null, "Nothing durable was left to restart from.");
+        Assert.Equal(pair.Them.Epoch, revived!.Epoch);
+
+        ReceivedGroupMessage received =
+            GroupMessages.Receive(revived, AppMessage(pair, "still in the room"));
+
+        Assert.Equal("still in the room", received.Event.Content);
     }
 }
