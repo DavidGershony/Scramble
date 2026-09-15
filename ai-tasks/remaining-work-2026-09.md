@@ -79,7 +79,7 @@ caller.
 | Stranded-pending-commit crash recovery | **landed** (`8ef1729`) — both P9 crash criteria green in `CrashRecoveryTests` |
 | Quarantine | **dropped 2026-09-14**, and the decision was already made once — see §7. Replaced by an S-sized legibility fix on `OpenAsync`. |
 | Snapshot-fallback peel | **not started**. `ISnapshotStorage` exists and nothing peels through it. This is the epoch-boundary case: a kind-445 sealed under an exporter secret from an epoch we have left. |
-| Queued-intent drain polish | **not started** — follows publish intent |
+| Queued-intent drain polish | **misnamed**: there is no drain to polish, and no send path at all. See §8. |
 
 **Exit criterion, from the plan:** kill between stage and confirm, and between
 confirm and merge, and the group comes back consistent.
@@ -243,3 +243,70 @@ state machine, the durable flag, the accessor gate, or a retry entry point:
 Touches `Session/MarmotSession.cs`, one small type beside it, and its tests. No
 schema, `EpochState` or `IngestOutcome` change. **Fold it into the session-layer
 review rather than doing it concurrently.**
+
+---
+
+## 8. The engine cannot send a message (2026-09-15)
+
+`GroupMessages.Send` — the function that encrypts an application message — has
+**no production caller anywhere**. Every reference in the repo is a test. And
+`MarmotSession` exposes `IngestAsync`, `ReplayAsync`, `ConvergeAsync`,
+`CommitAsync` and `CloseAsync`: five verbs, and **no `SendAsync`**.
+
+So the new engine can receive a chat message, converge a fork, publish a commit
+and recover from a crash, and it cannot send a chat message.
+
+### Why this was invisible
+
+It hid in the gap between two phase rows, exactly as the convergence drain and
+the session layer did.
+
+- **P6's scope says `send-app`, and P6 is genuinely done** — at the level its
+  exit criterion tests. That criterion is interop messaging, and the
+  `DarkMatterInterop` suite proves it by calling `GroupMessages.Send` directly.
+  The *function* works and is verified against a real peer. What was never built
+  is the composition around it.
+- **P9's scope says "queued-intent drain polish".** There is no drain to polish.
+  The word presumes a thing that does not exist — the same failure as
+  "quarantine" in §7, a noun carried forward without the sentence that gave it
+  meaning.
+- **P11 assumes sending works.** Its row is about replacing `marmot-cs` behind
+  `Scramble.Core`'s services; a service that cannot send has nothing to swap in.
+
+### `IOutboundIntentStorage` is not dead code — it is unreached
+
+It was written for exactly this path and its doc says so: *"Dark Matter queues
+sends while a group is not in a settled state and drains the queue once it
+settles, so this is durable state rather than an in-memory buffer."*
+
+Two earlier pieces of work declined to use it and both were right to —
+persisting epoch state and recording publish intent are different problems — but
+that is not evidence against it. It should be **kept**. Deleting it would
+discard a considered design for a path we still have to build, and we would
+rebuild something close to it. Two details in it look right: `ClearIntentsAsync`
+exists so queued sends are never drained into a group we have been evicted from,
+which mirrors the `Removed` gate on the inbound side; and `Payload` is opaque,
+so the schema stays out of the engine's business.
+
+### What building it involves, and the one thing that makes it easier than commits
+
+`MarmotSession.SendAsync`, a drain on settle, and the eviction gate. Ordering
+follows the rule already established twice: the queue row lands before the bytes
+reach a transport, and is removed after.
+
+**The three-way outcome that `CommitPublisher` needed does not apply here.** A
+commit cannot be reissued — MLS refuses to let a member process a commit it
+authored — which is why an indeterminate transport answer forces a
+reconciliation. An application message has no such constraint: dedup is
+content-derived (`MessageId.FromMlsBytes`), so **re-sending is free and a
+receiver drops the duplicate**. An indeterminate send can simply be retried.
+That asymmetry is worth stating in the code, because the obvious move is to copy
+the commit path wholesale and inherit a complication that buys nothing here.
+
+**Size: S–M.** Touches the session, the queue, and a transport seam.
+
+### Where it belongs
+
+Nowhere, currently — which is why it is here. It is the fifth verb the session
+layer should have had, and it should be sequenced **before P11**, since P11's
+whole premise is that `Scramble.Core` has something to call.
