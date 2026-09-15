@@ -190,12 +190,14 @@ estimating:
 2. ~~Scope and build the session layer (§0)~~ **done**, with its mutation pass
    finished and both `OpenAsync` defects fixed. Hydration and crash recovery
    came with it: P9's exit criterion holds.
-3. **Build the send path (§8).** The engine cannot send a chat message, which
-   is the largest remaining functional hole and the one P11 most obviously
-   presumes away. `IOutboundIntentStorage` is waiting for it.
-4. **A storage double that fails one nominated call.** Small, and it closes
-   three ordering claims at once — `AdoptAsync`, `CommitPublisher` and
-   `DurableEpochManager` — each load-bearing and each currently uncovered.
+3. ~~Build the send path (§8)~~ **done** (`4fcbf74`), split-and-mutate: brief,
+   implementer, independent tests, then twelve mutations — all caught.
+   `IOutboundIntentStorage` has a caller at last.
+4. **A storage double that fails one nominated call.** Small, and it now closes
+   **four** ordering claims — `AdoptAsync`, `CommitPublisher`,
+   `DurableEpochManager`, and the send path's ratchet persistence — each
+   load-bearing, each currently uncovered, each only observable in a crash
+   between two writes. This is the best value left on the list.
 5. **P9's remainder** — snapshot-fallback peel, and snapshot coverage for the
    two newest tables. Quarantine is dropped (§7).
 6. **P10's remainder** — small, and independent of the rest.
@@ -315,3 +317,18 @@ the commit path wholesale and inherit a complication that buys nothing here.
 Nowhere, currently — which is why it is here. It is the fifth verb the session
 layer should have had, and it should be sequenced **before P11**, since P11's
 whole premise is that `Scramble.Core` has something to call.
+
+### §8 closed (2026-09-15)
+
+`4fcbf74`. Two things found in the building that are worth keeping:
+
+- **Sealing an envelope advances the MLS sender ratchet**, so the live state is
+  persisted before the relay call. Without it a crash rewinds the generation
+  counter and the next message reuses a key and nonce — AEAD nonce reuse, not
+  hygiene. Only observable across a restart, so it is untested and labelled as
+  such: the fourth claimant for the fault-injecting storage double.
+- **A queued intent's id is fresh random bytes**, a second meaning for
+  `MessageId`, whose doc says content-derived. Forced rather than chosen: the
+  MLS bytes do not exist at queue time, and hashing the event collides for two
+  identical messages a second apart, so the second would silently never send. A
+  distinct `IntentId` wrapper is the right shape if this is ever cleaned up.
