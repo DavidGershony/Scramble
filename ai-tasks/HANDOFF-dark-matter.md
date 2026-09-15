@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
-**Updated:** 2026-09-12 (eighteenth revision) · **Branch:** `feat/dark-matter`
-· **Last commit at time of writing:** `c0efccd`
+**Updated:** 2026-09-15 (nineteenth revision) · **Branch:** `feat/dark-matter`
+· **Last commit at time of writing:** `9b052cd`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -30,13 +30,20 @@ resolved commit, so we track upstream as it moves (decided 2026-09-09 — they
 asked for interop testing now, so the newest is what matters). Latest verified:
 **`wn 0.9.21`** — the exact commit the iOS and Android apps ship (§3aa, §3ab).
 
-Planning is finished. **P0, P1, P2, P3, P4, P6 and P7 are done.** **P8 is
-wired**: `ConvergencePass` reads the commits ingest could not apply, builds the
-branches they describe, and adopts the one the group agrees on (§3z). What
-remains of the drain is re-delivering messages a reorg makes readable. Nothing
-is wired into the running app: the new engine is entirely additive and nothing
-depends on it, so it cannot break the shipping product. **P9–P12 have not
-started.**
+**P0–P10 are done.** The engine creates, joins, invites, removes, leaves,
+sends, receives, converges after a fork, replays what a reorg makes readable,
+and survives a crash at any point in a commit. It is composed by a **session
+layer** (`MarmotSessionHost` / `MarmotSession`) that owns a group's lifetime.
+
+**Nothing in the shipping app calls it yet, and that is the next phase.** The
+build has been additive throughout so it cannot break the product; P11 is where
+`Scramble.Core` stops using `marmot-cs` and starts using this.
+
+**P11 is planned and its decisions are made** — `ai-tasks/p11-cutover-plan-2026-09.md`.
+Existing groups are **abandoned**, not migrated (there are no existing users, and
+account identity is untouched: nsec, contacts and relay lists live in
+`StorageService`, which has no `MarmotCs` reference). **Android leads**, so I5's
+freeze lands on the desktop head from step 2. **P12 has not started.**
 
 ---
 
@@ -44,7 +51,7 @@ started.**
 
 Seven new projects, all standalone (no reference to `marmot-cs`), all in
 `Scramble.sln` and `Scramble.Desktop.slnf`, all running in the fast unit gate.
-As of 2026-09-12: **1032 tests in `Scramble.Marmot.Tests`**, **18 in the live
+As of 2026-09-15: **1146 tests in `Scramble.Marmot.Tests`**, **18 in the live
 `DarkMatterInterop` suite with zero skips**
 (`tests/Scramble.Diagnostics/DarkMatterInterop/`), and **384 in `dotnet-mls`**.
 A skip in the interop suite is a failure, not a pass — `stage6-dark-matter.ps1`
@@ -70,14 +77,33 @@ The submodule sits exactly on the tag; keep it that way. Two interop peers
 
 ## 3. Do this next
 
-**Start at §3z** — it is the most recent section and it says what is built,
-what the wiring exposed, and what is left. §3a–§3y are history in order; read
-backwards from §3z as far as you need.
+**Start at `ai-tasks/remaining-work-2026-09.md`.** It is the live inventory —
+what is left, what blocks what, and the findings behind each. This file's
+§3a–§3ab are history in order; read backwards only as far as you need.
 
-**The one-line answer:** P0–P4 and P6–P8 are done. The next pieces are
-re-delivering messages a reorg makes readable, and archiving the epoch a group
-is created or joined at (§3z, last subsection) — both small, neither owned by a
-phase.
+**The one-line answer:** P0–P10 are done; P11 step 1 (the inbound fan-in) is the
+current work.
+
+**Four things this migration keeps teaching, which are worth reading before
+starting anything here:**
+
+1. **A plan's noun can outlive its meaning.** "Quarantine", "queued-intent drain
+   polish", "snapshot-fallback peel" and "upgrade flow" each survived compression
+   into a scope row while the sentence explaining them did not. Three were
+   already decided elsewhere or meant something else entirely. Check a term's
+   provenance before building to it.
+2. **A test that cannot fail is worse than no test.** Six recorded instances,
+   the most recent of which pinned a live bug as the contract. Mutate everything;
+   a survivor is a finding, and the honest outcomes are "not load-bearing,
+   labelled" and "load-bearing, uncovered, said so".
+3. **Green can mean less than it looks.** A skipped suite, a vector that cannot
+   distinguish its own case, a peer too old to disagree, and — the newest — a
+   test feeding MLS bytes straight to ingest, bypassing the transport layer where
+   a fork would actually have been invisible.
+4. **A rule can be true at its own scope and false at the one that matters.**
+   `CommitPublisher` cleared "last, never first" within its own method, and the
+   move that mattered belonged to its caller. Two of nine crash points lost a
+   commit the whole group had applied.
 
 ### 3a. The crypto review is DONE and actioned — nothing to do here
 
