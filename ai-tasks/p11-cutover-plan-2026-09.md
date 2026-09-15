@@ -82,11 +82,25 @@ interop testing keeps its keys and loses its groups.
 Each step is separately verifiable and separately revertible. **Step 1 changes
 no behaviour; step 2 is where the app starts using the new engine.**
 
-1. **Build the fan-in.** The session layer is per-group; nothing routes an
-   inbound envelope to a group. `IRoutingIndexStorage` (rotation-aware routing
-   id → group) and `HasTransportSeenAsync` (the duplicate-envelope pre-filter)
-   both exist with **no production caller** and are exactly this. Engine-side,
-   no Core changes. *Size: S–M.*
+1. ~~Build the fan-in~~ **done** (`dec63e2`). `InboundFanIn` resolves an
+   envelope to a group and hands it to that group's session. Registration was
+   the hidden half — `IRoutingIndexStorage` had no caller on *either* side, so
+   the index was permanently empty.
+
+   **Two things it decided that step 2 inherits.** Sessions are cached and *the
+   cache is the ownership*: two sessions over one group each write live state,
+   so the loser's epoch is silently discarded — a fork of our own making. And
+   `MarmotSessionHost.OpenAsync` still hands out a fresh session per call with
+   no notion of an existing owner, which `InboundFanIn` documents and works
+   around rather than fixes. **Moving the cache onto the host would make single
+   ownership true by construction; decide that at step 2**, before `IMlsService`
+   acquires a second way to get a session.
+
+   **It also unblocks a real interop test.** Every test to date, interop
+   included, receives by handing bytes to a session it chose itself — stepping
+   over the one part a real client cannot do. A `DarkMatterInterop` test can now
+   take a raw kind-445 off the relay not knowing whose it is. Worth running
+   before step 2.
 2. **Port `IMlsService` onto the session layer.** Twenty members, one
    implementation, no other service touched. This is the cutover proper, and
    with the migration gone it is now the first step that changes behaviour.
