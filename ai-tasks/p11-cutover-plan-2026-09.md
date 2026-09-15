@@ -1,8 +1,13 @@
 # P11 — cutover plan
 
-Drafted 2026-09-15, before any code moves. `CLAUDE.md` calls P11 "the only phase
-with real I4/I5 exposure", and the sequencing below exists so that exposure is
-decided in advance rather than discovered.
+Drafted 2026-09-15, before any code moves; **decided the same day** (§6).
+`CLAUDE.md` calls P11 "the only phase with real I4/I5 exposure", and the
+sequencing below exists so that exposure is decided in advance rather than
+discovered.
+
+**The three decisions, made:** existing groups are **abandoned**, not migrated;
+**Android leads**; there are **no existing users**, which is what makes the first
+answer cheap.
 
 Provenance: the plan's P11 row in `scramble-marmot-phased-plan-2026-08.md` §3,
 and `remaining-work-2026-09.md` §3.
@@ -46,27 +51,29 @@ job; they are not.
 
 ---
 
-## 2. The risk that is actually novel
+## 2. The risk that was novel, and is now gone
 
-Not the swap. **The data.** `EncryptedSqliteStorageProvider` wraps
-`MarmotCs.Storage.Sqlite`, so every existing group on every installed device is
-in marmot-cs's schema, while the new engine has its own (`marmot_`-prefixed,
-V001–V010). The plan's row says "migrate or re-key existing local groups" in six
-words, and it is the one part with no rollback: a user whose groups do not come
-across has lost conversations.
+**Decided: abandon.** No migration is written. `EncryptedSqliteStorageProvider`
+wraps `MarmotCs.Storage.Sqlite` and holds MLS group state — ratchet trees,
+epochs, message records — and the new engine simply will not read it. Existing
+groups stop working.
 
-**Decide the strategy before writing any of §3**, because it changes the order:
+That was the only step with no rollback, and **there are no existing users**, so
+it costs nothing. Dual-read was considered and rejected on purpose: it
+contradicts the no-compatibility-shim scope decision of 2026-09-13.
 
-- **Migrate** — read marmot-cs state, write the new schema. Needs a faithful
-  reading of both, and MLS group state is the part that cannot be approximated.
-- **Re-key** — treat existing groups as unjoinable and rebuild membership.
-  Honest, far simpler, and visibly costly to users.
-- **Dual-read** — new engine first, fall back to the old store for groups it
-  does not know. Contradicts the "no compatibility shim" scope decision and is
-  named here only so it is rejected on purpose rather than by omission.
+**What is emphatically not abandoned: account identity.** Checked rather than
+assumed, because the two are easy to conflate:
 
-Whichever is chosen, the test is not "it compiled": it is **an installed device's
-database, opened by the new build, still showing its conversations.**
+| | Where | Survives? |
+|---|---|---|
+| nsec / npub, contacts, relay lists, signer pairing | `StorageService` → the `User` record (`PrivateKeyHex`, `SignerLocalPrivateKeyHex`) — **zero `MarmotCs` references** | **yes, untouched** |
+| MLS group state, membership, message history | `EncryptedSqliteStorageProvider` → `MarmotCs.Storage.Sqlite` | no — this is what is abandoned |
+| Encryption at rest | `ISecureStorage` (DPAPI, Android Keystore, …) | yes, engine-agnostic |
+
+So after the cutover the account is the same account, with no groups. **Dogfood
+and interop devices are covered by this too** — a second identity used for
+interop testing keeps its keys and loses its groups.
 
 ---
 
@@ -80,18 +87,19 @@ no behaviour.
    id → group) and `HasTransportSeenAsync` (the duplicate-envelope pre-filter)
    both exist with **no production caller** and are exactly this. Engine-side,
    no Core changes. *Size: S–M.*
-2. **Decide and build the data migration**, behind a flag, with the exit test
-   above. No service swapped yet. *Size: M, and the whole of the risk.*
-3. **Port `IMlsService` onto the session layer.** Twenty members, one
-   implementation, no other service touched. This is the cutover proper.
+2. **Port `IMlsService` onto the session layer.** Twenty members, one
+   implementation, no other service touched. This is the cutover proper, and
+   with the migration gone it is now the first step that changes behaviour.
    *Size: M.*
-4. **`IMessageService`**, which sits on `IMlsService` and should mostly follow.
+3. **`IMessageService`**, which sits on `IMlsService` and should mostly follow.
    *Size: S–M.*
-5. **`INostrService`** — audit rather than port. Most of it is transport that
+4. **`INostrService`** — audit rather than port. Most of it is transport that
    does not care which engine is underneath. *Size: S, pending the audit.*
-6. **Delete `marmot-cs`** and `Scramble.Core`'s duplicate codecs — the
+5. **Delete `marmot-cs`** and `Scramble.Core`'s duplicate codecs — the
    duplication the standalone rule created deliberately, which was always to go
-   at cutover. *Size: S.*
+   at cutover. Includes the one `MarmotCs` reference left in
+   `Scramble.Presentation`: the version string at `SettingsViewModel.cs:141`.
+   *Size: S.*
 
 `ExternalSignerService` is **not** on this list. It is the highest fix-density
 file in the repo at 0.59 and it is a signer, not an engine — it should be
@@ -107,12 +115,17 @@ Split it: the no-op adapter first, verified by the full integration suite, then
 the behaviour. If a step genuinely cannot be split, it takes a
 `Landing-Discipline-Exempt` trailer naming why — auditable, not silent.
 
-**I5 — pivot freeze.** This is a UI-head migration in everything but name, and
-I5 binds: **when the first head cuts over, the other goes bugfix-only** until the
-first has an equivalent smoke test green in CI plus one week. Decide which head
-leads before step 3. ANALYSIS.md records the 2026-05-11 pivot landing without
-this discipline as the worst two-week stretch in the repo's history, at a 4.5×
-fix:feature ratio.
+**I5 — pivot freeze. Android leads, decided.** This is a UI-head migration in
+everything but name, so I5 binds: **from the moment step 2 lands,
+`src/Scramble.UI` + `src/Scramble.Desktop` are bugfix-only** until the Android
+head has an equivalent smoke test green in CI plus one week of stabilisation.
+Anything that must land on desktop during the freeze takes a `Pivot-Exempt:`
+trailer, so the exemptions stay auditable by `git log --grep`.
+
+ANALYSIS.md records the 2026-05-11 pivot landing without this discipline as the
+worst two-week stretch in the repo's history, at a **4.5×** fix:feature ratio,
+with the legacy head still taking features throughout. That is the exact shape
+this freeze exists to prevent.
 
 **I2** applies throughout — every step touches engine or service paths, so the
 integration suite is a merge gate, not an afterthought.
@@ -122,24 +135,30 @@ integration suite is a merge gate, not an afterthought.
 ## 5. Exit criteria, restated concretely
 
 The plan's row says "Desktop + Android smoke tests green; existing chats still
-open; a full-stack E2E passes on both heads." Made testable:
+open; a full-stack E2E passes on both heads." **"Existing chats still open" is
+struck** — abandon makes it false by design, and leaving it would be a criterion
+nothing can satisfy. The rest, made testable:
 
-- An **existing device database** opened by the new build lists its groups and
-  shows their history. This is the criterion that can fail irreversibly.
-- **Both heads** send and receive against a live `wn-agent` peer — the
-  `DarkMatterInterop` suite already proves the engine does; this proves the app
-  does.
-- `SettingsViewModel`'s version string reads the new engine, and nothing else in
-  `Scramble.Presentation` names a Marmot type.
-- `marmot-cs` is gone from the solution, and the drift check stays clean.
+- **The account survives.** Install over an existing build: same npub, contacts
+  and relay list intact, remote signer still paired. Groups are gone, and that
+  is the expected result rather than a failure.
+- **Android sends and receives against a live `wn-agent` peer.** The
+  `DarkMatterInterop` suite already proves the *engine* does; this proves the
+  *app* does.
+- **Desktop the same**, after the freeze lifts.
+- `marmot-cs` is gone from the solution, nothing in `Scramble.Presentation`
+  names a Marmot type, and the drift check stays clean.
 
 ---
 
-## 6. Open questions for the user
+## 6. Decisions (2026-09-15)
 
-1. **Migrate, re-key, or something else** (§2)? Nothing should start before this
-   is answered; it sets the order of everything after step 1.
-2. **Which head leads** (§4)? I5's freeze lands on the other one the moment it
-   does.
-3. **Is a beta channel available** for the migration step? An irreversible data
-   change is the one place this plan would rather not go straight to users.
+1. **Abandon, not migrate** (§2). No migration code. There are no existing
+   users, so the only irreversible step in the phase is removed outright.
+2. **Android leads** (§4). Desktop goes bugfix-only under I5 from step 2.
+3. **Staged rollout: not required.** There is no beta channel today —
+   `publish.yml` triggers on a `v*` tag and builds release artifacts; no Play
+   Store track, no fastlane. With abandon chosen there is no data-corruption
+   risk to stage, and with no users there is no blast radius. A Play internal
+   track remains cheap if it is ever wanted to exercise the install path itself,
+   but nothing in this plan depends on it.
