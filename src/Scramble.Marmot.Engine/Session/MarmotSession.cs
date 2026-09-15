@@ -3,7 +3,9 @@ using DotnetMls.Group;
 using Scramble.Marmot.Engine.Convergence;
 using Scramble.Marmot.Engine.Groups;
 using Scramble.Marmot.Engine.Ingest;
+using Scramble.Marmot.Engine.Messages;
 using Scramble.Marmot.Storage;
+using Scramble.Marmot.Wire.Nostr;
 
 namespace Scramble.Marmot.Engine.Session;
 
@@ -121,12 +123,64 @@ public sealed class MarmotSessionHost
     private readonly ICipherSuite _cs;
     private readonly ConvergencePolicy _policy;
     private readonly Func<DateTimeOffset> _clock;
+    private readonly IMessageRelay? _messages;
+    private readonly ITransportPeeler _peeler;
 
     /// <param name="relay">Where a commit's bytes go. See <see cref="ICommitRelay"/>.</param>
+    /// <remarks>
+    /// The hydration-only shape, and the reason the message seam is optional at
+    /// all: a restart happens before anything is online, and
+    /// <see cref="OpenAsync"/> must not need a transport of either kind. A host
+    /// built this way opens and recovers groups; asking one of its sessions to
+    /// send throws rather than silently queueing forever.
+    /// </remarks>
     public MarmotSessionHost(
         IMarmotStorageProvider storage,
         ICipherSuite cipherSuite,
         ICommitRelay relay,
+        ConvergencePolicy policy,
+        Func<DateTimeOffset> clock)
+        : this(storage, cipherSuite, relay, null, null, policy, clock)
+    {
+    }
+
+    /// <param name="relay">Where a commit's bytes go. See <see cref="ICommitRelay"/>.</param>
+    /// <param name="messages">Where an application message's bytes go.</param>
+    public MarmotSessionHost(
+        IMarmotStorageProvider storage,
+        ICipherSuite cipherSuite,
+        ICommitRelay relay,
+        IMessageRelay? messages,
+        ConvergencePolicy policy,
+        Func<DateTimeOffset> clock)
+        : this(storage, cipherSuite, relay, messages, null, policy, clock)
+    {
+    }
+
+    /// <param name="relay">Where a commit's bytes go. See <see cref="ICommitRelay"/>.</param>
+    /// <param name="messages">
+    /// Where an application message's bytes go. <b>Kept separate from
+    /// <paramref name="relay"/> even when one object implements both</b> — see
+    /// <see cref="IMessageRelay"/> for why their outcome handling must not be
+    /// shared.
+    /// </param>
+    /// <param name="peeler">
+    /// Wraps an outbound message for the wire. Defaults to a Nostr peeler with
+    /// no account secret, which is all a send needs — the account secret exists
+    /// only to open gift-wrapped Welcomes, which is an inbound concern.
+    /// <para>
+    /// <b>Owned by the host rather than passed per call</b>, unlike the commit
+    /// path's <c>envelope</c> delegate. A queued message is wrapped at drain
+    /// time, in a call the original sender is no longer on the stack for, so
+    /// there is nobody left to hand one in. See <see cref="MarmotSession.SendAsync"/>.
+    /// </para>
+    /// </param>
+    public MarmotSessionHost(
+        IMarmotStorageProvider storage,
+        ICipherSuite cipherSuite,
+        ICommitRelay relay,
+        IMessageRelay? messages,
+        ITransportPeeler? peeler,
         ConvergencePolicy policy,
         Func<DateTimeOffset> clock)
     {
@@ -134,6 +188,8 @@ public sealed class MarmotSessionHost
         _cs = cipherSuite ?? throw new ArgumentNullException(nameof(cipherSuite));
         _policy = policy ?? throw new ArgumentNullException(nameof(policy));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        _messages = messages;
+        _peeler = peeler ?? new NostrGroupPeeler();
 
         ArgumentNullException.ThrowIfNull(relay);
 
@@ -141,6 +197,22 @@ public sealed class MarmotSessionHost
         Epochs = new DurableEpochManager(new EpochManager(), storage, clock);
         Publisher = new CommitPublisher(storage, relay, clock);
     }
+
+    /// <summary>Wraps an outbound message for the wire.</summary>
+    internal ITransportPeeler Peeler => _peeler;
+
+    /// <summary>
+    /// The message transport, or a throw if this host was built without one.
+    /// </summary>
+    /// <remarks>
+    /// Asked before anything durable is written, so a host with no transport
+    /// fails the send outright instead of leaving a queue row that nothing in
+    /// this process can ever drain.
+    /// </remarks>
+    internal IMessageRelay RequireMessageRelay() =>
+        _messages ?? throw new InvalidOperationException(
+            "This session host was constructed without an IMessageRelay, so it can open "
+            + "and recover groups but cannot send application messages.");
 
     /// <summary>The epoch state machine, durable.</summary>
     public DurableEpochManager Epochs { get; }
@@ -594,6 +666,273 @@ public sealed class MarmotSession
 
         return outcome;
     }
+
+    // -- Outbound application messages --
+
+    /// <summary>
+    /// The <see cref="QueuedOutboundIntent.IntentKind"/> of a queued chat send.
+    /// </summary>
+    /// <remarks>
+    /// The queue is shared with whatever else the engine one day defers, and the
+    /// payload of a row is opaque to storage. Draining reads this before it
+    /// treats a payload as a <see cref="MarmotAppEvent"/>, so a future kind
+    /// sitting in the same queue is stepped over rather than decoded as
+    /// something it is not.
+    /// </remarks>
+    public const string AppMessageIntentKind = "app-message";
+
+    /// <summary>
+    /// Sends an application message, queueing it durably first.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The row is written and awaited before any transport call, on every
+    /// path.</b> That is the whole ordering, and it is the opposite of the
+    /// commit path's problem: there, the dangerous window is forgetting a commit
+    /// a relay may hold, so the record has to outlive the local move. Here the
+    /// dangerous window is losing a message the user believes they sent, so the
+    /// record has to precede the wire. A crash between the two leaves the
+    /// message queued, and a queued message that was in fact delivered costs one
+    /// duplicate that every receiver drops on content — Dark Matter's dedup is
+    /// the MLS bytes, not the transport id.
+    /// </para>
+    /// <para>
+    /// <b>None of <c>CommitPublisher</c>'s three-way machinery appears here, and
+    /// its absence is deliberate.</b> Abandon/Reconcile/Adopt exists because a
+    /// commit cannot be reissued — MLS refuses to let a member process a commit
+    /// it authored, so a commit discarded on a guess can never be recovered from
+    /// the relay. An application message has no such constraint. Re-sending is
+    /// free, so <see cref="MessageSendOutcome.Rejected"/> and
+    /// <see cref="MessageSendOutcome.Indeterminate"/> collapse to one answer:
+    /// still queued, try again.
+    /// </para>
+    /// <para>
+    /// <b>An unsettled group is not asked to send.</b> Not a transport
+    /// optimisation — a message sealed now under an epoch the group is about to
+    /// leave arrives as history from before the commit, readable only inside the
+    /// receiver's past-epoch window. Queueing it and wrapping it fresh at drain
+    /// time is what a user means by "it sent when the network came back".
+    /// </para>
+    /// </remarks>
+    /// <param name="message">
+    /// The payload. Its author must be this member —
+    /// <see cref="MarmotAppEvent.RequireSender"/> is checked while the envelope
+    /// is built, and a mismatch throws rather than queueing a message no
+    /// receiver would accept.
+    /// </param>
+    /// <exception cref="InvalidOperationException">
+    /// The host was built without an <see cref="IMessageRelay"/>.
+    /// </exception>
+    public async Task<SendResult> SendAsync(
+        MarmotAppEvent message, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+
+        IMessageRelay relay = _host.RequireMessageRelay();
+
+        // Before the row, not after. A group we have left must not accumulate a
+        // queue at all -- a row written and then refused would be drained by
+        // anything that later cleared the Removed flag, which is exactly the
+        // "queued sends must never be drained into a group we have left" case
+        // ClearIntentsAsync exists for.
+        if (await IsRemovedAsync(ct))
+            return new SendResult(SendDisposition.Refused, await QueueDepthAsync(ct));
+
+        var intent = new QueuedOutboundIntent(
+            NewIntentId(), GroupId, AppMessageIntentKind, message.Encode(), _clock());
+
+        await _storage.PutIntentAsync(intent, ct);
+
+        if (!IsSettled)
+            return new SendResult(SendDisposition.Queued, await QueueDepthAsync(ct));
+
+        MessageSendOutcome outcome = await AttemptAsync(relay, intent, message, ct);
+
+        return new SendResult(
+            outcome == MessageSendOutcome.Accepted
+                ? SendDisposition.Sent
+                : SendDisposition.Queued,
+            await QueueDepthAsync(ct));
+    }
+
+    /// <summary>
+    /// Sends what is queued, oldest first, and stops at the first refusal.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>It stops rather than skipping.</b> A transport that has just declined
+    /// one message is unlikely to take the next, and carrying on would reorder
+    /// the queue against a relay that then recovers — the second message
+    /// delivered and the first still waiting. Order is worth more than draining
+    /// eagerly, so the rest stay queued for the next call.
+    /// </para>
+    /// <para>
+    /// <b>Called by a caller, never by a timer.</b> Retry scheduling and backoff
+    /// are not here; this method answers "drain now" and reports what that
+    /// achieved.
+    /// </para>
+    /// <para>
+    /// <b>Not gated on the group being settled.</b> Only eviction stops a drain.
+    /// Draining an unsettled group is safe because the live group never advances
+    /// before a publish is confirmed, so an envelope built here is built at the
+    /// epoch the group is still actually in — and a caller that wants to wait
+    /// for a settled group can simply not call this.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// The host was built without an <see cref="IMessageRelay"/>.
+    /// </exception>
+    public async Task<DrainResult> DrainAsync(CancellationToken ct = default)
+    {
+        IMessageRelay relay = _host.RequireMessageRelay();
+
+        if (await IsRemovedAsync(ct))
+        {
+            // Counted before the clear, because the count is the report. A queue
+            // emptied silently is indistinguishable from one that was empty, and
+            // the messages dropped here are messages a user wrote.
+            int dropped = await QueueDepthAsync(ct);
+            await _storage.ClearIntentsAsync(GroupId, ct);
+
+            return new DrainResult(0, 0, dropped);
+        }
+
+        IReadOnlyList<QueuedOutboundIntent> queued =
+            await _storage.ListIntentsAsync(GroupId, ct);
+
+        int sent = 0;
+
+        // Ordered here as well as in storage. The ordering is a rule of this
+        // method, and a rule that holds only because one SQL statement happens
+        // to carry an ORDER BY is a rule nothing states.
+        foreach (QueuedOutboundIntent intent in queued
+            .Where(intent => intent.IntentKind == AppMessageIntentKind)
+            .OrderBy(intent => intent.CreatedAt))
+        {
+            MessageSendOutcome outcome = await AttemptAsync(
+                relay, intent, MarmotAppEvent.Decode(intent.Payload), ct);
+
+            if (outcome != MessageSendOutcome.Accepted)
+                break;
+
+            sent++;
+        }
+
+        return new DrainResult(sent, await QueueDepthAsync(ct), 0);
+    }
+
+    /// <summary>
+    /// Wraps one queued message, hands it to the transport, and resolves its row.
+    /// </summary>
+    /// <remarks>
+    /// <b>The envelope is built here rather than stored at queue time</b>, which
+    /// is the point of storing the event instead of the bytes: the kind-445 wrap
+    /// is keyed on the group's exporter secret, which changes every epoch, and
+    /// the MLS framing inside is keyed on the epoch too. A message that waited
+    /// across a commit has to be sealed at the epoch it actually leaves in.
+    /// </remarks>
+    private async Task<MessageSendOutcome> AttemptAsync(
+        IMessageRelay relay,
+        QueuedOutboundIntent intent,
+        MarmotAppEvent message,
+        CancellationToken ct)
+    {
+        string envelope = GroupMessages.Send(_group, _host.Peeler, message, SenderIdentity());
+
+        // Sealing the envelope moved the sender ratchet, in memory. Persisted
+        // here -- before the send, not after -- because a crash in between
+        // otherwise comes back with the generation counter rewound, and the next
+        // message encrypts a different plaintext under a key and nonce this one
+        // has already used. NOT covered by any test in this suite: it is only
+        // observable across a process restart, which needs a crash the send path
+        // has no way to stage.
+        await _host.WriteLiveStateAsync(GroupId, _group, ct);
+
+        MessageSendOutcome outcome;
+        try
+        {
+            outcome = await relay.SendAsync(envelope, ct);
+        }
+        catch (Exception)
+        {
+            // Indeterminate, not rejected -- the same reading CommitPublisher
+            // gives a throwing transport. It changes nothing here, since both
+            // keep the row, but the two answers are still different facts and a
+            // caller logging them should not be told the wrong one.
+            outcome = MessageSendOutcome.Indeterminate;
+        }
+
+        if (outcome == MessageSendOutcome.Accepted)
+        {
+            await _storage.DeleteIntentAsync(intent.Id, ct);
+            return outcome;
+        }
+
+        // Diagnostic only. Nothing reads Attempts to decide anything: an
+        // application message stays retryable however many times it has failed,
+        // and a bound here would silently discard a user's message on a long
+        // outage.
+        await _storage.PutIntentAsync(intent with { Attempts = intent.Attempts + 1 }, ct);
+
+        return outcome;
+    }
+
+    /// <summary>
+    /// Whether the group is settled enough to put a message on the wire.
+    /// </summary>
+    /// <remarks>
+    /// <b>A group with no recorded state counts as settled</b>, matching
+    /// <see cref="EpochManager.CanIngest"/> and
+    /// <see cref="DurableEpochManager.BeginPendingAsync"/>, both of which read
+    /// absence as <c>Stable</c>. Absent is the ordinary condition of a group
+    /// nobody has staged a commit in — the manager only ever writes a state for
+    /// a group that has left Stable — so reading it as unsettled would queue
+    /// every message in every freshly opened group and drain none of them.
+    /// </remarks>
+    private bool IsSettled =>
+        _host.Epochs.Epochs.GetState(GroupId) is not { } state || state.IsStable;
+
+    private async Task<bool> IsRemovedAsync(CancellationToken ct) =>
+        await _storage.GetGroupAsync(GroupId, ct) is { Removed: true };
+
+    private async Task<int> QueueDepthAsync(CancellationToken ct) =>
+        (await _storage.ListIntentsAsync(GroupId, ct)).Count;
+
+    /// <summary>
+    /// This member's account key, as the ratchet tree has it.
+    /// </summary>
+    /// <remarks>
+    /// Taken from the tree rather than from the event's own <c>pubkey</c>, so
+    /// that <see cref="MarmotAppEvent.RequireSender"/> is still checking one
+    /// against the other. Reading it off the event would make that check compare
+    /// a value with itself and pass for a message every receiver rejects.
+    /// </remarks>
+    private byte[] SenderIdentity()
+    {
+        foreach ((uint index, byte[] identity) in _group.GetMembers())
+        {
+            if (index == _group.MyLeafIndex)
+                return identity;
+        }
+
+        throw new InvalidOperationException(
+            $"Group {GroupId} does not list our own leaf {_group.MyLeafIndex} as a member.");
+    }
+
+    /// <summary>
+    /// A fresh random id for a queue row.
+    /// </summary>
+    /// <remarks>
+    /// <b>The one place a <see cref="MessageId"/> is not content-derived</b>,
+    /// and it has to be. The MLS bytes it would be derived from do not exist
+    /// until the envelope is built, which is at drain time; and hashing the
+    /// event instead would collapse two identical messages a user deliberately
+    /// sent twice into one row, so the second would never leave. This id names a
+    /// queue row, not a message — the message's content id is computed by the
+    /// receiver from the bytes, exactly as before.
+    /// </remarks>
+    private static MessageId NewIntentId() =>
+        new(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32));
 
     /// <summary>
     /// Releases the group from durable custody.
