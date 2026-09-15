@@ -139,6 +139,9 @@ services, and **four of the five are on the repo's own high-risk table**:
 
 Plus both UI heads, and a data migration for existing local groups.
 
+**Planned in `p11-cutover-plan-2026-09.md`** (2026-09-15), including the three
+questions that must be answered before step 1.
+
 **It cannot start before §0 and §8 exist.** "Replace `marmot-cs` behind Core's
 services" presumes something for those services to call — and a service that
 cannot send a message has nothing to swap in.
