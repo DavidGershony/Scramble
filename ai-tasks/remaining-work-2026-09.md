@@ -123,8 +123,9 @@ services, and **four of the five are on the repo's own high-risk table**:
 
 Plus both UI heads, and a data migration for existing local groups.
 
-**It cannot start before §0 exists.** "Replace `marmot-cs` behind Core's
-services" presumes something for those services to call.
+**It cannot start before §0 and §8 exist.** "Replace `marmot-cs` behind Core's
+services" presumes something for those services to call — and a service that
+cannot send a message has nothing to swap in.
 
 Two invariants bind here specifically and should be planned for rather than
 discovered: **I4** (no flag-day rewrites — split the refactor from the feature,
@@ -186,15 +187,19 @@ estimating:
    left this device" from "may be on a relay" from "the relay took it" —
    `CommitPublisher.ClassifyAsync` answers Abandon / Reconcile / Adopt, which
    is exactly the discrimination `CrashRecoveryTests` needs.
-2. **Scope and build the session layer (§0).** Now the only thing between the
-   engine and P9's exit criterion. Everything else is behind it, and
-   it is currently nobody's. It does not need to be large to unblock: hydrate,
-   archive our own commits, drive publish, run a pass, replay.
-3. **P9's remainder** — hydration and crash recovery fall out of §0 almost
-   immediately, which is why `CrashRecoveryTests` is written and waiting.
-   Quarantine needs a definition before it needs an estimate.
-4. **P10's remainder** — small, and independent of the rest.
-5. **P11** — last, deliberately, and under I4/I5 rather than alongside them.
+2. ~~Scope and build the session layer (§0)~~ **done**, with its mutation pass
+   finished and both `OpenAsync` defects fixed. Hydration and crash recovery
+   came with it: P9's exit criterion holds.
+3. **Build the send path (§8).** The engine cannot send a chat message, which
+   is the largest remaining functional hole and the one P11 most obviously
+   presumes away. `IOutboundIntentStorage` is waiting for it.
+4. **A storage double that fails one nominated call.** Small, and it closes
+   three ordering claims at once — `AdoptAsync`, `CommitPublisher` and
+   `DurableEpochManager` — each load-bearing and each currently uncovered.
+5. **P9's remainder** — snapshot-fallback peel, and snapshot coverage for the
+   two newest tables. Quarantine is dropped (§7).
+6. **P10's remainder** — small, and independent of the rest.
+7. **P11** — last, deliberately, and under I4/I5 rather than alongside them.
 
 The one thing worth deciding early rather than late is **what the session layer
 is**, because P11's shape is downstream of it and P11 is the phase with the
