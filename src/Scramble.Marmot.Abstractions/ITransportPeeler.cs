@@ -62,10 +62,38 @@ public sealed record WelcomeDetails(
 /// — the commit that produces it may not have arrived yet. A malformed
 /// envelope is not, and retrying it forever is how a queue fills with garbage.
 /// </param>
-public sealed class PeelFailedException(string message, bool retryable = false)
+/// <param name="transportId">
+/// The envelope's own id, when the implementation got far enough to compute one
+/// it can vouch for. See <see cref="PeelFailedException.TransportId"/>.
+/// </param>
+public sealed class PeelFailedException(
+    string message, bool retryable = false, string? transportId = null)
     : Exception(message)
 {
     public bool Retryable { get; } = retryable;
+
+    /// <summary>
+    /// The envelope's id, or null when the failure came before one could be
+    /// computed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A failed peel still establishes the envelope's identity, and a fan-in
+    /// needs it: the duplicate-envelope pre-filter is only worth running before
+    /// a group's keys are fetched, and by then the peel that would have
+    /// returned the id has already been refused for want of those very keys.
+    /// Without this the pre-filter could only run after the work it exists to
+    /// avoid.
+    /// </para>
+    /// <para>
+    /// <b>An implementation MUST set this only from a value it has
+    /// authenticated</b> — for Nostr, the recomputed event hash, never the
+    /// self-reported <c>id</c> field. The id keys a deduplication table, so an
+    /// attacker able to choose it can have a legitimate message discarded as a
+    /// duplicate of something that never existed. Null is always a safe answer.
+    /// </para>
+    /// </remarks>
+    public string? TransportId { get; } = transportId;
 }
 
 /// <summary>

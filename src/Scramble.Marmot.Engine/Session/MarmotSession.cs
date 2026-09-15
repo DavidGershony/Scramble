@@ -1,5 +1,6 @@
 using DotnetMls.Crypto;
 using DotnetMls.Group;
+using Scramble.Marmot.AppComponents;
 using Scramble.Marmot.Engine.Convergence;
 using Scramble.Marmot.Engine.Groups;
 using Scramble.Marmot.Engine.Ingest;
@@ -203,6 +204,17 @@ public sealed class MarmotSessionHost
     internal ITransportPeeler Peeler => _peeler;
 
     /// <summary>
+    /// The storage every session here shares.
+    /// </summary>
+    /// <remarks>
+    /// Exposed so <see cref="InboundFanIn"/> cannot be handed a different one.
+    /// A fan-in resolving addresses in one database and opening groups out of
+    /// another would answer "not ours" for every group it holds, which is a
+    /// silent and total failure of the receive path.
+    /// </remarks>
+    internal IMarmotStorageProvider Storage => _storage;
+
+    /// <summary>
     /// The message transport, or a throw if this host was built without one.
     /// </summary>
     /// <remarks>
@@ -266,6 +278,11 @@ public sealed class MarmotSessionHost
         // Binds the journal as well as writing the checkpoint, which is what
         // makes the group's own commits recordable from here on.
         await Archive.CaptureIfAbsentAsync(record.Id, group, ct);
+
+        // The group's first appearance in the routing index. Until this runs
+        // the group is send-only: it can publish to its address and nothing
+        // arriving at that address resolves back to it.
+        await SyncRoutingAsync(record.Id, group, ct);
 
         return new MarmotSession(this, _storage, _cs, _policy, _clock, record.Id, group, null);
     }
@@ -383,6 +400,14 @@ public sealed class MarmotSessionHost
         // fork from, and nothing else would have archived it.
         await Archive.CaptureIfAbsentAsync(groupId, group, ct);
 
+        // Re-asserted at every open, and it is the only thing that can heal a
+        // routing row lost between AdoptAsync's two writes. A group missing
+        // from the index receives nothing, and the only other place routing is
+        // written is a state advance -- which needs a receive. Without this,
+        // that group would be unroutable permanently and silently. Writes
+        // nothing when the index already agrees.
+        await SyncRoutingAsync(groupId, group, ct);
+
         return new SessionOpenResult(
             new MarmotSession(
                 this, _storage, _cs, _policy, _clock, groupId, group, recovery),
@@ -430,6 +455,80 @@ public sealed class MarmotSessionHost
                 UpdatedAt = _clock(),
             },
             ct);
+
+        // Rotation. The routing address lives in the signed 0x8004 component,
+        // so the only thing that can move it is a commit -- and every commit
+        // this member accepts, authors or adopts ends here. Hooking rotation
+        // anywhere else would mean one of those three paths rotating the
+        // address on the wire while the index still pointed at the old one.
+        //
+        // This line is UNCOVERED and removing it passes the whole suite.
+        // Nothing in this build rotates an address: no path stages an
+        // AppDataUpdate for 0x8004, so a group's address is whatever creation
+        // gave it and AdoptAsync has already registered that. The rotation
+        // semantics themselves are tested, at the storage layer, in
+        // RoutingIndexTests. What is untested is this call site, and it cannot
+        // be tested without building rotation -- which is a feature, not a fan-in.
+        // Left in because its absence is silent and total: the day a rotation
+        // commit exists, an index still naming the old address makes the group
+        // deaf, and this is the one place every such commit passes through.
+        await SyncRoutingAsync(groupId, group, ct);
+    }
+
+    /// <summary>
+    /// Brings the routing index into line with the address the group publishes
+    /// to now.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Registration is not optional bookkeeping.</b> An inbound kind-445
+    /// event carries a routing id and nothing else identifying it, so a group
+    /// absent from this index cannot be the destination of anything. The index
+    /// having had no writer is why the engine could send but never receive.
+    /// </para>
+    /// <para>
+    /// <b>The address-equality check is load-bearing, not a micro-optimisation.</b>
+    /// <see cref="IRoutingIndexStorage.PutRoutingAsync"/> no-ops only for a
+    /// re-registration at the <i>same</i> epoch; re-registering the same
+    /// address at a later epoch rewrites its <c>FirstEpoch</c> forward, so a
+    /// group that never rotated would report its address as having become
+    /// current at whatever epoch it last committed at. Comparing the bytes is
+    /// what makes "nothing rotated" a genuine no-op.
+    /// </para>
+    /// <para>
+    /// <b>A group with no <c>0x8004</c> component is skipped rather than
+    /// refused.</b> It has no address, so there is no row to write and nothing
+    /// could ever arrive for it — peers read a group's transport id from that
+    /// component and nowhere else. Throwing here would turn an unaddressable
+    /// group into a failure of whatever operation happened to notice, which is
+    /// a diagnosis pointing at the wrong place.
+    /// </para>
+    /// <para>
+    /// A <see cref="RoutingIdConflictException"/> is deliberately <b>not</b>
+    /// caught. Two groups claiming one address is the fail-closed case the
+    /// index exists for, and swallowing it here would leave the second group's
+    /// traffic steered into the first group's keys.
+    /// </para>
+    /// </remarks>
+    internal async Task SyncRoutingAsync(
+        GroupId groupId, MlsGroup group, CancellationToken ct = default)
+    {
+        byte[] address;
+        try
+        {
+            address = GroupMessages.TransportGroupId(group);
+        }
+        catch (AppComponentException)
+        {
+            return;
+        }
+
+        RoutingIndexRecord? current = await _storage.CurrentRoutingAsync(groupId, ct);
+
+        if (current is not null && current.TransportGroupId.AsSpan().SequenceEqual(address))
+            return;
+
+        await _storage.PutRoutingAsync(address, groupId, new EpochId(group.Epoch), ct);
     }
 
     private MlsGroup? Restore(byte[]? state) =>

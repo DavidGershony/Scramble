@@ -80,6 +80,16 @@ public sealed class NostrGroupPeeler : ITransportPeeler
             // payload, but nothing else here is protected without this.
             byte[] computedId = signed.VerifyAndComputeId();
 
+            // Bound to the event hash rather than the self-reported id. The
+            // transport id keys deduplication, so accepting an attacker's
+            // chosen value lets them pre-poison it and have a legitimate
+            // message dropped as a duplicate. Lifted out of the return
+            // statement because the two refusals below report it too: a peel
+            // that failed for want of a key has still established which
+            // envelope this is, and a fan-in's pre-filter runs on that before
+            // it goes looking for the key.
+            string transportId = Convert.ToHexString(computedId).ToLowerInvariant();
+
             var tags = GroupMessageEvent.ReadTags(document.RootElement);
             byte[] transportGroupId = GroupMessageEvent.ReadTransportGroupId(tags);
 
@@ -89,7 +99,9 @@ public sealed class NostrGroupPeeler : ITransportPeeler
                 // The commit that produces this epoch's secret may simply not
                 // have arrived yet, so this is deferrable rather than terminal.
                 throw new PeelFailedException(
-                    "No exporter secret is available for this routing id.", retryable: true);
+                    "No exporter secret is available for this routing id.",
+                    retryable: true,
+                    transportId);
             }
 
             byte[] mlsBytes;
@@ -102,17 +114,15 @@ public sealed class NostrGroupPeeler : ITransportPeeler
                 // Could be a message from an epoch we cannot open, so let the
                 // engine retry under another retained secret.
                 throw new PeelFailedException(
-                    $"Could not open the group message: {ex.Message}", retryable: true);
+                    $"Could not open the group message: {ex.Message}",
+                    retryable: true,
+                    transportId);
             }
 
             return new PeeledMessage(
                 PeeledContentKind.GroupMessage,
                 transportGroupId,
-                // Bound to the event hash rather than the self-reported id. The
-                // transport id keys deduplication, so accepting an attacker's
-                // chosen value lets them pre-poison it and have a legitimate
-                // message dropped as a duplicate.
-                Convert.ToHexString(computedId).ToLowerInvariant(),
+                transportId,
                 mlsBytes);
         }
     }
