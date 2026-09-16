@@ -520,3 +520,77 @@ It has a single call site upstream, in the KeyPackage-for-membership path rather
 than in ingest, so this is an admission-policy divergence and not a fork. When it
 lands it is the natural second variant of `AppComponentRejection`: upstream's
 `InvalidKeyPackageCapabilities { member }` / `invalid_key_package_capabilities`.
+
+## 12. Inbound commits are not authorization-checked (2026-09-16)
+
+Surfaced while building §P11's AppDataUpdate slice (`8823539`), confirmed
+independently here. **This is the receive half of the rule that commit
+implements on the send half, and it is missing entirely.**
+
+`GroupHandshake.ApplyCommit` calls `group.ProcessCommit(commit)` and nothing
+else. There is no authorization step before it, and MLS has no opinion here:
+`GroupContextExtensions` is a legal proposal from *any* member, so the library
+accepts it and rewrites the GroupContext — `app_data_dictionary` included, and
+`0x8003` with it.
+
+**`CommitAuthorization` is not the guard it looks like.** It has exactly one
+production caller: `CommitOrdering.PriorityOf`, used by the convergence pass to
+decide *which branch wins a fork race*. Nothing consults it to decide whether to
+accept a commit at all. So a commit that no admin authored is classified,
+ordered, and applied.
+
+**`AppComponentIntegrity` had zero production callers before `8823539`**, and
+still has exactly one — `MarmotGroupAdminPolicy`, on the send path. Its own
+class comment (line 46) names a `GroupContextExtensions` proposal as precisely
+the vector it exists to close. Nothing closes it.
+
+`CurrentProfile.Validate` does not cover for this either: it runs at create
+(`MarmotGroupBuilder`), at join (`GroupJoin`), at invite-validation
+(`MarmotGroupInvite`), and now in the admin-policy rehearsal — **never per
+inbound commit**.
+
+So: any member can hand us a commit that makes themselves the sole admin, and we
+apply it. Every subsequent admin check then passes, because it reads the
+dictionary they just rewrote.
+
+### What this is not
+
+Not a doc/code mismatch. `GroupHandshake.Receive`'s remark about refusals is
+about *proposal* authentication — signature and membership tag against the
+sender's leaf — which MLS genuinely does, and which is a different rule. It
+claims no commit-authorization guard. This is an omission, not a false label.
+
+Not a convergence bug either. The rewind machinery would happily converge on the
+malicious branch, since it is a well-formed commit from a real member.
+
+### The shape of the fix
+
+Run both halves at ingest, against the commit's own bytes, before the group
+moves — the same order `MarmotGroupAdminPolicy.Stage` uses, which is now the
+worked example:
+
+1. `CommitAuthorization` on a view built from the framed commit, refusing a
+   privileged commit whose committer is not an active admin **in the current
+   epoch** (the pre-commit one — the epoch the committer had to have authority
+   in).
+2. `AppComponentIntegrity.ValidateUpdateBatch` / `ValidateStagedCommit` on the
+   resulting dictionary.
+
+The obstacle is the same one `Stage` hit: the resulting GroupContext is not
+readable before applying, and `PendingCommitState` is internal. On the send side
+that was solved by rehearsing on a throwaway import. Inbound, the probe already
+exists — `CandidateMaterializer` builds exactly such a copy
+(`CandidateMaterializer.cs:271`, `:355`) — so the piece to reuse is there.
+
+**Do not derive the resulting dictionary by hand.** It makes the check circular,
+for the reason `MarmotGroupAdminPolicy` records at its `Rehearse` call.
+
+### Mutation that must catch it
+
+A commit from a **non-admin** member carrying a `GroupContextExtensions`
+proposal that replaces `0x8003` with the attacker's key alone. A test that only
+exercises an admin's commit passes identically with no guard at all — which is
+the shape §3 keeps recording.
+
+Sequencing: this is receive-path and independent of the P11 blockers, but it is
+security-relevant, so it should not sit behind the cutover.
