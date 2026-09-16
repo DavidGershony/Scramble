@@ -128,7 +128,10 @@ the behaviour. If a step genuinely cannot be split, it takes a
 `Landing-Discipline-Exempt` trailer naming why — auditable, not silent.
 
 **I5 — pivot freeze. Android leads, decided.** This is a UI-head migration in
-everything but name, so I5 binds: **from the moment step 2 lands,
+everything but name, so I5 binds. **Step 2 splits, and only its second half
+starts the clock:** an unwired implementation changes no behaviour and is not a
+pivot, so the freeze begins when the DI registration flips, not when the adapter
+lands. From that moment,
 `src/Scramble.UI` + `src/Scramble.Desktop` are bugfix-only** until the Android
 head has an equivalent smoke test green in CI plus one week of stabilisation.
 Anything that must land on desktop during the freeze takes a `Pivot-Exempt:`
