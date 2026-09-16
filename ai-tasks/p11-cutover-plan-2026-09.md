@@ -117,19 +117,108 @@ no behaviour; step 2 is where the app starts using the new engine.**
 
    **Six things to settle before 2b**, from the adapter's own report:
 
-   1. **`SetNostrEventSigner` throws and every head calls it.** Either build the
-      service with an `IAccountIdentityProofSigner` derived from the external
-      signer — which needs a kind-450-shaped signing call on `IExternalSigner` —
-      or drop the member. `INostrEventSigner` cannot serve it: it picks its own
-      `created_at`, so it would sign a different template than the proof commits
-      to.
+   1. **`SetNostrEventSigner` throws and every head calls it** — smaller than it
+      looked, with a separate problem underneath it. Revised 2026-09-16; the
+      earlier entry said an adapter "needs a kind-450-shaped signing call on
+      `IExternalSigner`". **It does not. No new method is required.**
+
+      There are two call sites, not "every head":
+      `MainViewModel.cs:469` (local key) and `MainViewModel.cs:639`
+      (external signer, via `WireExternalSigner`).
+
+      **The local one needs nothing.** It fires only when
+      `CurrentUser.PrivateKeyHex` is non-empty, and in that case `InitializeAsync`
+      has already built a `LocalAccountProofSigner` from the same key. The call is
+      redundant, so it is deleted, not adapted.
+
+      **The external one is adaptable as-is.** The refusal's reasoning — a signer
+      "picks its own `created_at`" — is true of `INostrEventSigner`, whose
+      `SignEventAsync(kind, content, tags, pubkey)` carries no `created_at` and so
+      lets `ExternalNostrEventSigner` stamp `DateTime.UtcNow` itself
+      (`INostrEventSigner.cs:140`). It is **not** true of `IExternalSigner`
+      underneath, which takes an `UnsignedNostrEvent` whose `CreatedAt` we supply
+      and which `ExternalSignerService` puts on the wire verbatim
+      (`ExternalSignerService.cs:380`).
+
+      So the adapter is: map our `NostrEventTemplate` to an `UnsignedNostrEvent`,
+      call `SignEventAsync`, parse `sig` out of the returned event, return the 64
+      bytes. **It needs no trust in the remote signer's fidelity** —
+      `AccountIdentityProofSigning.CreateAsync` verifies the signature against our
+      template before trusting it, so a signer that rewrote `created_at` or the
+      tags produces a clean verification failure rather than a bad proof. That is
+      the same guard `LocalAccountProofSigner` already leans on for a mismatched
+      keypair.
+
+      **The problem underneath: the NIP-46 permission grant is missing the kinds
+      we need.** `ExternalSignerService.GenerateConnectionUri` requests
+
+      ```
+      sign_event:443, sign_event:444, sign_event:445, sign_event:1059
+      ```
+
+      (`ExternalSignerService.cs:404`). **Neither `450` nor `30443` is in it.**
+      450 is the account-identity proof this item exists to sign. 30443 is the
+      KeyPackage — and `NostrService.PublishEventAsync` routes it through
+      `_externalSigner` whenever there is no local key
+      (`NostrService.cs:3324`), so this is a **pre-existing** gap that the
+      cutover merely makes load-bearing: the engine's join path is fail-closed on
+      a published KeyPackage, so a user who cannot publish one cannot be invited.
+
+      *Unverified, and it needs a device to settle:* NIP-46 implementations differ
+      on ungranted kinds — Amber may prompt per signature rather than refuse. So
+      the symptom is somewhere between "an extra approval dialog every time" and
+      "KeyPackage publication fails". Either way the perms string is wrong and the
+      fix is two entries. It is a connection-time string, so it takes effect on
+      reconnect — which costs nothing here, since there are no existing users.
+
+      **Test this against a real signer app before the flip**, not against a
+      double. A mock will agree with whatever we assume, and what is in question
+      is precisely what the other implementation does.
    2. **`StageUpdateAdminPubkeysAsync` throws**, so admin management is
       unavailable until an AppDataUpdate slice exists. `MessageService.UpdateAdminPubkeysAsync`
       fails at runtime.
    3. **`CommitData` now means a finished kind-445 event, not MIP-03
-      ciphertext.** `MessageService` must stop calling `EncryptCommitAsync` on
-      it, and stop passing `StageRemoveMemberAsync`'s bytes to
-      `PublishGroupMessageAsync`. This is the one that breaks loudly.
+      ciphertext** — and this **does not break loudly**. Corrected 2026-09-16;
+      the earlier entry here said "`MessageService` must stop calling
+      `EncryptCommitAsync`" and called it the loud one. Both halves were wrong.
+
+      `NostrService.PublishCommitAsync` base64-encodes whatever bytes it is
+      handed, wraps them in a *fresh* kind-445, and attaches the
+      `["encoding","base64"]` tag that §3 records current peers as rejecting
+      before any MLS processing. Hand it a commit that is already a signed
+      kind-445 and you publish base64-of-an-event inside an event. **No
+      exception is thrown at any point.** It is refused by the peer, silently,
+      on a tag — the same class of failure as the shipping engine's, arrived at
+      from the opposite direction.
+
+      **Six call sites, none of which throw:**
+
+      | Site | Path |
+      |---|---|
+      | `MessageService.cs:826` | direct to `PublishCommitAsync` |
+      | `MessageService.cs:1272` | direct |
+      | `MessageService.cs:1411` | direct |
+      | `MessageService.cs:1488` | `StageRemoveMemberAsync` bytes → `PublishGroupMessageAsync` |
+      | `ChatViewModel.cs:918` | `catch (NotSupportedException)` → falls through to the double-wrap |
+      | `ChatListViewModel.cs:1268` | same catch, same fall-through |
+
+      **The two catch blocks are the trap.** They were written as a fallback for
+      the Rust `MlsService`, which also refuses `EncryptCommitAsync`. They now
+      convert the adapter's *deliberate* refusal into a wire-corrupting publish.
+      A refusal that a caller already catches is not a guard; it is a comment.
+
+      **So this is not a step-3 follow-up.** The earlier entry deferred it on the
+      grounds that it would be noticed. It would not be. It has to land *with*
+      the flip.
+
+      **Fix, in two parts.** First, with 2b: a guard in `PublishCommitAsync` that
+      refuses bytes which already parse as a signed Nostr event, plus the six
+      call sites. One file for the guard, which catches every future site too,
+      and it fails at the publish rather than at the peer. Note `NostrService` is
+      a high-risk file (0.52) and under I2 — integration coverage lands with it.
+      Second, at step 3: `CommitData` and `EncryptCommitAsync` leave
+      `IMlsService` altogether when `marmot-cs` goes, so the ambiguous `byte[]`
+      stops existing rather than being guarded.
    4. **`ProcessWelcomeAsync` lost its KeyPackage binding.** The engine's join
       path refuses a Welcome naming a KeyPackage we never published; this
       signature does not carry the kind-30443 event id, so the adapter tries
@@ -140,9 +229,42 @@ no behaviour; step 2 is where the app starts using the new engine.**
    5. **Nothing can tell the service a KeyPackage's published event id** —
       `MarkPublishedAsync` has no caller through this contract, which is *why*
       (4) is currently impossible.
-   6. **`IMlsService` is synchronous in eight places that need async storage**,
-      bridged by one documented `Blocking<T>`. Worth deciding whether step 3
-      makes the interface async, since `IMessageService` is being touched anyway.
+   6. **`IMlsService` stays synchronous. Decided 2026-09-16 — do not make it
+      async at step 3.**
+
+      The open question was whether the seven `Blocking<T>` bridges are a
+      deadlock or freeze hazard on the UI thread. They are not, and the reason is
+      structural rather than lucky:
+
+      - **Nothing under `_gate` reaches a network.** The host is built with
+        `CallerPublishes.Instance` and `messages: null`
+        (`DarkMatterMlsService.cs:163`). The commit relay answers
+        `Indeterminate` without awaiting anything, and the send path is not used
+        at all — `EncryptMessageAsync` calls `GroupMessages.Send`, which builds
+        an envelope and puts nothing on a wire. So every gate-held region is
+        storage plus MLS compute, both bounded and local. A UI-thread caller
+        waits behind another caller's *work*, never behind a relay timeout.
+      - **All seven bodies are storage reads** — `ListKeyPackagesAsync`,
+        `GetStagedCommitAsync`, `RequireSessionAsync`. Microsoft.Data.Sqlite's
+        async surface completes synchronously, so `GetAwaiter().GetResult()`
+        posts no continuation to a `SynchronizationContext` and cannot deadlock.
+      - The one long pass in the adapter — the hydrating `ReplayAsync` — runs
+        **once at construction**, before anything is opened. It is not reachable
+        from a `Blocking` call.
+
+      Against that, going async is a signature change to a file both UI heads
+      bind to: an I4 flag-day shape, landing inside the I5 freeze that 2b itself
+      starts. And step 3 already shrinks this contract for free — `CommitData`
+      and `EncryptCommitAsync` leave it when `marmot-cs` goes (see item 3).
+      Removing the wrong members beats making the wrong contract async.
+
+      **What reverses this decision, precisely:** giving the adapter a real
+      `IMessageRelay` — that is, routing sends through `MarmotSession.SendAsync`
+      instead of `GroupMessages.Send`, which is the natural way to recover the
+      durable send queue. That puts a relay round trip under `_gate`, and every
+      `Blocking` call becomes an ANR on Android. **If that change is ever made,
+      the async conversion has to land with it, not after it.** Whoever picks up
+      the durable send queue should read this item first.
 
    **Three things the adapter needs that the old service did not:** a
    `SemaphoreSlim` around every entry point, because the engine is explicitly
