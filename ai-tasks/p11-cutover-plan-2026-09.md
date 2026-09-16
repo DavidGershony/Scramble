@@ -99,10 +99,57 @@ no behaviour; step 2 is where the app starts using the new engine.**
    over the one part a real client cannot do. A `DarkMatterInterop` test can now
    take a raw kind-445 off the relay not knowing whose it is. Worth running
    before step 2.
-2. **Port `IMlsService` onto the session layer.** Twenty members, one
-   implementation, no other service touched. This is the cutover proper, and
-   with the migration gone it is now the first step that changes behaviour.
-   *Size: M.*
+2. **Port `IMlsService` onto the session layer.** Splits in two.
+
+   **2a. The unwired adapter — done** (`62690af`). `DarkMatterMlsService`
+   exists and nothing constructs it. Eleven members map cleanly, thirteen are
+   adapted, **seven refuse with `NotSupportedException`** rather than invent
+   semantics.
+
+   The bridge worth knowing: staging hands `CommitAsync` a transport that keeps
+   the envelope and answers `Indeterminate`, which is the true statement — the
+   bytes have gone to a caller who has not published them. The engine's response
+   to `Indeterminate` *is* what the old contract means by "staged", so the
+   decision procedure is unchanged and only its timing moves.
+
+   **2b. Flip the registration — not started.** This is the pivot; I5's freeze
+   starts here.
+
+   **Six things to settle before 2b**, from the adapter's own report:
+
+   1. **`SetNostrEventSigner` throws and every head calls it.** Either build the
+      service with an `IAccountIdentityProofSigner` derived from the external
+      signer — which needs a kind-450-shaped signing call on `IExternalSigner` —
+      or drop the member. `INostrEventSigner` cannot serve it: it picks its own
+      `created_at`, so it would sign a different template than the proof commits
+      to.
+   2. **`StageUpdateAdminPubkeysAsync` throws**, so admin management is
+      unavailable until an AppDataUpdate slice exists. `MessageService.UpdateAdminPubkeysAsync`
+      fails at runtime.
+   3. **`CommitData` now means a finished kind-445 event, not MIP-03
+      ciphertext.** `MessageService` must stop calling `EncryptCommitAsync` on
+      it, and stop passing `StageRemoveMemberAsync`'s bytes to
+      `PublishGroupMessageAsync`. This is the one that breaks loudly.
+   4. **`ProcessWelcomeAsync` lost its KeyPackage binding.** The engine's join
+      path refuses a Welcome naming a KeyPackage we never published; this
+      signature does not carry the kind-30443 event id, so the adapter tries
+      each record holding material. HPKE decryption still decides — success is
+      proof of possession — but the *fail-closed* check is gone. Fix by passing
+      the Welcome's `e` tag (`NostrService` already parses and discards it), or
+      the whole gift wrap, which `InboundFanIn` already returns.
+   5. **Nothing can tell the service a KeyPackage's published event id** —
+      `MarkPublishedAsync` has no caller through this contract, which is *why*
+      (4) is currently impossible.
+   6. **`IMlsService` is synchronous in eight places that need async storage**,
+      bridged by one documented `Blocking<T>`. Worth deciding whether step 3
+      makes the interface async, since `IMessageService` is being touched anyway.
+
+   **Three things the adapter needs that the old service did not:** a
+   `SemaphoreSlim` around every entry point, because the engine is explicitly
+   one-loop and `IMlsService` is called from the UI thread and the subscription
+   loop; a re-fetch through `SessionForAsync` after `AdoptAsync`, which returns
+   an *uncached* session and so a second owner; and persistence of the sender
+   ratchet before returning envelope bytes.
 3. **`IMessageService`**, which sits on `IMlsService` and should mostly follow.
    *Size: S–M.*
 4. **`INostrService`** — audit rather than port. Most of it is transport that
@@ -163,6 +210,16 @@ nothing can satisfy. The rest, made testable:
 - **Desktop the same**, after the freeze lifts.
 - `marmot-cs` is gone from the solution, nothing in `Scramble.Presentation`
   names a Marmot type, and the drift check stays clean.
+
+**Two things found in the old engine while porting, both resolved by step 5 but
+worth knowing until then.** `ManagedMlsService.EncryptCommitAsync` emits an
+`["encoding","base64"]` tag on its kind-445, and §5's trap table records that
+current peers reject a kind-445 carrying any tag beyond `h` and `expiration`
+*before any MLS processing* — so the old engine's commits are already unreadable
+by a current peer. And commits are wrapped by two different code paths
+(`EncryptCommitAsync` for adds, `NostrService.PublishGroupMessageAsync` for
+removes and admin updates), i.e. two implementations of the MIP-03 wrap living
+in `Scramble.Core`.
 
 ---
 
