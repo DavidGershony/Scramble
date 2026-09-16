@@ -115,7 +115,9 @@ no behaviour; step 2 is where the app starts using the new engine.**
    **2b. Flip the registration — not started.** This is the pivot; I5's freeze
    starts here.
 
-   **Six things to settle before 2b**, from the adapter's own report:
+   **Five things to settle before 2b**, from the adapter's own report and then
+   re-checked against the call sites on 2026-09-16 — which changed four of them.
+   Originally six; 4 and 5 turned out to be one problem.
 
    1. **`SetNostrEventSigner` throws and every head calls it** — smaller than it
       looked, with a separate problem underneath it. Revised 2026-09-16; the
@@ -219,17 +221,55 @@ no behaviour; step 2 is where the app starts using the new engine.**
       Second, at step 3: `CommitData` and `EncryptCommitAsync` leave
       `IMlsService` altogether when `marmot-cs` goes, so the ambiguous `byte[]`
       stops existing rather than being guarded.
-   4. **`ProcessWelcomeAsync` lost its KeyPackage binding.** The engine's join
-      path refuses a Welcome naming a KeyPackage we never published; this
-      signature does not carry the kind-30443 event id, so the adapter tries
-      each record holding material. HPKE decryption still decides — success is
-      proof of possession — but the *fail-closed* check is gone. Fix by passing
-      the Welcome's `e` tag (`NostrService` already parses and discards it), or
-      the whole gift wrap, which `InboundFanIn` already returns.
-   5. **Nothing can tell the service a KeyPackage's published event id** —
-      `MarkPublishedAsync` has no caller through this contract, which is *why*
-      (4) is currently impossible.
-   6. **`IMlsService` stays synchronous. Decided 2026-09-16 — do not make it
+   4. **`ProcessWelcomeAsync` lost its fail-closed KeyPackage binding, and
+      nothing can tell the service a KeyPackage's published event id.** One
+      problem, not two — and both halves of the data already exist. Revised
+      2026-09-16; items 4 and 5 were recorded separately, and 5 read as though
+      the id were unavailable. It is available on both sides; only the contract
+      has no door for it.
+
+      **The engine was built for this.** `IKeyPackageStorage` has
+      `GetKeyPackageByEventAsync(eventIdHex)`, whose own summary reads: *"The
+      join path's entry point: a Welcome carries the event id, and the private
+      material is what has to be found from it."* The adapter's
+      shuffle-and-try-every-candidate loop is a fallback for an id that never
+      arrives, not a design.
+
+      **Publish side — the caller already holds the id.** Both call sites
+      generate and then publish, capturing the event id and doing nothing with
+      it: `MessageService.cs:2677-2678` and `SettingsViewModel.cs:1221-1226`.
+      `IKeyPackageStorage.MarkPublishedAsync(keyPackageRefHex, eventIdHex)` is
+      implemented (`SqliteMarmotStorageProvider.KeyPackages.cs:104`) and already
+      has a working caller in `KeyPackagePublisher.cs:240`. What is missing is a
+      member on `IMlsService` to carry the id back in — one method.
+
+      *Open detail:* the key is `keyPackageRefHex`, and the `KeyPackage` model
+      returned to the caller does not obviously expose it. Either surface it on
+      the model or have the new member take the `KeyPackage` itself. Decide when
+      writing it; it does not change the shape.
+
+      **Consume side — the id is already parsed and persisted.**
+      `NostrService.cs:937` puts the Welcome's KeyPackage `e` tag on
+      `MarmotWelcomeEvent.KeyPackageEventId`; it is stored on `PendingInvite`
+      (`StorageService.cs:178`) and read back at `MessageService.cs:2638-2640`.
+      So the id is in hand at the `ProcessWelcomeAsync` call site.
+      `ProcessWelcomeAsync(welcomeData, wrapperEventId)` simply does not take it
+      — note `wrapperEventId` is the kind-1059 wrapper, a different id, so this
+      is an added parameter rather than a repurposed one.
+
+      **Why it is worth doing rather than living with the loop.** HPKE
+      decryption still decides correctness — success is proof of possession — so
+      the loop is not *unsafe*. What it loses is the fail-closed refusal of a
+      Welcome naming a KeyPackage we never published, and it costs a trial
+      decryption per stored candidate. The randomised order
+      (`Random.Shared.Shuffle`) makes that cost non-deterministic as well.
+
+      **Mutation to write against it:** make the binding accept a Welcome whose
+      `e` tag names a KeyPackage this device never published, and confirm a test
+      fails. A test that only checks the happy path passes identically with the
+      shuffle-and-try loop still in place, which is exactly the shape §3 keeps
+      recording.
+   5. **`IMlsService` stays synchronous. Decided 2026-09-16 — do not make it
       async at step 3.**
 
       The open question was whether the seven `Blocking<T>` bridges are a
