@@ -87,14 +87,12 @@ no behaviour; step 2 is where the app starts using the new engine.**
    the hidden half — `IRoutingIndexStorage` had no caller on *either* side, so
    the index was permanently empty.
 
-   **Two things it decided that step 2 inherits.** Sessions are cached and *the
-   cache is the ownership*: two sessions over one group each write live state,
-   so the loser's epoch is silently discarded — a fork of our own making. And
-   `MarmotSessionHost.OpenAsync` still hands out a fresh session per call with
-   no notion of an existing owner, which `InboundFanIn` documents and works
-   around rather than fixes. **Moving the cache onto the host would make single
-   ownership true by construction; decide that at step 2**, before `IMlsService`
-   acquires a second way to get a session.
+   **Session ownership is settled** (`5c4a284`), before step 2 rather than
+   during it. The cache moved onto the host, so the receive path, the send path
+   and a service layer share one owner instead of each minting their own.
+   `MarmotSessionHost.SessionForAsync` is the door; `OpenAsync` stays uncached
+   and says plainly that it bypasses ownership. **Step 2 must use
+   `SessionForAsync`.**
 
    **It also unblocks a real interop test.** Every test to date, interop
    included, receives by handing bytes to a session it chose itself — stepping
