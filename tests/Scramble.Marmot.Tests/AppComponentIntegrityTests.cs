@@ -268,12 +268,34 @@ public class AppComponentIntegrityTests
     [InlineData(AppComponent.AppComponents)]
     [InlineData(AppComponent.SafeAad)]
     [InlineData((ushort)0x800c)] // group lifecycle
+    [InlineData(AppComponent.GroupAdminPolicy)]
     public void SomeComponentsCanNeverBeRemoved(ushort componentId)
     {
         Assert.Throws<AppComponentException>(() =>
             AppComponentIntegrity.ValidateUpdateBatch(
                 Commit(AppDataUpdate.Remove(componentId)),
                 BaseRequired));
+    }
+
+    [Fact]
+    public void UnrequiringTheAdminPolicyDoesNotAuthoriseRemovingIt()
+    {
+        // The shape the unconditional case exists for. Removability is decided
+        // against the RESULTING required set, which is what lets one commit
+        // atomically unrequire an optional component and drop its state — so a
+        // batch that rewrites the requirement list without 0x8003 would clear
+        // the way for its removal if the rule were only "still required".
+        byte[] withoutAdmins = ComponentCodec.EncodeComponentsList(
+            new HashSet<ushort> { AppComponent.AccountIdentityProof });
+
+        var ex = Assert.Throws<AppComponentException>(() =>
+            AppComponentIntegrity.ValidateUpdateBatch(
+                Commit(
+                    AppDataUpdate.Remove(AppComponent.GroupAdminPolicy),
+                    AppDataUpdate.Update(AppComponent.AppComponents, withoutAdmins)),
+                BaseRequired));
+
+        Assert.Contains("cannot be removed", ex.Message);
     }
 
     [Fact]

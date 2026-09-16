@@ -254,6 +254,20 @@ public static class AppComponentIntegrity
             case AppComponent.SafeAad:
                 throw new AppComponentException(
                     "safe_aad (0x0002) has no GroupContext state in this profile.");
+            case AppComponent.GroupAdminPolicy:
+                // Unconditional, and it has to be. AdminPolicy says a removal
+                // targeting this component is invalid outright — nobody, admin
+                // included, can commit one — because a group without an admin
+                // list has nobody authorized to add anyone and no way back. The
+                // requirement-set rule below would refuse it too, but only
+                // while 0x8003 is still required: a batch that unrequires it
+                // and removes its state in the same commit would resolve the
+                // list first and let the removal through, which is exactly the
+                // atomic shape ValidateUpdateBatch was built to permit for
+                // optional components.
+                throw new AppComponentException(
+                    $"The admin-policy component 0x{AppComponent.GroupAdminPolicy:x4} cannot be "
+                    + "removed; a group without it can never authorize another commit.");
             case AppComponent.GroupLifecycle:
                 throw new AppComponentException(
                     $"The group-lifecycle component 0x{AppComponent.GroupLifecycle:x4} cannot be removed.");
