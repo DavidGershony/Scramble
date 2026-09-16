@@ -31,6 +31,15 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!--
+      The Dark Matter engine. Added at P11 step 2, alongside marmot-cs rather
+      than replacing it: the old engine still serves every registration until
+      the cutover flips, and the two are expected to coexist only for that
+      window. Both go at step 5.
+    -->
+    <ProjectReference Include="..\Scramble.Marmot.Engine\Scramble.Marmot.Engine.csproj" />
+    <ProjectReference Include="..\Scramble.Marmot.Storage.Sqlite\Scramble.Marmot.Storage.Sqlite.csproj" />
+
     <ProjectReference Include="..\..\lib\dotnet-mls\src\DotnetMls\DotnetMls.csproj" />
     <ProjectReference Include="..\..\lib\dotnet-mls\src\DotnetMls.Crypto\DotnetMls.Crypto.csproj" />
     <ProjectReference Include="..\..\lib\marmot-cs\src\MarmotCs.Core\MarmotCs.Core.csproj" />
