@@ -854,22 +854,78 @@ public sealed class DarkMatterMlsService : IMlsService, IDisposable
             await _storage.GetStagedCommitAsync(new GroupId(groupId)) is not null);
     }
 
-    /// <summary>Refused.</summary>
+    /// <summary>
+    /// Replaces the group's admin set, staged. Returns the envelope to publish.
+    /// </summary>
     /// <remarks>
-    /// <b>There is no AppDataUpdate builder in the engine, by decision rather
-    /// than omission.</b> <see cref="MarmotGroupInvite"/> says so in as many
-    /// words: coupling an admin-policy update into a commit needs the proposal
-    /// wired through <see cref="AppComponentIntegrity"/>, and doing it badly
-    /// means an admin set that no member observed being granted. Staging one
-    /// here would be inventing that slice at the service layer, below any of the
-    /// integrity checks a commit carrying <c>0x8003</c> has to pass.
+    /// <para>
+    /// <b>The whole set, not a delta.</b> The <c>0x8003</c> component is a
+    /// canonical sorted list, and a delta would need a base that every caller
+    /// agrees on. Read the current set with <see cref="GetAdminPubkeys"/>,
+    /// change it, pass all of it.
+    /// </para>
+    /// <para>
+    /// <b>Every rule lives in the engine, deliberately.</b>
+    /// <see cref="MarmotGroupAdminPolicy.Stage"/> refuses an empty set, an
+    /// admin with no member leaf, a key that is not an account key, an
+    /// unchanged set, and a committer who is not already an active admin — and
+    /// it judges the commit it built by reading the proposal back off the
+    /// wire, because those bytes are what a peer sees. None of that is
+    /// re-checked here: a second copy of a governance rule is a second copy to
+    /// disagree, and this layer is the one with no way to verify it.
+    /// </para>
+    /// <para>
+    /// Staged like every other commit here, so it is still outstanding when the
+    /// caller is handed the bytes. Finish it with
+    /// <see cref="MergeStagedAsync"/> or <see cref="ClearStagedAsync"/>.
+    /// </para>
     /// </remarks>
-    public Task<byte[]> StageUpdateAdminPubkeysAsync(byte[] groupId, List<string> adminPubkeysHex) =>
-        throw new NotSupportedException(
-            "Changing the admin policy needs an AppDataUpdate proposal, which the engine does "
-            + "not yet build: the commit has to pass AppComponentIntegrity's rules, and a "
-            + "hand-rolled one here would grant an admin set no member observed being granted. "
-            + "Reading the current admins (GetAdminPubkeys) works.");
+    public async Task<byte[]> StageUpdateAdminPubkeysAsync(
+        byte[] groupId, List<string> adminPubkeysHex)
+    {
+        ArgumentNullException.ThrowIfNull(groupId);
+        ArgumentNullException.ThrowIfNull(adminPubkeysHex);
+
+        // Converted here rather than in the engine because hex is this
+        // contract's idea, not the protocol's -- the admin list is raw 32-byte
+        // account keys everywhere it is signed or compared. A bad string is
+        // named as one: Convert.FromHexString's own FormatException says
+        // nothing about which entry, and the caller is a settings screen.
+        var admins = new List<byte[]>(adminPubkeysHex.Count);
+
+        foreach (string hex in adminPubkeysHex)
+        {
+            try
+            {
+                admins.Add(Convert.FromHexString(hex));
+            }
+            catch (FormatException ex)
+            {
+                throw new ArgumentException(
+                    $"Admin pubkey '{hex}' is not hex.", nameof(adminPubkeysHex), ex);
+            }
+        }
+
+        await _gate.WaitAsync();
+        try
+        {
+            MarmotSession session = await RequireSessionAsync(new GroupId(groupId));
+            var captured = new CallerPublishes.Capture();
+
+            CommitPublishOutcome outcome = await session.CommitAsync(
+                group => MarmotGroupAdminPolicy.Stage(group, _cipherSuite, admins),
+                staged => captured.Take(session, staged, WrapCommit),
+                PendingKind.GroupEvolution);
+
+            RequireDeferred(outcome);
+
+            return Encoding.UTF8.GetBytes(captured.Require());
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
 
     /// <summary>Refused.</summary>
     /// <remarks>

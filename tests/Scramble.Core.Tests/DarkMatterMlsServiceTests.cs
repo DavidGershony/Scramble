@@ -1,3 +1,4 @@
+using Scramble.Marmot.AppComponents;
 using System.Text;
 using System.Text.Json;
 using Scramble.Core.Services;
@@ -603,10 +604,6 @@ public sealed class DarkMatterMlsServiceTests : IDisposable
         await Assert.ThrowsAsync<NotSupportedException>(
             () => alice.Service.ImportGroupStateAsync(group.GroupId, [1, 2, 3]));
 
-        // No AppDataUpdate builder exists, by decision.
-        await Assert.ThrowsAsync<NotSupportedException>(
-            () => alice.Service.StageUpdateAdminPubkeysAsync(group.GroupId, [bob.PublicKeyHex]));
-
         // A commit is wrapped while staged, under the pre-commit secret; there
         // is nothing left to encrypt afterwards.
         await Assert.ThrowsAsync<NotSupportedException>(
@@ -714,5 +711,145 @@ public sealed class DarkMatterMlsServiceTests : IDisposable
                 () => bob.Service.DecryptMessageAsync(joined.GroupId, envelope));
 
         Assert.Contains("Duplicate", second.Message);
+    }
+
+    // ----------------------------------------------------------- admin policy
+
+    /// <summary>Alice's group with Bob in it, both merged and joined.</summary>
+    private async Task<(Party Alice, Party Bob, MlsGroupInfo Group)> TrioAsync()
+    {
+        var (alice, bob, group) = await PairAsync();
+
+        CoreKeyPackage keyPackage = await PublishKeyPackageAsync(bob);
+        MlsWelcome staged = await alice.Service.StageAddMemberAsync(group.GroupId, keyPackage);
+        await alice.Service.MergeStagedAsync(group.GroupId);
+
+        MlsGroupInfo joined = await bob.Service.ProcessWelcomeAsync(
+            staged.WelcomeData, "0".PadLeft(64, '0'));
+
+        // Bob's own id for the same group, not Alice's record. A refusal test
+        // aimed at a group Bob does not hold would pass on "no such group"
+        // while proving nothing about authority.
+        Assert.Equal(group.GroupId, joined.GroupId);
+
+        return (alice, bob, group);
+    }
+
+    [Fact]
+    public async Task GrantingAdminStagesACommitAndLeavesTheGroupWhereItWas()
+    {
+        // The wiring, end to end: the contract's hex list reaches the engine's
+        // raw account keys, the commit is staged rather than applied, and the
+        // bytes handed back are a publishable envelope.
+        var (alice, bob, group) = await TrioAsync();
+
+        // Read here, not from PairAsync's record: adding Bob already advanced
+        // the group, so the creation epoch would make "unchanged" and
+        // "advanced by one" the same number and the assertion would pass
+        // either way.
+        MlsGroupInfo before = (await alice.Service.GetGroupInfoAsync(group.GroupId))!;
+
+        byte[] envelope = await alice.Service.StageUpdateAdminPubkeysAsync(
+            group.GroupId, [alice.PublicKeyHex, bob.PublicKeyHex]);
+
+        Assert.True(alice.Service.HasPendingCommit(group.GroupId));
+
+        MlsGroupInfo? after = await alice.Service.GetGroupInfoAsync(group.GroupId);
+        Assert.NotNull(after);
+        Assert.Equal(before.Epoch, after.Epoch);
+
+        // Still the old set: staged is not applied, and the admin set a caller
+        // reads before publishing must be the one the group is still in.
+        Assert.Equal([alice.PublicKeyHex], alice.Service.GetAdminPubkeys(group.GroupId));
+
+        Assert.NotEmpty(envelope);
+
+        // Not pinned here, and it cannot be: deleting this member's
+        // RequireDeferred call survives every test in this class, because
+        // CallerPublishes answers Indeterminate unconditionally and nothing
+        // reachable through this contract makes it answer otherwise. It is a
+        // guard against a future transport, kept for the same reason
+        // StageRemoveMemberAsync and UpdateKeysAsync keep theirs.
+    }
+
+    [Fact]
+    public async Task MergingAnAdminGrantIsWhatChangesTheAdminSet()
+    {
+        var (alice, bob, group) = await TrioAsync();
+
+        await alice.Service.StageUpdateAdminPubkeysAsync(
+            group.GroupId, [alice.PublicKeyHex, bob.PublicKeyHex]);
+
+        await alice.Service.MergeStagedAsync(group.GroupId);
+
+        List<string> admins = alice.Service.GetAdminPubkeys(group.GroupId);
+
+        Assert.Equal(2, admins.Count);
+        Assert.Contains(alice.PublicKeyHex, admins);
+        Assert.Contains(bob.PublicKeyHex, admins);
+    }
+
+    [Fact]
+    public async Task AnAdminSetThatEmptiesTheGroupIsRefused()
+    {
+        // The one commit a v1 group cannot recover from: no succession, no
+        // promotion, and every repair is itself admin-gated.
+        var (alice, _, group) = await TrioAsync();
+
+        await Assert.ThrowsAsync<AppComponentException>(
+            () => alice.Service.StageUpdateAdminPubkeysAsync(group.GroupId, []));
+
+        Assert.False(alice.Service.HasPendingCommit(group.GroupId));
+    }
+
+    [Fact]
+    public async Task AnAdminWhoIsNotAMemberIsRefused()
+    {
+        // A listed admin with no member leaf is a phantom that activates the
+        // moment a matching leaf appears, with no commit any member observed
+        // granting it.
+        var (alice, _, group) = await TrioAsync();
+        Party stranger = await PartyAsync();
+
+        await Assert.ThrowsAsync<AppComponentException>(
+            () => alice.Service.StageUpdateAdminPubkeysAsync(
+                group.GroupId, [alice.PublicKeyHex, stranger.PublicKeyHex]));
+
+        Assert.False(alice.Service.HasPendingCommit(group.GroupId));
+    }
+
+    [Fact]
+    public async Task ANonAdminCannotChangeTheAdminPolicy()
+    {
+        // Bob is a member, not an admin. A commit our peers would refuse is
+        // worse than one we refuse: we would publish it, apply it, and be alone
+        // in an epoch nobody accepted.
+        var (_, bob, group) = await TrioAsync();
+
+        // Bob holds the group -- TrioAsync pins that -- so the refusal is about
+        // authority and not about a group he cannot see.
+        Assert.NotNull(await bob.Service.GetGroupInfoAsync(group.GroupId));
+
+        AppComponentException ex =
+            await Assert.ThrowsAsync<AppComponentException>(
+                () => bob.Service.StageUpdateAdminPubkeysAsync(
+                    group.GroupId, [bob.PublicKeyHex]));
+
+        Assert.Contains("admin", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(bob.Service.HasPendingCommit(group.GroupId));
+    }
+
+    [Fact]
+    public async Task AnAdminPubkeyThatIsNotHexIsNamedAsSuch()
+    {
+        // The caller is a settings screen. Convert.FromHexString's own
+        // FormatException does not say which entry was bad.
+        var (alice, _, group) = await TrioAsync();
+
+        ArgumentException ex = await Assert.ThrowsAsync<ArgumentException>(
+            () => alice.Service.StageUpdateAdminPubkeysAsync(
+                group.GroupId, [alice.PublicKeyHex, "not-a-key"]));
+
+        Assert.Contains("not-a-key", ex.Message);
     }
 }
