@@ -176,9 +176,22 @@ no behaviour; step 2 is where the app starts using the new engine.**
       **Test this against a real signer app before the flip**, not against a
       double. A mock will agree with whatever we assume, and what is in question
       is precisely what the other implementation does.
-   2. **`StageUpdateAdminPubkeysAsync` throws**, so admin management is
-      unavailable until an AppDataUpdate slice exists. `MessageService.UpdateAdminPubkeysAsync`
-      fails at runtime.
+   2. **Done, 2026-09-16** (`8823539` engine, `49e314b` wiring).
+      `MarmotGroupAdminPolicy.Stage` builds the AppDataUpdate commit and
+      `StageUpdateAdminPubkeysAsync` no longer throws, so
+      `MessageService.UpdateAdminPubkeysAsync` will work at the flip.
+
+      `dotnet-mls` needed no change — `AppDataUpdateProposal` is a real proposal
+      with a codec, and `BuildCommit`/`ProcessCommitCore` both dispatch it. The
+      library's own tests cover only the codec, which is why the constant read
+      like a stub.
+
+      **It surfaced something larger**, now §12 of the remaining-work inventory:
+      the *receive* half of this rule does not exist. `CommitAuthorization`'s
+      only production caller is the convergence pass's branch ordering, and
+      inbound commits are applied with no authorization check at all — so any
+      member can rewrite the admin set by commit and we accept it. Independent of
+      this cutover, and security-relevant, so it should not queue behind it.
    3. **`CommitData` now means a finished kind-445 event, not MIP-03
       ciphertext** — and this **does not break loudly**. Corrected 2026-09-16;
       the earlier entry here said "`MessageService` must stop calling
