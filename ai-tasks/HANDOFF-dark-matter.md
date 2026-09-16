@@ -1759,7 +1759,7 @@ Both halves were mutated. Hardcoding the candidate's class fails
 ### 3z. The convergence pass is wired — and the wiring found three guesses
 
 2026-09-12. **1032 Marmot tests**, fast gate green (1032 / 516 core / 253 UI),
-**18/18 interop at `wn 0.9.21` with zero skips** (image `mdk.commit fdd398a8`,
+**20/20 interop at `wn 0.9.21` with zero skips** (image `mdk.commit fdd398a8`,
 checked rather than assumed — §3x). Twelve commits, `25cfb87`..`7021d84`.
 
 **P8's pieces have a caller now.** `ConvergencePass` reads the commits ingest
@@ -2187,6 +2187,7 @@ without the interop suite running).
 | Deferring a component because its protocol looks heavy | `0x800c`'s state is one byte, but it is in `default_group_components()` — so deferring it blocked create, join and invite in both directions | Check `default_group_components()` before calling anything optional. "Deferred" is only safe for what nothing else makes mandatory. |
 | Assuming last-resort is an MLS extension | It is component `0x0004` with EMPTY data in the KEYPACKAGE-level `app_data_dictionary`; `0x000a` is the obsolete form, and non-empty data is malformed | Read `KeyPackage::last_resort` in the OpenMLS revision mdk pins, not the extension registry. |
 | Treating a skipped interop suite as a passing one | The tests skip when the container is absent, so a failed image build reads as green | `integration.yml` has an explicit readiness check after the build. Do not remove it as redundant. |
+| Adding an interop test class with `[Collection]` but no `[Trait("Category", "DarkMatterInterop")]` | `stage6` filters on the trait, so the class is never collected. The run reports a genuine pass with **zero skips** and no warning — the count is the only tell | Verify with `dotnet test --filter "Category=DarkMatterInterop" --list-tests` and check the number went up. An uncollected test cannot fail. |
 | Deleting a KeyPackage record because the publish "failed" | A timeout is not a rejection; the event may be live, and erasing its private key is unrecoverable | Only `Rejected` authorises deletion. A throwing transport is `Indeterminate`. |
 | A literal `64` as a varint length prefix in a test fixture | Decodes as the one-byte value 0, so the test still throws — for the wrong reason | Build fixtures through the codec, never by hand. |
 | Letting `CreateKeyPackage` pick the lifetime | `dotnet-mls` defaults to `(0, ulong.MaxValue)`; `wn-agent` refuses it before reading anything else | Always pass a window from `KeyPackageLifetimePolicy`. The bound is OpenMLS's `MAX_LEAF_NODE_LIFETIME_RANGE_SECONDS`, not a Marmot rule, and no Marmot document restates it. |
