@@ -1991,6 +1991,80 @@ less. It has **not** been chased further, and it is **not** evidence that
 anything about §3y's convergence finding changed: that would need the test to
 assert what it currently, deliberately, does not.
 
+### 3ac. mdk 0.10.0 assessed — the pin stays at 0.9.21
+
+2026-09-16. `wn-agent-v0.10.0` is released, 56 commits past our pin. **Nothing
+in the range changes the wire, and we are not moving.**
+
+**Verified by blob identity, not by reading release notes.** `gh api .../compare`
+caps `.files` at 300 and this range has 470, so the compare list is truncated and
+silently drops `crates/traits` entirely — a method that would have "checked" the
+account-identity proof by not looking at it. The assessment used
+`git/trees/<tag>?recursive=1` at both tags and compared blob SHAs. Spot-checked
+independently: `traits/src/app_components/mod.rs` `fd81bf06`,
+`cgka-engine/src/key_package.rs` `69ff0dce`, `cgka-engine/src/convergence.rs`
+`bf0a7e4b` — identical at both tags.
+
+So: no component id, rule or encoding changed; `default_group_components()` is
+still `{0x8001, 0x8003, 0x800c}`; `validate_invitee_capabilities` and the §7.2
+implicit-range rule are untouched; the `0x8009` account proof did not move — the
+§6 red flag, cleared by identity rather than by assertion; the convergence
+comparator and all four V1 constants are unchanged; and the `openmls` pin is the
+same revision, so §6's warning that the KeyPackage lifetime bound can move
+invisibly does not fire.
+
+**The usernames feature is presentation, not protocol.**
+`marmot-app/src/profile_pseudonyms.rs` hashes an account id into an
+adjective/animal pair — its own header says *"presentation-only… not unique,
+anonymous, or a security primitive"*. Plus `nprofile` account-reference decoding
+(relay hints discarded) and a `group_info.subject` for hosts to display, whose
+changelog states the guard outright: display names *"never become routing ids,
+authorization facts, or cache keys."*
+
+**56 commits; 10 touch engine or traits; 0 reach the wire.** The release notes
+name the compatibility boundary themselves and it is not the wire: bindings and
+account-DB migrations 70–75.
+
+**Why not to bump, beyond "nothing forces it": the argument has inverted.** We
+bumped on 2026-09-13 *because* iOS and Android were twelve commits ahead of the
+newest tag. Today they ship `fdd398a8` — **our exact pin** — and
+`marmotkit-v0.10.0` has a tag but **no GitHub release** (verified: 404, while
+`marmotkit-v0.9.21` resolves), so no client can be on 0.10.0. Moving now would
+test a version nobody runs, which is §3x's trap approached from the other side.
+The range is also heavy with churn in resumable canonicalization, subscription
+reuse and relay-drain timing — noise landing on a suite whose runtime already
+swung 13m56s → 1m02s for reasons §3ab records as unchased.
+
+**Re-check when `marmotkit-v0.10.0` is released and the apps adopt it.**
+
+#### Three things the range taught us that need no peer
+
+- **An `imeta` media reference is epoch-bound and the tag does not say so.**
+  Recipients derive the media key from the epoch of the delivering message, so a
+  reference produced at epoch N is undecryptable if it ships at N+1. Upstream now
+  pins it end-to-end through `SendIntent::AppMessage::expected_epoch`. We have no
+  media send path in `Scramble.Marmot.*` — the `imeta` code in `Scramble.Core` is
+  legacy MIP-04 — so there is nothing to fix, and this belongs in front of
+  whoever builds media rather than behind them.
+- **Message storage must return rows in arrival order.** Upstream hardened the
+  contract from "deterministic replay order" to a MUST, because a re-join replays
+  retained commits as a chain in that order.
+- **A Welcome to a peer that has run a local reset** must carry an inner-rumor
+  `created_at` strictly after the reset cutoff and be sealed by the same key as
+  the inviter's leaf credential. We satisfy both by construction —
+  `Nip59GiftWrap` jitters only the seal and the wrap, never the rumor, and
+  refuses a wrap whose rumor pubkey differs from the sender. Worth knowing before
+  someone widens that jitter.
+
+#### One gap it surfaced, and the answer
+
+`AppComponent.cs` names no constant for **`0x8002`** (Blossom image) or
+**`0x8007`** (avatar URL). That is latent rather than live: `CurrentProfile`
+refuses only components a group *requires*, not ones it merely carries, and
+neither is in `default_group_components()`. So a peer's group is refused only if
+it requires one — which nothing does by default. Worth naming them when media
+lands, not before.
+
 ### 3d. Non-code items still open (not blocking)
 
 - **Open a PR for `feat/dark-matter`.** **104 commits** ahead of `master` and
@@ -2175,6 +2249,7 @@ without the interop suite running).
 | Testing a read-before-apply rule with an Add commit | Its proposals are inline and its committer keeps its leaf, so the case cannot tell the orderings apart — the test passes either way | Use a commit that cites a proposal by hash. A departure commit does. |
 | Taking the version our peer was built from as the version users run | On 2026-09-13 the iOS and Android apps were 12 commits *ahead* of the newest `wn-agent` tag, while Mac was 80 behind it and Linux 197 | `./scripts/check-shipped-pins.ps1`. Each client records its own mdk pin; read those rather than the tag list. |
 | Reaching for a White Noise app as the interop peer | They consume mdk rather than implementing the protocol, so they exercise code the CLI peer already covers — and every one of them is a GUI | Keep `mdk-cli`. Use the apps to answer what ships, not to test the wire. |
+| Checking an upstream range with `gh api .../compare` | `.files` caps at 300, so a large range silently drops whole crates — ours dropped `crates/traits` entirely, which is where the account-identity proof lives. A clean-looking diff that never looked | Compare `git/trees/<tag>?recursive=1` blob SHAs at both tags and check `truncated` is false. Identity, not inspection. |
 | Reaching for `whitenoise-rs` or `wn-agent` as the interop peer | The first is archived and legacy-only; the second never subscribes, so it cannot receive an invite | Use `tests/mdk-cli-docker` — mdk's own CLI. |
 | Expecting `wn-agent` to fetch anything without a held subscription | Its relay connection sits at `sent: 0 events`; `subscribe_inbound` is streaming and the subscription dies with the connection | Hold it open, and keep the pipe's writer alive — `printf \| socat` half-closes at EOF. |
 | Polling `group_info` while holding a subscription | A held subscription starves the agent's small control pool and the query returns nothing at all | Read the stream while subscribed; query after releasing. |
