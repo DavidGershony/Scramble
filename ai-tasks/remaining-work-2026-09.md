@@ -594,3 +594,48 @@ the shape §3 keeps recording.
 
 Sequencing: this is receive-path and independent of the P11 blockers, but it is
 security-relevant, so it should not sit behind the cutover.
+
+## 13. The I2 integration suite is flaky, and the baseline hid it (2026-09-16)
+
+Recorded because the number everyone quotes — **68 passed / 4 skipped** — reads
+like a clean deterministic baseline, and it is not one. A future session that
+sees 67 will go looking for what it broke, or worse, will see a real regression
+and file it under "the usual flake."
+
+Three runs on 2026-09-16, no code change between the last two:
+
+| Run | Result |
+|---|---|
+| 1 | 67 passed, **1 failed**, 4 skipped |
+| 2 | 67 passed, **3 failed**, 4 skipped — *different tests* |
+| 3 (the failures only) | **4 passed**, 0 failed |
+
+Every failure was the same shape: `MlsLifecycleTestBase.WaitForMessageAsync`
+timing out at 20–30s with "never received message … in chat …". Seen in
+`NonPowerOfTwoTreeTests.Group_OfSize_N_EveryMemberSendsOneMessage_EveryoneReceivesAll`
+(memberCount 5 and 7) and
+`EpochRatchetStressTests.FiveMembers_FiftyInterleaved_Ops_EpochsStayInSync`.
+
+These are the heaviest tests in the suite — five to seven parties, fifty
+interleaved operations, every message round-tripped through a real relay — so a
+delivery-timing sensitivity is the likeliest cause rather than an MLS fault. Not
+investigated further; it was not what this session was doing.
+
+**It was not the Dark Matter work.** `DarkMatterMlsService` has zero references
+anywhere outside its own file — grep `src/Scramble.Core`, `Scramble.Desktop`,
+`Scramble.Mobile.Android`, `Scramble.Presentation` — so nothing in these tests
+can reach it. That is worth re-checking the moment step 2b flips the
+registration, because from then on the same failure *would* be reachable and
+this paragraph stops being a defence.
+
+### What to do about it
+
+Not "re-run until green" as a habit — that is how a real regression gets
+absorbed. Either stabilise the wait (the timeout is a fixed 20–30s against a
+containerised relay with no readiness signal for delivery) or mark the three as
+a separate category so the required gate stays deterministic and they run
+alongside it. The second is cheaper and honest; the first is better.
+
+Until then: **a failure in one of these three named tests is not evidence of a
+regression on its own, and a pass is not evidence of its absence.** Any other
+test failing is a real signal.
