@@ -228,6 +228,8 @@ public sealed class MarmotSessionHost
             + "and recover groups but cannot send application messages.");
 
     /// <summary>The epoch state machine, durable.</summary>
+    private readonly Dictionary<GroupId, MarmotSession> _sessions = [];
+
     public DurableEpochManager Epochs { get; }
 
     /// <summary>The per-epoch archive every group here is captured into.</summary>
@@ -324,6 +326,103 @@ public sealed class MarmotSessionHost
     /// the commit findable, and a hydration that cleared them would leave a
     /// group standing on a commit nobody can any longer ask about.
     /// </para>
+    /// </remarks>
+    /// <summary>
+    /// The session for a group, opening one if this host does not hold it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This is how a session should be obtained.</b> A
+    /// <see cref="MarmotSession"/> owns a live <see cref="MlsGroup"/> and writes
+    /// it down; two of them over one group id each hold their own copy and each
+    /// persist it, so whichever writes second silently discards the other's
+    /// epoch. That is a fork of our own making, with no peer involved and
+    /// nothing to detect it — the group simply is not where it thinks it is.
+    /// </para>
+    /// <para>
+    /// So the cache is not a performance device, it is the ownership. Holding it
+    /// on the host rather than in one caller is what lets the receive path, the
+    /// send path and a service layer share one owner instead of each minting
+    /// their own.
+    /// </para>
+    /// <para>
+    /// <b>Invalidated when the stored record's epoch moves strictly ahead of the
+    /// cached session's.</b> Within one host nothing should now be able to do
+    /// that — every path that advances a group goes through its session — so
+    /// this is defence against a second writer on the same database, which is a
+    /// different process rather than a different object. Strictly ahead, not
+    /// merely different: a record behind the session is the ordinary
+    /// mid-operation state, and re-opening on it would throw away the newer
+    /// group for older bytes.
+    /// </para>
+    /// </remarks>
+    public async Task<SessionOpenResult> SessionForAsync(
+        GroupId groupId, CancellationToken ct = default)
+    {
+        if (await _storage.GetGroupAsync(groupId, ct) is not { } record)
+        {
+            Forget(groupId);
+            return new SessionOpenResult(null, SessionOpenRefusal.NotStored);
+        }
+
+        if (_sessions.TryGetValue(groupId, out MarmotSession? cached))
+        {
+            if (record.Epoch.Value <= cached.Group.Epoch)
+                return new SessionOpenResult(cached, null);
+
+            Forget(groupId);
+        }
+
+        SessionOpenResult opened = await OpenAsync(groupId, ct);
+
+        if (opened.Session is { } session)
+            _sessions[groupId] = session;
+
+        return opened;
+    }
+
+    /// <summary>
+    /// Drops a cached session without closing it.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not <see cref="MarmotSession.CloseAsync"/>: closing writes
+    /// the session's live state, and a session is dropped precisely when that
+    /// state is the stale one.
+    /// <para>
+    /// The journal binding is released with it. Without that, a staging call on
+    /// the dropped group would still write through to the group's rows — the
+    /// session is gone but the group object it held is not.
+    /// </para>
+    /// </remarks>
+    /// <returns>Whether there was one to drop.</returns>
+    public bool Forget(GroupId groupId)
+    {
+        if (!_sessions.Remove(groupId, out MarmotSession? session))
+            return false;
+
+        GroupJournal.Unbind(session.Group);
+        return true;
+    }
+
+    /// <summary>Drops every cached session. See <see cref="Forget"/>.</summary>
+    public void Clear()
+    {
+        foreach (GroupId groupId in _sessions.Keys.ToList())
+            Forget(groupId);
+    }
+
+    /// <summary>How many sessions this host currently owns.</summary>
+    public int OpenSessions => _sessions.Count;
+
+    /// <summary>
+    /// Restores a session from storage, bypassing the cache.
+    /// </summary>
+    /// <remarks>
+    /// <b>Prefer <see cref="SessionForAsync"/>.</b> This hands back a fresh
+    /// session every call, so two callers using it on one group get two owners
+    /// and the silent fork described there. It stays public because a restart
+    /// genuinely wants a fresh read of storage, and because the refusal it
+    /// returns is the only place the three reasons are distinguished.
     /// </remarks>
     public async Task<SessionOpenResult> OpenAsync(
         GroupId groupId, CancellationToken ct = default)

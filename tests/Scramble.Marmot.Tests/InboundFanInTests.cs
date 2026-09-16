@@ -261,14 +261,19 @@ public class InboundFanInTests : IDisposable
         Assert.IsType<IngestOutcome.Processed>(
             Ingested(await pair.FanIn.ReceiveAsync(envelope)).Outcome);
 
-        // A fresh fan-in over the same storage, so nothing is cached and an
-        // opened session would show. This is what makes the assertion about the
-        // pre-filter rather than about ingest's content check, which would also
-        // have answered Duplicate -- one group import later.
-        var cold = new InboundFanIn(pair.Host);
+        // Emptied deliberately, so an opened session would show. That is what
+        // makes the assertion about the pre-filter rather than about ingest's
+        // content check, which would also have answered Duplicate -- one group
+        // import later.
+        //
+        // A second fan-in would no longer do this: the cache lives on the host,
+        // which is what stops two owners of one group existing at all.
+        pair.Host.Clear();
 
-        Assert.Equal(InputRejectionCategory.Duplicate, RefusedAs(await cold.ReceiveAsync(envelope)));
-        Assert.Equal(0, cold.OpenSessions);
+        Assert.Equal(
+            InputRejectionCategory.Duplicate, RefusedAs(await pair.FanIn.ReceiveAsync(envelope)));
+
+        Assert.Equal(0, pair.FanIn.OpenSessions);
     }
 
     [Fact]
@@ -372,8 +377,12 @@ public class InboundFanInTests : IDisposable
             Ingested(await pair.FanIn.ReceiveAsync(
                 Says(pair.Them, pair.TheirSigner, "before"))).Outcome);
 
-        // Another owner moves the group on and writes it down. This is the
-        // shape of every way a cached session goes stale.
+        // Another owner moves the group on and writes it down. OpenAsync is
+        // used on purpose: it is the one door documented as bypassing
+        // ownership, so it is the only way left to manufacture in a test what a
+        // second process on the same database would do for real. Nothing inside
+        // this host can produce it any more, which is the point of moving the
+        // cache onto the host.
         MarmotSession other = (await pair.Host.OpenAsync(pair.GroupId)).Require();
         Assert.IsType<IngestOutcome.Processed>(
             (await other.ReceiveAsync(Commits(pair.Them))).Outcome);

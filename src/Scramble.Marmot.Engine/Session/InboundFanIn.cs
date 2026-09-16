@@ -109,7 +109,6 @@ public abstract record InboundDelivery
 public sealed class InboundFanIn
 {
     private readonly MarmotSessionHost _host;
-    private readonly Dictionary<GroupId, MarmotSession> _sessions = [];
 
     /// <param name="host">
     /// The host whose groups this routes to. It supplies the storage as well,
@@ -120,7 +119,7 @@ public sealed class InboundFanIn
         _host = host ?? throw new ArgumentNullException(nameof(host));
 
     /// <summary>How many sessions are currently held open.</summary>
-    public int OpenSessions => _sessions.Count;
+    public int OpenSessions => _host.OpenSessions;
 
     /// <summary>
     /// Routes one envelope to the group it belongs to, and ingests it there.
@@ -176,7 +175,7 @@ public sealed class InboundFanIn
             return Refuse(InputRejectionCategory.Duplicate);
         }
 
-        MarmotSession? session = await AcquireAsync(routing.GroupId, ct);
+        MarmotSession? session = (await _host.SessionForAsync(routing.GroupId, ct)).Session;
 
         if (session is null)
         {
@@ -203,8 +202,9 @@ public sealed class InboundFanIn
     /// has built exactly that, and <see cref="Forget"/> is the only way back.
     /// </remarks>
     /// <returns>The session, or null when the group is not ours to open.</returns>
-    public Task<MarmotSession?> SessionForAsync(
-        GroupId groupId, CancellationToken ct = default) => AcquireAsync(groupId, ct);
+    public async Task<MarmotSession?> SessionForAsync(
+        GroupId groupId, CancellationToken ct = default) =>
+        (await _host.SessionForAsync(groupId, ct)).Session;
 
     /// <summary>
     /// Drops a cached session without writing anything through it.
@@ -217,77 +217,11 @@ public sealed class InboundFanIn
     /// dropped group writing through to the group's rows.
     /// </remarks>
     /// <returns>Whether there was one to drop.</returns>
-    public bool Forget(GroupId groupId)
-    {
-        if (!_sessions.Remove(groupId, out MarmotSession? session))
-            return false;
-
-        GroupJournal.Unbind(session.Group);
-        return true;
-    }
+    public bool Forget(GroupId groupId) => _host.Forget(groupId);
 
     /// <summary>Drops every cached session. See <see cref="Forget"/>.</summary>
-    public void Clear()
-    {
-        foreach (GroupId groupId in _sessions.Keys.ToList())
-            Forget(groupId);
-    }
+    public void Clear() => _host.Clear();
 
-    /// <summary>
-    /// The cached session for a group, re-opened if what is stored has moved
-    /// past it.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// <b>Caching is not an optimisation here, it is the correct ownership.</b>
-    /// Opening per envelope costs an <c>MlsGroup.Import</c> — a full group
-    /// deserialisation — for every piece of traffic that survives the refusals
-    /// above, and it also re-runs stranded-commit classification each time. But
-    /// the stronger reason is that a second session for a group this process
-    /// already has open is a fork of our own making, so "open a fresh one every
-    /// time" is not the safe default it looks like.
-    /// </para>
-    /// <para>
-    /// <b>What invalidates it: the stored record moving ahead of the cached
-    /// session.</b> That is the observable shape of every way a cached session
-    /// can go stale — another path opened the group and committed, ingested or
-    /// converged, and each of those ends by writing the record's epoch. One
-    /// indexed read per envelope buys it, against an <c>MlsGroup.Import</c> if
-    /// it fires. Strictly ahead, not merely different: a record behind the
-    /// session is the ordinary mid-operation state, and re-opening on that
-    /// would throw away the newer group for the older bytes.
-    /// </para>
-    /// <para>
-    /// <b>It does not catch a same-epoch divergence</b> — another path reaching
-    /// a different branch of the same depth — and nothing cheap could. That is
-    /// what <see cref="Forget"/> is for, and why the rule above is single
-    /// ownership rather than reconciliation.
-    /// </para>
-    /// </remarks>
-    private async Task<MarmotSession?> AcquireAsync(GroupId groupId, CancellationToken ct)
-    {
-        if (await _host.Storage.GetGroupAsync(groupId, ct) is not { } record)
-        {
-            Forget(groupId);
-            return null;
-        }
-
-        if (_sessions.TryGetValue(groupId, out MarmotSession? cached))
-        {
-            if (record.Epoch.Value <= cached.Group.Epoch)
-                return cached;
-
-            Forget(groupId);
-        }
-
-        SessionOpenResult opened = await _host.OpenAsync(groupId, ct);
-
-        if (opened.Session is not { } session)
-            return null;
-
-        _sessions[groupId] = session;
-        return session;
-    }
 
     /// <summary>What the first peel established about an envelope.</summary>
     /// <param name="TransportGroupId">
