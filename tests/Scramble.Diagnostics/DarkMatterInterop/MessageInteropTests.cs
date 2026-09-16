@@ -184,6 +184,34 @@ public sealed class MessageInteropFixture : IAsyncLifetime
 
     public string Log => string.Join('\n', _log);
 
+    /// <summary>The group itself, for a test that must route to it the hard way.</summary>
+    /// <remarks>
+    /// Exposed for <c>FanInInteropTests</c>, which receives without being told
+    /// which group an envelope belongs to. Every helper on this fixture answers
+    /// that question for the caller — it filters the relay by our own
+    /// <c>#h</c> tag, peels with our own exporter secret, and receives into our
+    /// own group — which is exactly the step a real client cannot take.
+    /// </remarks>
+    internal CreatedGroup ScrambleGroup => _group;
+
+    internal LocalSigner ScrambleSigner => _scramble;
+
+    /// <summary>
+    /// Every kind-445 event on the relay, unfiltered by address.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not narrowed by <c>#h</c>. A client pulling its own
+    /// address's traffic has already decided which group the bytes belong to;
+    /// the point of the fan-in is that it has not.
+    /// </remarks>
+    public Task<IReadOnlyList<string>> FetchAllGroupEventsAsync() =>
+        _relay.FetchAsync(
+            new Dictionary<string, object> { ["kinds"] = new[] { 445 } },
+            RelayTimeout);
+
+    /// <summary>Sends a chat message into the group from the peer.</summary>
+    public Task PeerSaysAsync(string text) => Peer.SendMessageAsync(GroupIdHex, text);
+
     internal sealed class LocalSigner : IAccountIdentityProofSigner
     {
         public LocalSigner()
