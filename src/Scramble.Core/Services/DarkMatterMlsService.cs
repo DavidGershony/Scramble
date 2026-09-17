@@ -952,29 +952,64 @@ public sealed class DarkMatterMlsService : IMlsService, IDisposable
 
     // ---------------------------------------------------------------- welcomes
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Matched on the published bytes rather than on a reference the caller
+    /// carries, because the contract's <c>KeyPackage</c> has no field for a
+    /// KeyPackageRef and adding one would put an MLS concept in a model the
+    /// ViewModels bind to. The bytes are unique per record and already in hand.
+    /// </remarks>
+    public async Task MarkKeyPackagePublishedAsync(KeyPackage keyPackage, string eventIdHex)
+    {
+        ArgumentNullException.ThrowIfNull(keyPackage);
+        ArgumentException.ThrowIfNullOrEmpty(eventIdHex);
+
+        await _gate.WaitAsync();
+        try
+        {
+            KeyPackageRecord record =
+                (await _storage.ListKeyPackagesAsync())
+                    .FirstOrDefault(r => r.PublicKeyPackage.AsSpan().SequenceEqual(keyPackage.Data))
+                ?? throw new InvalidOperationException(
+                    "This device holds no KeyPackage matching those bytes, so there is nothing "
+                    + "to bind the event id to. Publish what GenerateKeyPackageAsync returned.");
+
+            if (!await _storage.MarkPublishedAsync(record.KeyPackageRefHex, eventIdHex))
+            {
+                throw new InvalidOperationException(
+                    $"The KeyPackage could not be marked published under event {eventIdHex}; "
+                    + "its record is past that state.");
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     /// <summary>
     /// Joins the group a Welcome admits us to.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>The binding this signature cannot carry.</b> The engine's join path,
-    /// <see cref="GroupJoin.JoinFromEnvelopeAsync"/>, finds the KeyPackage a
-    /// Welcome consumed by the kind-30443 event id in the rumor's <c>e</c> tag,
-    /// and refuses a Welcome naming something we never published. This member is
-    /// handed the rumor's <i>content</i> and the kind-444 event id, and neither
-    /// is that. So the KeyPackage is found by trying each record that still
-    /// holds private material.
+    /// <b>Pass <paramref name="keyPackageEventId"/> whenever it is known.</b>
+    /// It is the kind-30443 event id from the Welcome rumor's <c>e</c> tag, and
+    /// it makes this fail closed the way the engine's own join path does
+    /// (<see cref="GroupJoin.JoinFromEnvelopeAsync"/>): a Welcome naming a
+    /// KeyPackage this device never published is refused outright rather than
+    /// tried. <c>NostrService</c> already parses that tag, and it is carried on
+    /// <c>PendingInvite.KeyPackageEventId</c>.
     /// </para>
     /// <para>
-    /// <b>That is a weaker binding but it is not a heuristic match.</b> A
-    /// Welcome's group secrets are HPKE-sealed to one KeyPackage's init key;
-    /// what decides is the decryption, not a resemblance, so a trial that
-    /// succeeds is proof of possession and a trial that fails costs nothing. The
-    /// order is randomised so that which index matched is not readable from how
-    /// long this took. The old service did the same, as does the Rust reference.
-    /// What is genuinely lost is the check that the inviter used a KeyPackage we
-    /// actually published — and closing that needs the <c>e</c> tag passed
-    /// through, which is a contract change.
+    /// <b>Without it, the KeyPackage is found by trial decryption</b> — every
+    /// record still holding private material, in randomised order. That is a
+    /// weaker binding but not a heuristic match: a Welcome's group secrets are
+    /// HPKE-sealed to one KeyPackage's init key, so what decides is the
+    /// decryption rather than a resemblance, and a trial that succeeds is proof
+    /// of possession. The randomisation keeps which index matched from being
+    /// readable in how long this took. What the fallback loses is the check that
+    /// the inviter used a KeyPackage we actually published, which is exactly
+    /// what the parameter restores.
     /// </para>
     /// <para>
     /// <b>It mirrors <see cref="GroupJoin.Join"/> rather than calling it</b>,
@@ -986,7 +1021,8 @@ public sealed class DarkMatterMlsService : IMlsService, IDisposable
     /// made in the same order, profile validation included.
     /// </para>
     /// </remarks>
-    public async Task<MlsGroupInfo> ProcessWelcomeAsync(byte[] welcomeData, string wrapperEventId)
+    public async Task<MlsGroupInfo> ProcessWelcomeAsync(
+        byte[] welcomeData, string wrapperEventId, string? keyPackageEventId = null)
     {
         ArgumentNullException.ThrowIfNull(welcomeData);
 
@@ -997,16 +1033,7 @@ public sealed class DarkMatterMlsService : IMlsService, IDisposable
 
             MlsWelcomeBody body = DecodeWelcome(welcomeData);
 
-            var candidates = (await _storage.ListKeyPackagesAsync())
-                .Where(r => r.CanConsume)
-                .ToList();
-
-            if (candidates.Count == 0)
-            {
-                throw new InvalidOperationException(
-                    "No stored KeyPackage still holds private material, so no Welcome can be "
-                    + "opened on this device.");
-            }
+            List<KeyPackageRecord> candidates = await CandidatesForAsync(keyPackageEventId);
 
             int[] order = Enumerable.Range(0, candidates.Count).ToArray();
             Random.Shared.Shuffle(order);
@@ -1381,6 +1408,51 @@ public sealed class DarkMatterMlsService : IMlsService, IDisposable
     private string RequireIdentity() =>
         _publicKeyHex ?? throw new InvalidOperationException(
             "The MLS service has no identity. Call InitializeAsync first.");
+
+    /// <summary>
+    /// The KeyPackage records a Welcome may be tried against.
+    /// </summary>
+    /// <remarks>
+    /// One record when the Welcome names it, every consumable record when it
+    /// does not. The named case is the fail-closed one and its refusals are
+    /// deliberately distinct: a KeyPackage we never published is a different
+    /// fact from one whose material we have already erased, and a reader
+    /// chasing a failed join needs to know which.
+    /// </remarks>
+    private async Task<List<KeyPackageRecord>> CandidatesForAsync(string? keyPackageEventId)
+    {
+        if (!string.IsNullOrEmpty(keyPackageEventId))
+        {
+            KeyPackageRecord named = await _storage.GetKeyPackageByEventAsync(keyPackageEventId)
+                ?? throw new InvalidOperationException(
+                    $"The Welcome names KeyPackage event {keyPackageEventId}, which this device "
+                    + "never published. Refusing it: an inviter that did not use one of our "
+                    + "KeyPackages has not been admitted by us.");
+
+            if (!named.CanConsume)
+            {
+                throw new InvalidOperationException(
+                    $"The Welcome names KeyPackage event {keyPackageEventId}, whose private "
+                    + "material has been erased. It cannot be opened, and no other KeyPackage "
+                    + "may stand in for the one the inviter chose.");
+            }
+
+            return [named];
+        }
+
+        var candidates = (await _storage.ListKeyPackagesAsync())
+            .Where(r => r.CanConsume)
+            .ToList();
+
+        if (candidates.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "No stored KeyPackage still holds private material, so no Welcome can be "
+                + "opened on this device.");
+        }
+
+        return candidates;
+    }
 
     private IAccountIdentityProofSigner RequireProofSigner() =>
         _proofSigner ?? throw new NotSupportedException(

@@ -69,7 +69,35 @@ public interface IMlsService
     /// </summary>
     /// <param name="welcomeData">The welcome rumor data from AddMember.</param>
     /// <param name="wrapperEventId">The kind-444 Nostr event ID that wrapped this welcome.</param>
-    Task<MlsGroupInfo> ProcessWelcomeAsync(byte[] welcomeData, string wrapperEventId);
+    /// <param name="keyPackageEventId">
+    /// The kind-30443 event id from the Welcome rumor's <c>e</c> tag, naming the
+    /// KeyPackage the inviter consumed. Optional, but <b>pass it whenever it is
+    /// known</b>: with it, a Welcome naming a KeyPackage this device never
+    /// published is refused. Without it, the engine falls back to trying each
+    /// stored KeyPackage, which still proves possession — the group secrets are
+    /// HPKE-sealed to one init key — but no longer proves the inviter used ours.
+    /// <c>PendingInvite.KeyPackageEventId</c> carries it.
+    /// </param>
+    Task<MlsGroupInfo> ProcessWelcomeAsync(
+        byte[] welcomeData, string wrapperEventId, string? keyPackageEventId = null);
+
+    /// <summary>
+    /// Records the Nostr event id a generated KeyPackage was published under.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Call this after publishing a KeyPackage.</b> Until it is called the
+    /// stored record has no event id, and a Welcome naming that id cannot be
+    /// resolved to the private material it needs — which is what makes
+    /// <see cref="ProcessWelcomeAsync"/>'s binding possible at all.
+    /// </para>
+    /// <para>
+    /// Separate from <see cref="GenerateKeyPackageAsync"/> because the publish
+    /// happens in between and can fail: the material must be stored before the
+    /// bytes go to a relay, and the event id does not exist until after.
+    /// </para>
+    /// </remarks>
+    Task MarkKeyPackagePublishedAsync(KeyPackage keyPackage, string eventIdHex);
 
     /// <summary>
     /// Check whether we have the key material needed to process a Welcome message,

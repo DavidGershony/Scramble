@@ -432,7 +432,15 @@ public class ManagedMlsService : IMlsService
         };
     }
 
-    public async Task<MlsGroupInfo> ProcessWelcomeAsync(byte[] welcomeData, string wrapperEventId)
+    /// <inheritdoc />
+    /// <remarks>
+    /// <paramref name="keyPackageEventId"/> is accepted and ignored: this
+    /// backend resolves a Welcome through its own KeyPackage store and has no
+    /// lookup by Nostr event id, so honouring the binding would mean inventing
+    /// one. The Dark Matter engine is where it is enforced.
+    /// </remarks>
+    public async Task<MlsGroupInfo> ProcessWelcomeAsync(
+        byte[] welcomeData, string wrapperEventId, string? keyPackageEventId = null)
     {
         EnsureInitialized();
 
@@ -1418,6 +1426,12 @@ public class ManagedMlsService : IMlsService
     /// component 0x8009 belongs to the Dark Matter engine, and marmot-cs
     /// predates it.
     /// </remarks>
+    /// <inheritdoc />
+    /// <remarks>No-op: marmot-cs keeps its own KeyPackage bookkeeping and resolves a
+    /// Welcome without an event id.</remarks>
+    public Task MarkKeyPackagePublishedAsync(KeyPackage keyPackage, string eventIdHex) =>
+        Task.CompletedTask;
+
     public void SetExternalSigner(IExternalSigner? signer)
     {
     }

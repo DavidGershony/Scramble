@@ -713,6 +713,100 @@ public sealed class DarkMatterMlsServiceTests : IDisposable
         Assert.Contains("Duplicate", second.Message);
     }
 
+    // ------------------------------------------------ the KeyPackage binding
+
+    /// <summary>Publishes a KeyPackage and tells the service its event id.</summary>
+    private static async Task<CoreKeyPackage> PublishAndBindAsync(Party party)
+    {
+        CoreKeyPackage keyPackage = await PublishKeyPackageAsync(party);
+
+        await party.Service.MarkKeyPackagePublishedAsync(
+            keyPackage, keyPackage.NostrEventId!);
+
+        return keyPackage;
+    }
+
+    [Fact]
+    public async Task ABoundWelcomeOpensAgainstTheKeyPackageItNames()
+    {
+        var (alice, bob, group) = await PairAsync();
+
+        CoreKeyPackage keyPackage = await PublishAndBindAsync(bob);
+        MlsWelcome staged = await alice.Service.StageAddMemberAsync(group.GroupId, keyPackage);
+        await alice.Service.MergeStagedAsync(group.GroupId);
+
+        MlsGroupInfo joined = await bob.Service.ProcessWelcomeAsync(
+            staged.WelcomeData, "0".PadLeft(64, '0'), keyPackage.NostrEventId);
+
+        Assert.Equal(group.GroupId, joined.GroupId);
+    }
+
+    [Fact]
+    public async Task AWelcomeNamingAKeyPackageWeNeverPublishedIsRefused()
+    {
+        // The fail-closed check the contract could not carry before. Without
+        // it the Welcome would be tried against every stored KeyPackage and
+        // would succeed, because it really is sealed to one of them -- so the
+        // refusal is about provenance, not about whether we *can* open it.
+        var (alice, bob, group) = await PairAsync();
+
+        CoreKeyPackage keyPackage = await PublishAndBindAsync(bob);
+        MlsWelcome staged = await alice.Service.StageAddMemberAsync(group.GroupId, keyPackage);
+        await alice.Service.MergeStagedAsync(group.GroupId);
+
+        InvalidOperationException ex =
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => bob.Service.ProcessWelcomeAsync(
+                    staged.WelcomeData, "0".PadLeft(64, '0'), "f".PadLeft(64, 'f')));
+
+        Assert.Contains("never published", ex.Message);
+    }
+
+    [Fact]
+    public async Task TheSameWelcomeStillOpensWhenNoBindingIsSupplied()
+    {
+        // The fallback, pinned so the previous test cannot be passing because
+        // the Welcome was unopenable for some unrelated reason.
+        var (alice, bob, group) = await PairAsync();
+
+        CoreKeyPackage keyPackage = await PublishAndBindAsync(bob);
+        MlsWelcome staged = await alice.Service.StageAddMemberAsync(group.GroupId, keyPackage);
+        await alice.Service.MergeStagedAsync(group.GroupId);
+
+        MlsGroupInfo joined = await bob.Service.ProcessWelcomeAsync(
+            staged.WelcomeData, "0".PadLeft(64, '0'));
+
+        Assert.Equal(group.GroupId, joined.GroupId);
+    }
+
+    [Fact]
+    public async Task BindingAnEventIdToBytesWeDoNotHoldIsRefused()
+    {
+        Party party = await PartyAsync();
+        CoreKeyPackage keyPackage = await party.Service.GenerateKeyPackageAsync();
+
+        var stranger = new CoreKeyPackage { Data = [1, 2, 3] };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => party.Service.MarkKeyPackagePublishedAsync(stranger, "a".PadLeft(64, 'a')));
+    }
+
+    [Fact]
+    public async Task AKeyPackageIsOnlyFindableByEventIdOnceItIsBound()
+    {
+        // Why the publish-side member has to exist: the record carries no event
+        // id until something says what it was published under, so the binding
+        // above would refuse every Welcome without it.
+        Party party = await PartyAsync();
+        CoreKeyPackage keyPackage = await PublishKeyPackageAsync(party);
+
+        Assert.Null(await StoreOf(party).GetKeyPackageByEventAsync(keyPackage.NostrEventId!));
+
+        await party.Service.MarkKeyPackagePublishedAsync(keyPackage, keyPackage.NostrEventId!);
+
+        Assert.NotNull(await StoreOf(party).GetKeyPackageByEventAsync(keyPackage.NostrEventId!));
+    }
+
     // ----------------------------------------------------------- admin policy
 
     /// <summary>Alice's group with Bob in it, both merged and joined.</summary>
