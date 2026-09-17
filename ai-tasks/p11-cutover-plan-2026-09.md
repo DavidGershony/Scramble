@@ -119,8 +119,33 @@ no behaviour; step 2 is where the app starts using the new engine.**
    re-checked against the call sites on 2026-09-16 — which changed four of them.
    Originally six; 4 and 5 turned out to be one problem.
 
-   1. **`SetNostrEventSigner` throws and every head calls it** — smaller than it
-      looked, with a separate problem underneath it. Revised 2026-09-16; the
+   1. **Engine side done 2026-09-17** (`00b934b` adapter, `21f7046` permissions);
+      the Presentation half lands with the flip. Original entry below.
+
+      `ExternalAccountProofSigner` signs proofs through `IExternalSigner`, and
+      `IMlsService.SetExternalSigner` is the seam — `IExternalSigner` rather than a
+      proof signer, because the callers are ViewModels and the cutover rules bar
+      `Scramble.Marmot` types from Presentation. Both legacy backends no-op it, so
+      nothing changed for the shipping app.
+
+      The NIP-46 grant was worse than this entry said: it asked for `443, 444, 445,
+      1059` while the app signs eleven kinds, only 445 of which was listed, and 443
+      is signed by nothing. It is generated from a declared list now, with a test
+      pinning both directions.
+
+      **Still to do, with the flip:** `MainViewModel` calls `SetExternalSigner` in
+      `WireExternalSigner`, and the unconditional `SetNostrEventSigner` at line 469
+      goes — `InitializeAsync` already builds the local proof signer from the same
+      key, so on Dark Matter that call is both redundant and fatal.
+
+      **Still unverified, and it needs a device:** what a real signer does with a
+      `created_at` it did not choose, and with a kind granted only after pairing.
+      The test double agrees with our assumptions by construction.
+
+      ---
+
+   1b. *Original entry.* **`SetNostrEventSigner` throws and every head calls it** —
+      smaller than it looked, with a separate problem underneath it. Revised 2026-09-16; the
       earlier entry said an adapter "needs a kind-450-shaped signing call on
       `IExternalSigner`". **It does not. No new method is required.**
 
@@ -192,7 +217,13 @@ no behaviour; step 2 is where the app starts using the new engine.**
       inbound commits are applied with no authorization check at all — so any
       member can rewrite the admin set by commit and we accept it. Independent of
       this cutover, and security-relevant, so it should not queue behind it.
-   3. **`CommitData` now means a finished kind-445 event, not MIP-03
+   3. **Guard landed 2026-09-17** (`9bb574d`); the six call sites land with the
+      flip, not before, or the shipping app breaks. `PublishCommitAsync` and
+      `PublishGroupMessageAsync` now refuse bytes that are already a signed event,
+      so the silent double-wrap fails at the publish instead of at a peer. It fires
+      on nobody today — every current caller passes ciphertext.
+
+      **`CommitData` now means a finished kind-445 event, not MIP-03
       ciphertext** — and this **does not break loudly**. Corrected 2026-09-16;
       the earlier entry here said "`MessageService` must stop calling
       `EncryptCommitAsync`" and called it the loud one. Both halves were wrong.
