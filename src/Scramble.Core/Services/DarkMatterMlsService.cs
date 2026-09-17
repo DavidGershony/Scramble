@@ -1338,6 +1338,31 @@ public sealed class DarkMatterMlsService : IMlsService, IDisposable
     /// <see cref="IAccountIdentityProofSigner"/> to the constructor instead.
     /// </para>
     /// </remarks>
+    /// <inheritdoc />
+    /// <remarks>
+    /// <b>Replaces whatever <see cref="InitializeAsync"/> derived.</b> A local
+    /// key and a remote signer are two claims on one account, and the remote one
+    /// wins: it is the later, more deliberate act, and on a signer login there
+    /// is no local key to lose. Null restores the injected signer if there was
+    /// one, so clearing a connection does not strip an explicitly supplied
+    /// signer that never came from the connection.
+    /// </remarks>
+    public void SetExternalSigner(IExternalSigner? signer)
+    {
+        _gate.Wait();
+        try
+        {
+            _proofSigner = signer is null
+                ? _injectedProofSigner
+                : new ExternalAccountProofSigner(signer);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <inheritdoc />
     public void SetNostrEventSigner(INostrEventSigner signer) =>
         throw new NotSupportedException(
             "Kind-445 events are signed with a fresh ephemeral key, which MIP-03 requires and "

@@ -1412,6 +1412,16 @@ public class ManagedMlsService : IMlsService
         }
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// No-op: this engine has no account-identity proof to sign. Marmot's
+    /// component 0x8009 belongs to the Dark Matter engine, and marmot-cs
+    /// predates it.
+    /// </remarks>
+    public void SetExternalSigner(IExternalSigner? signer)
+    {
+    }
+
     public void SetNostrEventSigner(INostrEventSigner signer)
     {
         _nostrEventSigner = signer;

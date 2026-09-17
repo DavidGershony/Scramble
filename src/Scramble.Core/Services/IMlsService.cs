@@ -188,6 +188,30 @@ public interface IMlsService
     void SetNostrEventSigner(INostrEventSigner signer);
 
     /// <summary>
+    /// Supplies the NIP-46 remote signer, once it has connected.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Separate from <see cref="SetNostrEventSigner"/> because the two sign
+    /// different things. That one exists so kind-445 events can be signed
+    /// remotely; this one exists because a Marmot account-identity proof
+    /// (kind 450) commits to an exact event template, including its
+    /// <c>created_at</c>, and <see cref="INostrEventSigner"/> has no parameter
+    /// for one — it stamps its own, and the signature then verifies over a
+    /// different id than the proof commits to.
+    /// </para>
+    /// <para>
+    /// Takes <see cref="IExternalSigner"/> rather than a protocol-specific
+    /// signer so that no engine type reaches the callers, which are ViewModels.
+    /// </para>
+    /// <para>
+    /// Null clears it. Safe to call before the signer finishes connecting: it
+    /// is read when a proof is signed, not here.
+    /// </para>
+    /// </remarks>
+    void SetExternalSigner(IExternalSigner? signer);
+
+    /// <summary>
     /// Get the MIP-04 media exporter secret for a group.
     /// This is MLS-Exporter("marmot", "encrypted-media", 32) from the current epoch.
     /// Used for deriving per-file encryption keys for MIP-04 media.

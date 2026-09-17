@@ -343,6 +343,12 @@ public class MlsService : IMlsService
         return Task.FromResult(true);
     }
 
+    /// <inheritdoc />
+    /// <remarks>No-op: the Rust backend signs internally.</remarks>
+    public void SetExternalSigner(IExternalSigner? signer)
+    {
+    }
+
     public void SetNostrEventSigner(INostrEventSigner signer)
     {
         // Rust MDK signs events internally — external signer not applicable.
