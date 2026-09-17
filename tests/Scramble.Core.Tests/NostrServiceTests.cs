@@ -32,6 +32,70 @@ public class NostrServiceTests
         }
     }
 
+    // ------------------------------- refusing to wrap an already-finished event
+
+    /// <summary>A complete, signed Nostr event, as the engine hands one over.</summary>
+    private static byte[] FinishedEvent() => System.Text.Encoding.UTF8.GetBytes(
+        """
+        {"id":"aa11","pubkey":"bb22","created_at":1,"kind":445,
+         "tags":[["h","cc33"]],"content":"dGVzdA==","sig":"dd44"}
+        """);
+
+    [Fact]
+    public async Task PublishCommit_RefusesBytesThatAreAlreadyASignedEvent()
+    {
+        // Without this the bytes are base64'd into the content of a *second*
+        // kind-445, carrying an ["encoding","base64"] tag that current peers
+        // reject before any MLS processing -- and nothing throws, so the
+        // sender sees a successful publish. No relay is needed: the refusal
+        // must come before anything is put on a wire.
+        ArgumentException ex = await Assert.ThrowsAsync<ArgumentException>(
+            () => _nostrService.PublishCommitAsync(FinishedEvent(), "cc33", null));
+
+        Assert.Equal("commitData", ex.ParamName);
+        Assert.Contains("PublishRawEventJsonAsync", ex.Message);
+    }
+
+    [Fact]
+    public async Task PublishGroupMessage_RefusesBytesThatAreAlreadyASignedEvent()
+    {
+        // The same trap by the other door: StageRemoveMemberAsync's bytes reach
+        // this method rather than PublishCommitAsync.
+        ArgumentException ex = await Assert.ThrowsAsync<ArgumentException>(
+            () => _nostrService.PublishGroupMessageAsync(FinishedEvent(), "cc33", null));
+
+        Assert.Equal("encryptedData", ex.ParamName);
+    }
+
+    [Fact]
+    public async Task PublishCommit_DoesNotRefuseCiphertextThatHappensToOpenWithABrace()
+    {
+        // The guard must not start refusing the payload it exists to protect.
+        // MIP-03 ciphertext is opaque bytes: one opening with '{' is a
+        // coincidence, not an event, and refusing it would break the path that
+        // works today. It gets past the guard and fails on having no relay --
+        // a different exception, which is the whole point.
+        byte[] ciphertext = [(byte)'{', 0x00, 0xFF, 0x01, 0x02];
+
+        Exception ex = await Record.ExceptionAsync(
+            () => _nostrService.PublishCommitAsync(ciphertext, "cc33", null));
+
+        Assert.IsNotType<ArgumentException>(ex);
+    }
+
+    [Fact]
+    public async Task PublishCommit_DoesNotRefuseJsonThatIsNotAnEvent()
+    {
+        // Three fields are required together -- id, sig and kind -- so an
+        // application payload that happens to be a JSON object still publishes.
+        byte[] json = System.Text.Encoding.UTF8.GetBytes("""{"id":"aa11","kind":445}""");
+
+        Exception ex = await Record.ExceptionAsync(
+            () => _nostrService.PublishCommitAsync(json, "cc33", null));
+
+        Assert.IsNotType<ArgumentException>(ex);
+    }
+
     [Fact]
     public void GenerateKeyPair_ShouldReturnValidKeys()
     {

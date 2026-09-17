@@ -2172,8 +2172,73 @@ public class NostrService : INostrService, IDisposable
         return baseTimestamp + offset1 + offset2;
     }
 
+    /// <summary>
+    /// Refuses bytes that are already a complete, signed Nostr event.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Both publish paths below wrap what they are given</b> — base64 into
+    /// the content of a fresh kind-445, plus an <c>["encoding","base64"]</c>
+    /// tag. Hand either of them a finished event and the result is
+    /// base64-of-an-event inside an event, which a peer rejects on the tag
+    /// alone, before any MLS processing. Nothing throws, nothing logs an error,
+    /// and the sender sees a successful publish.
+    /// </para>
+    /// <para>
+    /// <b>This is reachable the moment the engine changes.</b> The Dark Matter
+    /// service seals and signs a commit while it is still staged — the only
+    /// moment the pre-commit exporter secret and the commit coexist — so its
+    /// <c>CommitData</c> is a publishable event rather than MIP-03 ciphertext.
+    /// Every current caller of these two methods passes ciphertext, so this
+    /// guard fires on nobody today. It exists so that the day one of them
+    /// starts passing an event, it fails here instead of on a peer.
+    /// </para>
+    /// <para>
+    /// Publish a finished event with
+    /// <see cref="PublishRawEventJsonAsync"/>, which is built for it.
+    /// </para>
+    /// </remarks>
+    private static void RefuseFinishedEvent(byte[] data, string parameterName)
+    {
+        // Raw MLS bytes are binary and essentially never open with '{', so the
+        // cheap check carries the common case without parsing anything.
+        int i = 0;
+        while (i < data.Length && data[i] is 0x20 or 0x09 or 0x0D or 0x0A)
+            i++;
+
+        if (i >= data.Length || data[i] != (byte)'{')
+            return;
+
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(data);
+
+            // All three, because an application payload that happens to be JSON
+            // should not be refused. Only a Nostr event carries a signature
+            // alongside an id and a kind.
+            if (doc.RootElement.ValueKind != JsonValueKind.Object
+                || !doc.RootElement.TryGetProperty("id", out _)
+                || !doc.RootElement.TryGetProperty("sig", out _)
+                || !doc.RootElement.TryGetProperty("kind", out _))
+            {
+                return;
+            }
+        }
+        catch (JsonException)
+        {
+            return;
+        }
+
+        throw new ArgumentException(
+            "These bytes are already a signed Nostr event, and this method would base64 them "
+            + "into the content of a second one, which a peer rejects before any MLS "
+            + "processing. Publish a finished event with PublishRawEventJsonAsync.",
+            parameterName);
+    }
+
     public async Task<string> PublishCommitAsync(byte[] commitData, string groupId, string? privateKeyHex)
     {
+        RefuseFinishedEvent(commitData, nameof(commitData));
         _logger.LogInformation("PublishCommitAsync: {Len} bytes for group {GroupId}, hasPrivKey={HasKey}, first4={First4}",
             commitData.Length, groupId[..Math.Min(16, groupId.Length)],
             !string.IsNullOrEmpty(privateKeyHex),
@@ -2199,6 +2264,8 @@ public class NostrService : INostrService, IDisposable
 
     public async Task<string> PublishGroupMessageAsync(byte[] encryptedData, string groupId, string? privateKeyHex)
     {
+        RefuseFinishedEvent(encryptedData, nameof(encryptedData));
+
         // Create kind 445 event (MIP-03) — h + encoding tags per spec
         var tags = new List<List<string>>
         {
