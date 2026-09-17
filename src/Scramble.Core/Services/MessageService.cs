@@ -1950,7 +1950,11 @@ public class MessageService : IMessageService, IDisposable
         {
             try
             {
-                var groupInfo = await _mlsService.ProcessWelcomeAsync(welcomeData, nostrEvent.EventId);
+                // The id WelcomeEventParser already pulled out of the e tag
+                // above. Passing it makes this join fail closed on a Welcome
+                // naming a KeyPackage we never published.
+                var groupInfo = await _mlsService.ProcessWelcomeAsync(
+                    welcomeData, nostrEvent.EventId, keyPackageEventId);
                 if (groupInfo.GroupName?.StartsWith(DeviceSyncGroupNamePrefix, StringComparison.Ordinal) == true)
                 {
                     _logger.LogInformation("HandleWelcome: auto-accepting device-sync welcome {EventId}",
@@ -2528,7 +2532,11 @@ public class MessageService : IMessageService, IDisposable
         MlsGroupInfo groupInfo;
         try
         {
-            groupInfo = await _mlsService.ProcessWelcomeAsync(invite.WelcomeData, invite.NostrEventId);
+            // KeyPackageEventId is the Welcome's e tag, parsed by NostrService when
+            // the invite arrived. Passing it makes the join fail closed on a
+            // Welcome naming a KeyPackage we never published.
+            groupInfo = await _mlsService.ProcessWelcomeAsync(
+                invite.WelcomeData, invite.NostrEventId, invite.KeyPackageEventId);
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("KeyPackage"))
         {
@@ -2680,6 +2688,13 @@ public class MessageService : IMessageService, IDisposable
             keyPackage.NostrEventId = eventId;
             keyPackage.RelayUrls = _nostrService.ConnectedRelayUrls.ToList();
             await _storageService.SaveKeyPackageAsync(keyPackage);
+
+            // Binds the engine's own record to the event id, so a Welcome naming
+            // this KeyPackage resolves to its private material. Without it the
+            // engine can only find the material by trying every stored
+            // KeyPackage, which still opens the Welcome but no longer proves the
+            // inviter used one of ours. No-op on the legacy backends.
+            await _mlsService.MarkKeyPackagePublishedAsync(keyPackage, eventId);
 
             _logger.LogInformation("AutoPublishKP: published new KeyPackage {EventId}", eventId[..Math.Min(16, eventId.Length)]);
         }

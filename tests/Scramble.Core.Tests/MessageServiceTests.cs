@@ -593,7 +593,11 @@ public class MessageServiceTests : IDisposable
         };
 
         _storageMock.Setup(s => s.GetPendingInvitesAsync()).ReturnsAsync(new List<PendingInvite> { invite });
-        _mlsMock.Setup(m => m.ProcessWelcomeAsync(welcomeData, "welcome-event"))
+        // Narrowed to the invite's own KeyPackage event id rather than
+        // It.IsAny: that id is what makes the join fail closed on a Welcome
+        // naming a KeyPackage we never published, and a permissive setup would
+        // pass just as happily if the wiring dropped it.
+        _mlsMock.Setup(m => m.ProcessWelcomeAsync(welcomeData, "welcome-event", "kp-event-1"))
             .ReturnsAsync(new MlsGroupInfo
             {
                 GroupId = groupId,
@@ -619,6 +623,10 @@ public class MessageServiceTests : IDisposable
         _storageMock.Verify(s => s.SaveChatAsync(It.Is<Chat>(c => c.Name == "Cool Group")), Times.Once);
         _storageMock.Verify(s => s.DismissWelcomeEventAsync("welcome-event"), Times.Once);
         _storageMock.Verify(s => s.DeletePendingInviteAsync(inviteId), Times.Once);
+
+        _mlsMock.Verify(
+            m => m.ProcessWelcomeAsync(welcomeData, "welcome-event", "kp-event-1"),
+            Times.Once);
     }
 
     [Fact]
@@ -645,7 +653,7 @@ public class MessageServiceTests : IDisposable
         };
 
         _storageMock.Setup(s => s.GetPendingInvitesAsync()).ReturnsAsync(new List<PendingInvite> { invite });
-        _mlsMock.Setup(m => m.ProcessWelcomeAsync(It.IsAny<byte[]>(), "welcome-dup"))
+        _mlsMock.Setup(m => m.ProcessWelcomeAsync(It.IsAny<byte[]>(), "welcome-dup", It.IsAny<string?>()))
             .ReturnsAsync(new MlsGroupInfo { GroupId = groupId, GroupName = "Group" });
         _storageMock.Setup(s => s.GetAllChatsAsync()).ReturnsAsync(new List<Chat> { existingChat });
         _storageMock.Setup(s => s.DismissWelcomeEventAsync("welcome-dup")).Returns(Task.CompletedTask);
@@ -1197,7 +1205,7 @@ public class MessageServiceTests : IDisposable
         };
 
         _storageMock.Setup(s => s.GetPendingInvitesAsync()).ReturnsAsync(new List<PendingInvite> { invite });
-        _mlsMock.Setup(m => m.ProcessWelcomeAsync(It.IsAny<byte[]>(), "welcome-relay-event"))
+        _mlsMock.Setup(m => m.ProcessWelcomeAsync(It.IsAny<byte[]>(), "welcome-relay-event", It.IsAny<string?>()))
             .ReturnsAsync(new MlsGroupInfo
             {
                 GroupId = groupId, GroupName = "Relay Group", Epoch = 0,
@@ -1242,7 +1250,7 @@ public class MessageServiceTests : IDisposable
         };
 
         _storageMock.Setup(s => s.GetPendingInvitesAsync()).ReturnsAsync(new List<PendingInvite> { invite });
-        _mlsMock.Setup(m => m.ProcessWelcomeAsync(It.IsAny<byte[]>(), "welcome-connected"))
+        _mlsMock.Setup(m => m.ProcessWelcomeAsync(It.IsAny<byte[]>(), "welcome-connected", It.IsAny<string?>()))
             .ReturnsAsync(new MlsGroupInfo
             {
                 GroupId = groupId, GroupName = "Connected Group", Epoch = 0,
@@ -1371,7 +1379,7 @@ public class MessageServiceTests : IDisposable
         _storageMock.Setup(s => s.DeletePendingInviteAsync(It.IsAny<string>())).Returns(Task.CompletedTask);
         _storageMock.Setup(s => s.GetAllChatsAsync()).ReturnsAsync(new List<Chat>());
 
-        _mlsMock.Setup(m => m.ProcessWelcomeAsync(It.IsAny<byte[]>(), It.IsAny<string>()))
+        _mlsMock.Setup(m => m.ProcessWelcomeAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>()))
             .ReturnsAsync(new MlsGroupInfo
             {
                 GroupId = new byte[] { 0x05, 0x06 },
