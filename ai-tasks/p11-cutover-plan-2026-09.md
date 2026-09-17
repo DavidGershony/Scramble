@@ -115,6 +115,27 @@ no behaviour; step 2 is where the app starts using the new engine.**
    **2b. Flip the registration — not started.** This is the pivot; I5's freeze
    starts here.
 
+   **All five are now settled — four of them landed engine-side between
+   2026-09-16 and 2026-09-18, and what is left of each belongs in the flip
+   commit itself.** The flip therefore contains, and nothing else:
+
+   | Change | Why it cannot land earlier |
+   |---|---|
+   | Register `DarkMatterMlsService` in DI | it *is* the flip |
+   | `MainViewModel`: call `SetExternalSigner`; delete the `SetNostrEventSigner` call at :469 | that call throws on Dark Matter, and is redundant there — `InitializeAsync` already builds the local proof signer |
+   | The six publish sites stop wrapping a finished event (`MessageService` ×4, `ChatViewModel`, `ChatListViewModel`) | on marmot-cs those bytes really are ciphertext, so changing them early breaks the shipping app |
+
+   **This exceeds I4's threshold** — more than eight files across Services,
+   ViewModels and DI — and it cannot be split further without leaving the app
+   broken in between, which is the one thing I4's "land the refactor first as a
+   no-op" exists to avoid. It needs a `Landing-Discipline-Exempt:` trailer saying
+   so. **I5's pivot freeze starts at this commit.**
+
+   **What no test here can establish**, and what should be checked on a device
+   before trusting the flip: a real signer's behaviour with a `created_at` it did
+   not choose and a kind granted only after pairing; and whether a current peer
+   accepts our commits now that the `["encoding","base64"]` tag is gone.
+
    **Five things to settle before 2b**, from the adapter's own report and then
    re-checked against the call sites on 2026-09-16 — which changed four of them.
    Originally six; 4 and 5 turned out to be one problem.
@@ -265,8 +286,18 @@ no behaviour; step 2 is where the app starts using the new engine.**
       Second, at step 3: `CommitData` and `EncryptCommitAsync` leave
       `IMlsService` altogether when `marmot-cs` goes, so the ambiguous `byte[]`
       stops existing rather than being guarded.
-   4. **`ProcessWelcomeAsync` lost its fail-closed KeyPackage binding, and
-      nothing can tell the service a KeyPackage's published event id.** One
+   4. **Done 2026-09-18** (`0ee886f` contract and engine, `94b17e8` call sites).
+      `ProcessWelcomeAsync` takes an optional `keyPackageEventId` and refuses a
+      Welcome naming a KeyPackage this device never published;
+      `MarkKeyPackagePublishedAsync` records what a KeyPackage went out under, which
+      is what makes that lookup possible. All four call sites that already held the
+      data now pass it. Both legacy backends ignore it, so this landed ahead of the
+      flip with no behaviour change. Original entry below.
+
+      ---
+
+   4b. *Original entry.* **`ProcessWelcomeAsync` lost its fail-closed KeyPackage
+      binding, and nothing can tell the service a KeyPackage's published event id.** One
       problem, not two — and both halves of the data already exist. Revised
       2026-09-16; items 4 and 5 were recorded separately, and 5 read as though
       the id were unavailable. It is available on both sides; only the contract
