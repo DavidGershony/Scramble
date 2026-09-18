@@ -194,7 +194,11 @@ dotnet test Scramble.Desktop.slnf --filter "Category!=Relay&Category!=Integratio
 
 # Integration tests (needs Docker)
 docker compose -f docker-compose.test.yml up -d nostr-relay
-dotnet test tests/Scramble.Diagnostics/ --filter "Category=Integration|Category=MIP-Compliance|Category=ProtocolCompliance|Category=FullE2E|Category=EpochSync|Category=DeviceSync|Category=OutboxModel|Category=Notifications|Category=RelayHarness|Category=ExporterSecret"
+# Kept character-for-character in step with integration.yml. It drifted once,
+# in both directions at the same time: this line ran FullE2E, which CI does not,
+# and omitted DarkMatterInterop, which CI does — so "reproducing CI locally"
+# skipped the entire 30-test interop suite while running a category CI ignores.
+dotnet test tests/Scramble.Diagnostics/ --filter "Category=Integration|Category=MIP-Compliance|Category=ProtocolCompliance|Category=EpochSync|Category=DeviceSync|Category=OutboxModel|Category=Notifications|Category=RelayHarness|Category=ExporterSecret|Category=DarkMatterInterop"
 
 # Drift check
 ./scripts/check-drift.ps1
