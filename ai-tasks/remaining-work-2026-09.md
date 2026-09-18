@@ -639,3 +639,31 @@ alongside it. The second is cheaper and honest; the first is better.
 Until then: **a failure in one of these three named tests is not evidence of a
 regression on its own, and a pass is not evidence of its absence.** Any other
 test failing is a real signal.
+
+### One hypothesis tested and disproved (2026-09-18)
+
+**It is not accumulated relay state.** The obvious guess was that a relay volume
+full of events from earlier runs slows delivery past the fixed 20–30s wait. The
+`scramble_relay-data` volume was destroyed and recreated, and
+`EpochRatchetStressTests` **failed on the very next run anyway**. Recorded so
+nobody spends the same hour on it.
+
+What did hold: the same test **passes in isolation** (39s) and fails inside the
+full suite, on a clean relay. So the trigger is contention during a full run
+rather than anything durable — which points at the fixed timeout under load, and
+makes "give these three their own category" the more honest fix of the two
+offered above, not the lazier one.
+
+### Two environment notes that cost a diagnostic cycle each
+
+- **Killing an interop run mid-flight corrupts the peer container's SQLite.**
+  Every later run then fails with `backend failure: file is not a database`,
+  naming whichever command happened to run first — so it reads as a fault in an
+  unrelated test. The collection's own doc comment predicts this shape for
+  parallel access; an interrupted run produces it too. Fix: recreate the
+  `scramble_mdk-cli-data` volume. A clean peer also ran the interop category in
+  2m29s against 8m43s dirty, so it is worth doing when the suite drags.
+- **`CLAUDE.md`'s local integration command had drifted from `integration.yml`**
+  in both directions: it ran `FullE2E`, which CI does not, and omitted
+  `DarkMatterInterop`, which CI does. Running it as documented skipped the entire
+  interop suite — 72 tests locally against CI's 104. Fixed 2026-09-18.
