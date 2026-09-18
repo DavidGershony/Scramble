@@ -821,36 +821,47 @@ public class MessageService : IMessageService, IDisposable
             ? Convert.ToHexString(nostrGroupId).ToLowerInvariant()
             : groupIdHex;
 
-        if (staged.CommitData != null && staged.CommitData.Length > 0)
+        try
         {
-            var commitEventId = await _nostrService.PublishCommitAsync(
-                staged.CommitData, commitGroupId, _currentUser.PrivateKeyHex);
-            _logger.LogInformation("InvitePeerToSyncGroup: commit confirmed, event {EventId}", commitEventId);
-
-            await _mlsService.MergeStagedAsync(chat.MlsGroupId);
-
-            // Mark commit as processed
-            await _storageService.SaveMessageAsync(new Message
+            if (staged.CommitData != null && staged.CommitData.Length > 0)
             {
-                Id = Guid.NewGuid().ToString(),
-                ChatId = syncChatId,
-                Content = "[peer device added to sync group]",
-                SenderPublicKey = _currentUser.PublicKeyHex,
-                NostrEventId = commitEventId,
-                Timestamp = DateTime.UtcNow,
-                Type = MessageType.System,
-                Status = MessageStatus.Sent
-            });
+                var commitEventId = await _nostrService.PublishCommitAsync(
+                    staged.CommitData, commitGroupId, _currentUser.PrivateKeyHex);
+                _logger.LogInformation("InvitePeerToSyncGroup: commit confirmed, event {EventId}", commitEventId);
 
-            // Send Welcome to peer device
-            var welcomeEventId = await _nostrService.PublishWelcomeAsync(
-                staged.WelcomeData, staged.RecipientPublicKey, _currentUser.PrivateKeyHex,
-                staged.KeyPackageEventId);
-            _logger.LogInformation("InvitePeerToSyncGroup: Welcome sent, event {EventId}", welcomeEventId);
+                await _mlsService.MergeStagedAsync(chat.MlsGroupId);
 
-            // Track invite timestamp for 3-day liveness window
-            await _storageService.SaveSettingAsync(
-                $"sync_invite_{peerKeyPackage.SlotId}", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
+                // Mark commit as processed
+                await _storageService.SaveMessageAsync(new Message
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    ChatId = syncChatId,
+                    Content = "[peer device added to sync group]",
+                    SenderPublicKey = _currentUser.PublicKeyHex,
+                    NostrEventId = commitEventId,
+                    Timestamp = DateTime.UtcNow,
+                    Type = MessageType.System,
+                    Status = MessageStatus.Sent
+                });
+
+                // Send Welcome to peer device
+                var welcomeEventId = await _nostrService.PublishWelcomeAsync(
+                    staged.WelcomeData, staged.RecipientPublicKey, _currentUser.PrivateKeyHex,
+                    staged.KeyPackageEventId);
+                _logger.LogInformation("InvitePeerToSyncGroup: Welcome sent, event {EventId}", welcomeEventId);
+
+                // Track invite timestamp for 3-day liveness window
+                await _storageService.SaveSettingAsync(
+                    $"sync_invite_{peerKeyPackage.SlotId}", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
+            }
+        }
+        catch (Exception ex)
+        {
+            // The sync group is the one group a user cannot leave and rejoin by hand, so a
+            // commit stranded here costs them every future device add.
+            _logger.LogWarning(ex, "InvitePeerToSyncGroup: invite failed before merge, rolling back");
+            await RollbackStagedCommitAsync(chat.MlsGroupId, "InvitePeerToSyncGroup");
+            throw;
         }
     }
 
@@ -1315,7 +1326,7 @@ public class MessageService : IMessageService, IDisposable
                 // Commit was NOT confirmed — rollback local MLS state
                 _logger.LogWarning(ex, "AddMember: commit publish failed for KP {KpId}, rolling back staged commit — continuing",
                     keyPackage.NostrEventId?[..Math.Min(16, keyPackage.NostrEventId?.Length ?? 0)] ?? "none");
-                await _mlsService.ClearStagedAsync(chat.MlsGroupId);
+                await RollbackStagedCommitAsync(chat.MlsGroupId, "AddMember");
                 lastPublishFailure = ex;
             }
             catch (Exception ex)
@@ -1323,7 +1334,7 @@ public class MessageService : IMessageService, IDisposable
                 // Unexpected error — clear staged state and continue with remaining devices
                 _logger.LogWarning(ex, "AddMember: failed to add KP {KpId} — clearing staged state and continuing",
                     keyPackage.NostrEventId?[..Math.Min(16, keyPackage.NostrEventId?.Length ?? 0)] ?? "none");
-                try { await _mlsService.ClearStagedAsync(chat.MlsGroupId); } catch { }
+                await RollbackStagedCommitAsync(chat.MlsGroupId, "AddMember");
             }
         }
 
@@ -1446,15 +1457,38 @@ public class MessageService : IMessageService, IDisposable
                     groupIdHex[..Math.Min(16, groupIdHex.Length)]);
                 result.FailedCount++;
 
-                // Attempt to clear staged commit if it exists
-                try { await _mlsService.ClearStagedAsync(chat.MlsGroupId!); }
-                catch { /* best-effort cleanup */ }
+                await RollbackStagedCommitAsync(chat.MlsGroupId!, "AddPeerDevice");
             }
         }
 
         _logger.LogInformation("AddPeerDevice: added={Added}, skipped={Skipped} non-admin, failed={Failed}",
             result.AddedCount, result.SkippedNonAdminGroups.Count, result.FailedCount);
         return result;
+    }
+
+    /// <summary>
+    /// Drops a commit that was staged but never merged.
+    /// Left staged, it wedges the group: the engine refuses to stage a second commit while
+    /// one is pending, so every later membership or admin change fails, and nothing in the
+    /// UI can clear it.
+    /// Does nothing once the commit has been merged, and never throws — a rollback that threw
+    /// would bury the failure the caller is about to report under its own.
+    /// </summary>
+    private async Task RollbackStagedCommitAsync(byte[] groupId, string operation)
+    {
+        try
+        {
+            if (!_mlsService.HasPendingCommit(groupId))
+                return;
+
+            await _mlsService.ClearStagedAsync(groupId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "{Operation}: could not clear the staged commit — further commits on this group will fail to stage",
+                operation);
+        }
     }
 
     public async Task RemoveMemberAsync(string chatId, string memberPublicKey)
@@ -1498,7 +1532,16 @@ public class MessageService : IMessageService, IDisposable
         catch (PublishUnconfirmedException ex)
         {
             _logger.LogWarning(ex, "RemoveMember: commit publish failed, rolling back");
-            await _mlsService.ClearStagedAsync(chat.MlsGroupId);
+            await RollbackStagedCommitAsync(chat.MlsGroupId, "RemoveMember");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Not every publish failure is a missing relay OK — a rejected or malformed
+            // commit throws something else entirely. Without this arm the commit stays
+            // staged and the group takes no further admin or membership change.
+            _logger.LogWarning(ex, "RemoveMember: commit failed before merge, rolling back");
+            await RollbackStagedCommitAsync(chat.MlsGroupId, "RemoveMember");
             throw;
         }
     }
@@ -1547,7 +1590,16 @@ public class MessageService : IMessageService, IDisposable
         catch (PublishUnconfirmedException ex)
         {
             _logger.LogWarning(ex, "UpdateAdminPubkeys: commit publish failed, rolling back");
-            await _mlsService.ClearStagedAsync(chat.MlsGroupId);
+            await RollbackStagedCommitAsync(chat.MlsGroupId, "UpdateAdminPubkeys");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Same hazard as RemoveMember: anything other than a missing relay OK used to
+            // escape with the commit still staged, and an admin-policy commit left pending
+            // locks the admin list for good.
+            _logger.LogWarning(ex, "UpdateAdminPubkeys: commit failed before merge, rolling back");
+            await RollbackStagedCommitAsync(chat.MlsGroupId, "UpdateAdminPubkeys");
             throw;
         }
     }
