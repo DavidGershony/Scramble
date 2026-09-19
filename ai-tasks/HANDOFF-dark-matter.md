@@ -2157,6 +2157,23 @@ Each was written from the adapter's own report rather than from the call sites.
 - **`CommitAdmission`** closes §12. See `remaining-work` §12 for the full record,
   including why the ingest refusal is `Retryable` and not `Failed`.
 
+#### Two service-layer seams the flip will use
+
+- **`IMlsService.SetExternalSigner(IExternalSigner?)`** is how the NIP-46 signer
+  reaches the engine. `IExternalSigner` rather than a proof signer **because the
+  callers are ViewModels** and the cutover rules bar `Scramble.Marmot` types from
+  Presentation. Both legacy backends no-op it, so it landed without a behaviour
+  change. `MainViewModel` starts calling it *with* the flip, and the
+  unconditional `SetNostrEventSigner` at `MainViewModel.cs:469` goes at the same
+  time — on Dark Matter it is both redundant and fatal.
+- **`MessageService.RollbackStagedCommitAsync`** — a staged commit left behind
+  wedges the group, because the engine refuses to stage a second while one is
+  pending and nothing in the UI can clear it. Five sites rolled back only on
+  `PublishUnconfirmedException`, or not at all. The helper **never throws**: a
+  failing rollback would bury the caller's exception, which is the diagnosis,
+  under its own, which is noise about the recovery. It is gated on
+  `HasPendingCommit` so a failure *after* a successful merge clears nothing.
+
 ### 3ae. Three process traps this stretch paid for
 
 - **`CLAUDE.md`'s "reproducing CI locally" command had drifted from
@@ -2240,6 +2257,22 @@ Each was written from the adapter's own report rather than from the call sites.
 
 ## 4. How to work here
 
+**The baseline, as of `53cce82` (2026-09-19).** Anything different is yours:
+
+| Gate | Green |
+|---|---|
+| Fast unit | **1196 Marmot / 579 Core / 253 UI**, 0 failures (1 Core + 2 UI skips, pre-existing) |
+| Integration (CI's filter) | **104 total**, 4 skips |
+| `Category=DarkMatterInterop` | **32 / 32**, zero skips |
+| `./scripts/check-drift.ps1` | no rules triggered |
+
+**Three of those integration tests are flaky and it is recorded**, not a mystery:
+`NonPowerOfTwoTree(5)`, `NonPowerOfTwoTree(7)` and `EpochRatchetStress`, all
+`WaitForMessageAsync` timeouts, all passing in isolation. A failure in one of
+*those three* is not evidence of a regression, and a pass is not evidence of its
+absence; any other failure is a real signal. It is **not** accumulated relay
+state — that was tested and disproved. See `remaining-work` §13.
+
 **Commands.** Prefer the `run-tests` skill — it owns the stage scripts, brings
 the right containers up, and knows that a skipped interop test is a failure.
 
@@ -2253,9 +2286,12 @@ dotnet test Scramble.Desktop.slnf --filter "Category!=Relay&Category!=Integratio
 # Just the engine tests
 dotnet test tests/Scramble.Marmot.Tests
 
-# Integration gate (needs Docker; required by CI on engine paths)
+# Integration gate (needs Docker; required by CI on engine paths).
+# Character-for-character from integration.yml. It drifted once in BOTH
+# directions -- ran FullE2E, which CI does not, and omitted DarkMatterInterop,
+# which CI does -- so a green local run covered 72 tests where CI runs 104.
 docker compose -f docker-compose.test.yml up -d nostr-relay
-dotnet test tests/Scramble.Diagnostics/ --filter "Category=Integration|Category=MIP-Compliance|Category=ProtocolCompliance|Category=FullE2E|Category=EpochSync|Category=DeviceSync|Category=OutboxModel|Category=Notifications|Category=RelayHarness|Category=ExporterSecret"
+dotnet test tests/Scramble.Diagnostics/ --filter "Category=Integration|Category=MIP-Compliance|Category=ProtocolCompliance|Category=EpochSync|Category=DeviceSync|Category=OutboxModel|Category=Notifications|Category=RelayHarness|Category=ExporterSecret|Category=DarkMatterInterop"
 
 # The Dark Matter interop suite. Build the peers FIRST — the tests skip when
 # they are not up, and a skipped run exits zero printing "Skipped!", which
