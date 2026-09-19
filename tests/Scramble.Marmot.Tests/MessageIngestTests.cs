@@ -43,13 +43,13 @@ public class MessageIngestTests : IDisposable
 
     public void Dispose() => _fixture.Dispose();
 
-    private MessageIngest NewIngest() => new(_fixture.Provider, _epochs, () => _now);
+    private MessageIngest NewIngest() => new(_fixture.Provider, _epochs, _cs, () => _now);
 
     private EpochArchive NewArchive() =>
         new(_fixture.Provider, _cs, ConvergencePolicy.V1, () => _now);
 
     private MessageIngest NewIngest(EpochArchive archive) =>
-        new(_fixture.Provider, _epochs, () => _now, archive);
+        new(_fixture.Provider, _epochs, _cs, () => _now, archive);
 
     private sealed class LocalSigner : IAccountIdentityProofSigner
     {
@@ -421,7 +421,7 @@ public class MessageIngestTests : IDisposable
             new MlsMessage(WireFormat.MlsPublicMessage, request).WriteTo);
 
         ulong before = pair.Alice.Group.Epoch;
-        var ingest = new MessageIngest(_fixture.Provider, _epochs, () => _now);
+        var ingest = new MessageIngest(_fixture.Provider, _epochs, _cs, () => _now);
 
         IngestResult result = await ingest.IngestAsync(
             pair.Alice.Group, pair.GroupId, wire);
@@ -605,7 +605,7 @@ public class MessageIngestTests : IDisposable
         byte[] requestWire = Serialize(request);
         await ingest.IngestAsync(trio.Carol, trio.GroupId, requestWire);
 
-        GroupHandshake.Receive(trio.Alice.Group, requestWire);
+        GroupHandshake.Receive(trio.Alice.Group, _cs, requestWire);
         using StagedCommit? departure = MarmotGroupLeave.CommitDepartures(trio.Alice.Group);
         Assert.NotNull(departure);
 

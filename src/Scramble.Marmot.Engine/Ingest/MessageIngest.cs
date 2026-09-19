@@ -1,4 +1,5 @@
 using DotnetMls.Codec;
+using DotnetMls.Crypto;
 using DotnetMls.Group;
 using DotnetMls.Types;
 using Scramble.Marmot.AppComponents;
@@ -81,11 +82,24 @@ public sealed record ReplayResult(
 public sealed class MessageIngest(
     IMarmotStorageProvider storage,
     EpochManager epochs,
+    ICipherSuite cipherSuite,
     Func<DateTimeOffset> clock,
     EpochArchive? archive = null)
 {
     private readonly IMarmotStorageProvider _storage =
         storage ?? throw new ArgumentNullException(nameof(storage));
+
+    /// <summary>
+    /// The group's ciphersuite, for the copy a commit is judged on.
+    /// </summary>
+    /// <remarks>
+    /// Required, unlike <see cref="_archive"/>. The archive is a capability a
+    /// caller may decline; commit authorization is not, and a constructor that
+    /// let it be omitted would make the unguarded apply the default for anyone
+    /// who did not know to ask.
+    /// </remarks>
+    private readonly ICipherSuite _cs =
+        cipherSuite ?? throw new ArgumentNullException(nameof(cipherSuite));
 
     private readonly EpochManager _epochs =
         epochs ?? throw new ArgumentNullException(nameof(epochs));
@@ -514,7 +528,38 @@ public sealed class MessageIngest(
         ReceivedHandshake handshake;
         try
         {
-            handshake = GroupHandshake.Receive(group, mlsBytes);
+            handshake = GroupHandshake.Receive(group, _cs, mlsBytes);
+        }
+        catch (UnauthorizedCommitException ex)
+        {
+            // Refused here, but NOT terminally, and that distinction is the
+            // load-bearing one.
+            //
+            // This judgement was made against *our* group. The gate that let it
+            // run is an epoch-number match, and a number is not a state: after a
+            // fork two branches sit at the same epoch with different trees and
+            // different admin lists. So a commit from a peer's branch is checked
+            // against ours -- its committer's leaf index resolved in our tree,
+            // its authority read from our admin policy. When the branches agree
+            // that is harmless. When the fork raced an add, a remove or an admin
+            // change, it is a verdict about the wrong member under the wrong
+            // policy, and filing that as Failed would hide the branch from
+            // convergence for good, because a pass lists only Retryable.
+            //
+            // Retryable does not weaken the refusal: nothing is applied here,
+            // and both of convergence's own doors -- CandidateMaterializer's
+            // Extend and Reorg -- run the same admission on a probe restored to
+            // the true fork epoch, which is the state the committer actually had
+            // to hold authority in. That is the better-informed place to decide,
+            // so this one defers to it rather than pre-empting it.
+            //
+            // It also cannot accumulate: a record that convergence keeps
+            // refusing is retired to Failed once it falls past the rewind
+            // horizon, like any other commit that can no longer be rebuilt.
+            await PersistAsync(id, groupId, sourceEpoch, mlsBytes, transportId,
+                MessageRecordState.Retryable, ex.Message, ct);
+
+            return Refuse(InputRejectionCategory.AuthorizationFailed);
         }
         catch (Exception ex)
         {

@@ -688,7 +688,7 @@ public sealed class MarmotSession
         GroupId = groupId;
         Recovery = recovery;
 
-        _ingest = new MessageIngest(storage, host.Epochs.Epochs, clock, host.Archive);
+        _ingest = new MessageIngest(storage, host.Epochs.Epochs, cs, clock, host.Archive);
         _keys = new RetainedTransportKeys(host.Archive);
     }
 

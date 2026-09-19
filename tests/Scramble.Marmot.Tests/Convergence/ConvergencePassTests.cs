@@ -54,7 +54,7 @@ public class ConvergencePassTests : IDisposable
         new(_fixture.Provider, _cs, ConvergencePolicy.V1, () => _now);
 
     private MessageIngest NewIngest(EpochArchive archive) =>
-        new(_fixture.Provider, _epochs, () => _now, archive);
+        new(_fixture.Provider, _epochs, _cs, () => _now, archive);
 
     private ConvergencePass NewPass(EpochArchive archive) =>
         new(_fixture.Provider, _epochs, archive, _cs, ConvergencePolicy.V1, () => _now);

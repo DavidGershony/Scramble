@@ -1,4 +1,5 @@
 using DotnetMls.Codec;
+using DotnetMls.Crypto;
 using DotnetMls.Group;
 using DotnetMls.Types;
 using Scramble.Marmot.Engine.Groups;
@@ -156,10 +157,23 @@ public static class GroupHandshake
     /// must stop using the group.
     /// </para>
     /// </remarks>
+    /// <param name="group">The live group the message is addressed to.</param>
+    /// <param name="cs">
+    /// The group's ciphersuite. Required rather than optional, and deliberately
+    /// so: it is what <see cref="CommitAdmission"/> needs to build the throwaway
+    /// copy it judges a commit on, and a caller allowed to omit it would get an
+    /// unguarded apply by saying nothing.
+    /// </param>
+    /// <param name="mlsBytes">The peeled MLS message bytes.</param>
     /// <exception cref="MarmotAppEventException">Not a decodable handshake.</exception>
-    public static ReceivedHandshake Receive(MlsGroup group, ReadOnlySpan<byte> mlsBytes)
+    /// <exception cref="UnauthorizedCommitException">
+    /// The commit is one this member refuses to apply.
+    /// </exception>
+    public static ReceivedHandshake Receive(
+        MlsGroup group, ICipherSuite cs, ReadOnlySpan<byte> mlsBytes)
     {
         ArgumentNullException.ThrowIfNull(group);
+        ArgumentNullException.ThrowIfNull(cs);
 
         MlsMessage message;
         try
@@ -180,15 +194,38 @@ public static class GroupHandshake
 
         return publicMessage.Content.ContentType switch
         {
-            ContentType.Commit => ApplyCommit(group, publicMessage),
+            ContentType.Commit => ApplyCommit(group, cs, publicMessage),
             ContentType.Proposal => CacheProposal(group, publicMessage),
             var other => throw new MarmotAppEventException(
                 $"Expected a commit or a proposal, got {other}."),
         };
     }
 
-    private static ReceivedHandshake ApplyCommit(MlsGroup group, PublicMessage commit)
+    /// <summary>
+    /// Authorizes a commit, then applies it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Both steps run before the group moves, and the order is the rule.</b>
+    /// MLS authenticates a commit's sender and it does not judge them: a
+    /// <c>GroupContextExtensions</c> proposal is legal from any member, so
+    /// <c>ProcessCommit</c> will happily rewrite the GroupContext — the
+    /// <c>app_data_dictionary</c>, and the admin policy inside it — on the word
+    /// of whoever framed the commit. Once that has applied there is no rewind,
+    /// and every later admin check reads the list the committer just wrote.
+    /// </para>
+    /// <para>
+    /// A refusal throws rather than becoming a <see cref="HandshakeOutcome"/>,
+    /// because it is not an outcome of the group: nothing was applied and the
+    /// group stands exactly where it did. What to record about it is the
+    /// caller's decision, not this layer's.
+    /// </para>
+    /// </remarks>
+    private static ReceivedHandshake ApplyCommit(
+        MlsGroup group, ICipherSuite cs, PublicMessage commit)
     {
+        CommitAdmission.Require(group, cs, commit);
+
         try
         {
             group.ProcessCommit(commit);

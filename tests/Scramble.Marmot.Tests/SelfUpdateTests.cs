@@ -84,7 +84,7 @@ public class SelfUpdateTests
         staged.Applied();
 
         GroupHandshake.Receive(
-            bob, peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(bob)).MlsBytes);
+            bob, _cs, peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(bob)).MlsBytes);
 
         Assert.Equal(before + 1, alice.Group.Epoch);
         Assert.Equal(alice.Group.Epoch, bob.Epoch);
@@ -105,7 +105,7 @@ public class SelfUpdateTests
         string envelope = GroupHandshake.Wrap(alice.Group, peeler, staged.Commit);
         staged.Applied();
         GroupHandshake.Receive(
-            bob, peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(bob)).MlsBytes);
+            bob, _cs, peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(bob)).MlsBytes);
 
         string message = GroupMessages.Send(
             alice.Group, peeler,
@@ -149,13 +149,13 @@ public class SelfUpdateTests
         string inviteWire = GroupHandshake.Wrap(alice.Group, peeler, invite.Commit);
         invite.Applied();
         GroupHandshake.Receive(
-            bob, peeler.Peel(inviteWire, _ => GroupMessages.ExporterSecret(bob)).MlsBytes);
+            bob, _cs, peeler.Peel(inviteWire, _ => GroupMessages.ExporterSecret(bob)).MlsBytes);
 
         // Bob asks to leave; Alice caches the request.
         PublicMessage request = MarmotGroupLeave.Request(bob);
         string requestWire = GroupHandshake.WrapProposal(bob, peeler, request);
         GroupHandshake.Receive(
-            alice.Group,
+            alice.Group, _cs,
             peeler.Peel(requestWire, _ => GroupMessages.ExporterSecret(alice.Group)).MlsBytes);
 
         Assert.NotEmpty(alice.Group.CachedProposals);

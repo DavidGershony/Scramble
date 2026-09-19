@@ -87,7 +87,7 @@ public class GroupLeaveTests
     }
 
     /// <summary>Puts a handshake message through the wire and back.</summary>
-    private static ReceivedHandshake Deliver(MlsGroup from, MlsGroup to, PublicMessage message)
+    private ReceivedHandshake Deliver(MlsGroup from, MlsGroup to, PublicMessage message)
     {
         var peeler = Peeler();
         string envelope = message.Content.ContentType == ContentType.Commit
@@ -97,7 +97,7 @@ public class GroupLeaveTests
         // Peeled with the receiver's own secret, which is the point: if the two
         // sides were at different epochs this would fail here.
         return GroupHandshake.Receive(
-            to, peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(to)).MlsBytes);
+            to, _cs, peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(to)).MlsBytes);
     }
 
     // ---- Requesting ----
@@ -158,7 +158,7 @@ public class GroupLeaveTests
         staged.Applied();
 
         var received = GroupHandshake.Receive(
-            carol, peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(carol)).MlsBytes);
+            carol, _cs, peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(carol)).MlsBytes);
 
         Assert.Equal(HandshakeOutcome.CommitApplied, received.Outcome);
         Assert.Equal(alice.Group.Epoch, carol.Epoch);
@@ -187,7 +187,7 @@ public class GroupLeaveTests
         staged.Applied();
 
         var received = GroupHandshake.Receive(
-            bob, peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(bob)).MlsBytes);
+            bob, _cs, peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(bob)).MlsBytes);
 
         Assert.Equal(HandshakeOutcome.RemovedByCommit, received.Outcome);
 
@@ -288,7 +288,7 @@ public class GroupLeaveTests
         string envelope = GroupHandshake.Wrap(alice.Group, peeler, first.Commit);
         first.Applied();
         GroupHandshake.Receive(
-            bob, peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(bob)).MlsBytes);
+            bob, _cs, peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(bob)).MlsBytes);
 
         Assert.Equal(2, alice.Group.GetMembers().Count);
         Assert.NotNull(carolSigner);
@@ -382,7 +382,7 @@ public class GroupLeaveTests
             AliceAccount(alice));
 
         var ex = Assert.Throws<MarmotAppEventException>(() => GroupHandshake.Receive(
-            alice.Group, peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(alice.Group)).MlsBytes));
+            alice.Group, _cs, peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(alice.Group)).MlsBytes));
 
         Assert.Contains("handshake", ex.Message);
     }

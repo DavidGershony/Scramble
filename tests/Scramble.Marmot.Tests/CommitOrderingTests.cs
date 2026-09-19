@@ -139,7 +139,7 @@ public class CommitOrderingTests
         var (host, guest, _, _) = await TrioAsync();
 
         PublicMessage request = MarmotGroupLeave.Request(guest);
-        GroupHandshake.Receive(host.Group, Serialize(request));
+        GroupHandshake.Receive(host.Group, _cs, Serialize(request));
 
         using StagedCommit? departure = MarmotGroupLeave.CommitDepartures(host.Group);
         Assert.NotNull(departure);
@@ -159,7 +159,7 @@ public class CommitOrderingTests
         var (host, guest, spare, _) = await TrioAsync();
 
         PublicMessage request = MarmotGroupLeave.Request(guest);
-        GroupHandshake.Receive(host.Group, Serialize(request));
+        GroupHandshake.Receive(host.Group, _cs, Serialize(request));
 
         using StagedCommit? departure = MarmotGroupLeave.CommitDepartures(host.Group);
 
@@ -221,7 +221,7 @@ public class CommitOrderingTests
         var (host, guest, _, _) = await TrioAsync();
 
         PublicMessage request = MarmotGroupLeave.Request(guest);
-        GroupHandshake.Receive(host.Group, Serialize(request));
+        GroupHandshake.Receive(host.Group, _cs, Serialize(request));
 
         using StagedCommit? departure = MarmotGroupLeave.CommitDepartures(host.Group);
         Assert.NotNull(departure);

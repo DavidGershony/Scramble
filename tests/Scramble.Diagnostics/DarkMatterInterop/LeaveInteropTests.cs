@@ -316,7 +316,7 @@ public class LeaveInteropTests : IDisposable
                     PeeledMessage peeled = _peeler.Peel(
                         envelope, _ => GroupMessages.ExporterSecret(group));
 
-                    ReceivedHandshake received = GroupHandshake.Receive(group, peeled.MlsBytes);
+                    ReceivedHandshake received = GroupHandshake.Receive(group, _cs, peeled.MlsBytes);
                     _log.Add($"handshake: {received.Outcome}");
 
                     if (received.Outcome == expected)

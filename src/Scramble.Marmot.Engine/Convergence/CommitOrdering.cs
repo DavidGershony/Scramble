@@ -73,43 +73,119 @@ public static class CommitOrdering
     }
 
     /// <summary>
-    /// What the authorization rule needs to read off a commit.
+    /// What the authorization rules need to read off a commit.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Inline and referenced proposals are both included, and deliberately: the
     /// rule is about what a commit <i>does</i>, and a proposal carried inline
     /// does exactly what the same proposal cited by reference would. Counting
     /// only the references would let any commit become ordinary by inlining
     /// what it applies.
+    /// </para>
+    /// <para>
+    /// <b>One builder, for ordering and for admission both.</b>
+    /// <see cref="Messages.CommitAdmission"/> decides whether to accept a commit
+    /// from the same view this decides how to rank it. A second builder would be
+    /// a second opinion about what a commit contains, and the two disagreeing
+    /// means a commit refused by one rule and ranked by the other — so the
+    /// richer fields are filled here rather than resolved again elsewhere.
+    /// </para>
     /// </remarks>
-    private static StagedCommitView ViewOf(MlsGroup group, Commit commit)
+    /// <param name="senderLeafIndex">
+    /// The leaf that framed the commit, which is the proposer of every inline
+    /// proposal it carries. Null when the caller is only ranking — ordering
+    /// reads neither the proposer nor the operation — and passing null leaves
+    /// those fields unresolved rather than guessed.
+    /// </param>
+    internal static StagedCommitView ViewOf(
+        MlsGroup group, Commit commit, uint? senderLeafIndex = null)
     {
         var proposals = new List<StagedProposal>(commit.Proposals.Length);
 
+        // A proposer is only resolved when the caller asked for the rich view.
+        // Which leaf that is differs by entry shape -- an inline proposal is
+        // proposed by whoever framed the commit, a referenced one by whoever
+        // sent it -- so the argument gates the work and the cache supplies the
+        // leaf.
+        bool resolveProposers = senderLeafIndex is not null;
+
         foreach (ProposalOrRef entry in commit.Proposals)
         {
-            proposals.Add(
-                new StagedProposal(
-                    entry switch
-                    {
-                        InlineProposal inline => KindOf(inline.Proposal.ProposalType),
-                        ProposalReference reference => KindOf(group, reference),
-                        _ => CommitProposalKind.Other,
-                    }));
+            switch (entry)
+            {
+                case InlineProposal inline:
+                    proposals.Add(new StagedProposal(
+                        KindOf(inline.Proposal.ProposalType),
+                        resolveProposers ? IdentityOf(group, senderLeafIndex!.Value) : null,
+                        UpdateOf(inline.Proposal)));
+                    break;
+
+                case ProposalReference reference when Resolve(group, reference) is { } cached:
+                    proposals.Add(new StagedProposal(
+                        KindOf(cached.Proposal.ProposalType),
+                        resolveProposers ? IdentityOf(group, cached.SenderLeafIndex) : null,
+                        UpdateOf(cached.Proposal)));
+                    break;
+
+                default:
+                    // A reference that resolves to nothing, or an entry shape
+                    // this build does not know. Other is admin-requiring by the
+                    // rule's fail-closed design, and the proposer stays null --
+                    // which the rules that read it treat as "not evidence of
+                    // anything" rather than as an absent proposer.
+                    proposals.Add(new StagedProposal(CommitProposalKind.Other));
+                    break;
+            }
         }
 
         return new StagedCommitView(proposals, commit.Path is not null);
     }
 
-    private static CommitProposalKind KindOf(MlsGroup group, ProposalReference reference)
+    /// <summary>
+    /// The operation an <c>AppDataUpdate</c> proposal carries, or null.
+    /// </summary>
+    /// <remarks>
+    /// Read off the proposal rather than left for a caller to fill, because
+    /// <see cref="AppComponentIntegrity"/> fails closed on a proposal classified
+    /// as an <c>AppDataUpdate</c> whose operation is missing — and it is right
+    /// to: an operation nobody read is a dictionary change nobody accounted for.
+    /// </remarks>
+    private static AppDataUpdate? UpdateOf(Proposal proposal) =>
+        proposal is not AppDataUpdateProposal update
+            ? null
+            : update.Operation == AppDataUpdateOperationType.Remove
+                ? AppDataUpdate.Remove(update.ComponentId)
+                : AppDataUpdate.Update(update.ComponentId, update.Data);
+
+    /// <summary>
+    /// The account identity at a leaf, or null when no member holds it.
+    /// </summary>
+    /// <remarks>
+    /// Null rather than a throw: a commit naming a leaf nobody occupies will not
+    /// apply, and the rules that read this field fail closed on null anyway. A
+    /// throw here would turn a classification into a crash on the ingest path.
+    /// </remarks>
+    private static byte[]? IdentityOf(MlsGroup group, uint leafIndex)
+    {
+        foreach ((uint index, byte[] identity) in group.GetMembers())
+        {
+            if (index == leafIndex)
+                return identity;
+        }
+
+        return null;
+    }
+
+    private static MlsGroup.CachedProposal? Resolve(MlsGroup group, ProposalReference reference)
     {
         foreach (MlsGroup.CachedProposal cached in group.CachedProposals)
         {
             if (cached.Reference.AsSpan().SequenceEqual(reference.Reference))
-                return KindOf(cached.Proposal.ProposalType);
+                return cached;
         }
 
-        return CommitProposalKind.Other;
+        return null;
     }
 
     private static CommitProposalKind KindOf(ProposalType type) => type switch

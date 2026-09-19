@@ -2,6 +2,7 @@ using DotnetMls.Codec;
 using DotnetMls.Group;
 using DotnetMls.Types;
 using Scramble.Marmot.AppComponents;
+using Scramble.Marmot.Engine.Messages;
 
 namespace Scramble.Marmot.Engine.Convergence;
 
@@ -24,6 +25,18 @@ public enum MaterializationRefusal
 
     /// <summary>It does not apply to the state it claims to fork from.</summary>
     DoesNotApply,
+
+    /// <summary>
+    /// It applies, and its committer was not allowed to make it.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="DoesNotApply"/> because the two say opposite
+    /// things about the branch. A commit that does not apply is malformed
+    /// against the history it claims; this one is well-formed, replayable, and
+    /// refused anyway — which is the only shape a member could otherwise be
+    /// argued onto by a peer who is simply willing to send it.
+    /// </remarks>
+    Unauthorized,
 
     /// <summary>The replay budget ran out before reaching it.</summary>
     BudgetExhausted,
@@ -268,7 +281,33 @@ public sealed class CandidateMaterializer(
                 // what this commit's references were has been cleared.
                 committer = IdentityOfLeaf(probe, commit.Content.Sender.LeafIndex);
                 priority = CommitOrdering.PriorityOf(probe, commit) ?? priority;
+
+                // The same admission rule ingest applies, at the epoch this
+                // commit actually forks from. Convergence is the *second* door
+                // into ProcessCommit and it opens onto exactly the records
+                // ingest could not apply -- so a guard on the front door alone
+                // would refuse a commit at ingest and then replay it here.
+                //
+                // The probe is already restored to the fork epoch, which is the
+                // one the committer had to hold authority in, and already
+                // throwaway. So this costs one view, not a second apply.
+                AdmittedCommit admitted = CommitAdmission.Inspect(
+                    probe,
+                    Commit.ReadFrom(new TlsReader(commit.Content.Content)),
+                    commit.Content.Sender.LeafIndex);
+
                 probe.ProcessCommit(commit);
+                admitted.RequireIntegrity(probe);
+            }
+            catch (UnauthorizedCommitException)
+            {
+                // Well-formed, replayable, and refused. Reported as its own
+                // reason rather than folded into the one below, because a
+                // refusal on authority is a statement about the committer and
+                // not about the bytes -- and an operator reading a converging
+                // group's refusals needs to be able to tell the two apart.
+                refused.Add(new RefusedCommit(next.Id, MaterializationRefusal.Unauthorized));
+                return null;
             }
             catch (Exception)
             {
@@ -352,7 +391,21 @@ public sealed class CandidateMaterializer(
             }
 
             var message = MlsMessage.ReadFrom(new TlsReader(step.Wire));
-            rebuilt.ProcessCommit((PublicMessage)message.Body);
+            var stepCommit = (PublicMessage)message.Body;
+
+            // Checked again on the way onto the branch, rather than trusted from
+            // materialization. This walk picks its own commits -- "the first
+            // stored commit forking from the epoch reached" -- so it is not
+            // guaranteed to be replaying the same chain that was scored. An
+            // unauthorized commit reaching here throws, which leaves the caller
+            // holding the group it came in with.
+            AdmittedCommit admitted = CommitAdmission.Inspect(
+                rebuilt,
+                Commit.ReadFrom(new TlsReader(stepCommit.Content.Content)),
+                stepCommit.Content.Sender.LeafIndex);
+
+            rebuilt.ProcessCommit(stepCommit);
+            admitted.RequireIntegrity(rebuilt);
 
             applied.Add(step.Id);
             reached = rebuilt.Epoch;

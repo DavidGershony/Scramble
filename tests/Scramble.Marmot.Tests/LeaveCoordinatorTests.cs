@@ -86,7 +86,7 @@ public class LeaveCoordinatorTests : IDisposable
     private static NostrGroupPeeler Peeler() => new();
 
     /// <summary>Puts a handshake message through the wire and back.</summary>
-    private static ReceivedHandshake Deliver(MlsGroup from, MlsGroup to, PublicMessage message)
+    private ReceivedHandshake Deliver(MlsGroup from, MlsGroup to, PublicMessage message)
     {
         var peeler = Peeler();
         string envelope = message.Content.ContentType == ContentType.Commit
@@ -94,7 +94,7 @@ public class LeaveCoordinatorTests : IDisposable
             : GroupHandshake.WrapProposal(from, peeler, message);
 
         return GroupHandshake.Receive(
-            to, peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(to)).MlsBytes);
+            to, _cs, peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(to)).MlsBytes);
     }
 
     // ---- Recording the intent ----
@@ -196,7 +196,7 @@ public class LeaveCoordinatorTests : IDisposable
         trio.Alice.Group.MergePendingCommit();
 
         var outcome = GroupHandshake.Receive(
-            trio.Bob,
+            trio.Bob, _cs,
             peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(trio.Bob)).MlsBytes);
         Assert.Equal(HandshakeOutcome.CommitApplied, outcome.Outcome);
         await coordinator.ObserveAsync(trio.BobId, outcome.Outcome);
@@ -251,7 +251,7 @@ public class LeaveCoordinatorTests : IDisposable
         string envelope = GroupHandshake.Wrap(trio.Alice.Group, peeler, commit);
         trio.Alice.Group.MergePendingCommit();
         GroupHandshake.Receive(
-            trio.Bob, peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(trio.Bob)).MlsBytes);
+            trio.Bob, _cs, peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(trio.Bob)).MlsBytes);
 
         Assert.NotNull(await coordinator.ReproposeIfStaleAsync(trio.Bob, trio.BobId));
 
@@ -385,7 +385,7 @@ public class LeaveCoordinatorTests : IDisposable
         staged.Applied();
 
         var outcome = GroupHandshake.Receive(
-            trio.Bob, peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(trio.Bob)).MlsBytes);
+            trio.Bob, _cs, peeler.Peel(envelope, _ => GroupMessages.ExporterSecret(trio.Bob)).MlsBytes);
 
         Assert.Equal(HandshakeOutcome.RemovedByCommit, outcome.Outcome);
 

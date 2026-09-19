@@ -521,7 +521,92 @@ than in ingest, so this is an admission-policy divergence and not a fork. When i
 lands it is the natural second variant of `AppComponentRejection`: upstream's
 `InvalidKeyPackageCapabilities { member }` / `invalid_key_package_capabilities`.
 
-## 12. Inbound commits are not authorization-checked (2026-09-16)
+## 12. Inbound commits are not authorization-checked — CLOSED 2026-09-19
+
+**Closed by `CommitAdmission`**, the receive half of the rule
+`MarmotGroupAdminPolicy` implements on the send half. Two halves, in this order,
+before the group moves: authority judged against the epoch the commit was framed
+on, then `ValidateUpdateBatch` + `ValidateStagedCommit` against the dictionary
+read off a group that has *actually applied* it — never derived, which is the
+circularity the send side already warns about.
+
+**Three doors, not one.** The guard sits in `GroupHandshake.ApplyCommit`, and
+also in `CandidateMaterializer.Extend` and `Reorg`. Convergence is a second and
+third way into `ProcessCommit`, opening onto exactly the records ingest could not
+apply, so a front-door-only guard would refuse a commit and then replay it.
+`Reorg` needs its own because it re-selects stored commits independently of what
+materialization scored.
+
+### Newly refused
+
+- Any privileged commit from a non-admin — `GroupContextExtensions`,
+  `AppDataUpdate`, `Add`, `Remove`, `PreSharedKey`, `ReInit`, `ExternalInit`, and
+  anything unrecognised. No new rule: this is exactly the complement of
+  `CommitAuthorization.IsAllowedNonAdminCommit`.
+- A privileged commit whose committer leaf resolves to no member.
+- Any commit whose resulting dictionary changed outside its own `AppDataUpdate`
+  proposals — **including an admin's**, which is what stops an admin writing
+  component bytes no validator ever saw.
+- A group carrying no `app_data_dictionary`, no `app_components` list, or no
+  `0x8003`: frozen, not unrestricted.
+
+### Deliberately still applying
+
+Self-updates and SelfRemove-only commits, unchanged. Commits that remove us —
+the probe throws and that is eviction, not refusal. And **commits framed against
+another epoch are not judged here at all**: the admin list we hold is not the one
+their author saw, so they are left to convergence, which judges them at their
+real fork epoch.
+
+### The refusal at ingest is not terminal, and that was a correction
+
+The first implementation filed an unauthorized commit `Failed`. **That was
+wrong**, and the reasoning is worth keeping because the same trap is one step
+away from anyone touching this again.
+
+The gate that lets the ingest check run is an epoch-**number** match, and a
+number is not a state: after a fork, two branches sit at the same epoch with
+different trees and different admin lists. So a peer's commit is judged with its
+committer's leaf resolved in *our* tree and its authority read from *our* policy.
+Where the fork raced an add, a remove or an admin change, that is a verdict about
+the wrong member under the wrong policy — and `ConvergencePass` lists only
+`Retryable`, so filing `Failed` would have hidden that branch for good.
+
+It is now `Retryable`. That costs the refusal nothing, because both convergence
+doors run the same admission on a probe restored to the true fork epoch — the
+better-informed place — and a record a pass keeps refusing is retired past the
+rewind horizon like any other. Pinned by
+`IngestRefusesAnUnauthorizedCommitWithoutBurningIt`, and deleting the `Extend`
+guard fails two tests, which is what makes the deferral safe rather than lax.
+
+### One real gap left, and it is the library's
+
+**`MlsGroup` does not serialise its proposal cache.** A probe restored from bytes
+has an empty one, so no probe in this engine can resolve a proposal cited *by
+reference* — in practice, leave commits. The **authorization** half is unaffected
+(it reads the live group's cache); the **integrity** half is skipped for those
+commits. Pre-existing rather than introduced — `Extend` already refused such
+commits as `DoesNotApply` — and marked in `CommitAdmission` where it bites. The
+ask, if it is ever worth making: serialise the cache in `WriteTo`/`ReadFrom`, or
+expose `CacheProposal(Proposal, uint senderLeaf, byte[] reference)`.
+
+### Two follow-ups this surfaced
+
+- **`MarmotGroupInvite.Add`/`Remove` do not admin-gate the committer**, while
+  `MarmotGroupAdminPolicy.Stage` does. So we can still *build* an invite our own
+  peers now refuse. Send-side and engine-side.
+- **`CommitAuthorization.RequireNoAdminSelfRemove` is still unwired**,
+  deliberately: our own leave path does not gate it either, so enforcing it
+  inbound would make us refuse a peer admin's ordinary departure. Both halves
+  move together or not at all.
+
+Ingest now applies each inbound commit twice — probe, then live. Accepted: every
+cheaper route computes the resulting state instead of reading it, which is the
+circularity.
+
+---
+
+## 12a. The original finding (2026-09-16)
 
 Surfaced while building §P11's AppDataUpdate slice (`8823539`), confirmed
 independently here. **This is the receive half of the rule that commit
