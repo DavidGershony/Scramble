@@ -1,7 +1,7 @@
 # HANDOFF — Dark Matter migration: you are here
 
-**Updated:** 2026-09-15 (nineteenth revision) · **Branch:** `feat/dark-matter`
-· **Last commit at time of writing:** `9b052cd`
+**Updated:** 2026-09-19 (twentieth revision) · **Branch:** `feat/dark-matter`
+· **Last commit at time of writing:** `53cce82`
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -38,6 +38,26 @@ layer** (`MarmotSessionHost` / `MarmotSession`) that owns a group's lifetime.
 **Nothing in the shipping app calls it yet, and that is the next phase.** The
 build has been additive throughout so it cannot break the product; P11 is where
 `Scramble.Core` stops using `marmot-cs` and starts using this.
+
+**Where P11 actually stands (2026-09-19).** `DarkMatterMlsService` exists and
+has **zero references outside its own file**. Step 2a (the unwired adapter) is
+done; **every step-2b blocker is settled** and four of the five were mis-recorded
+until they were checked against the call sites — see §3ad. The adapter has now
+been proved against the reference client through `IMlsService` rather than
+through the engine (§3ad), which is a different and stronger claim than the
+suite made before.
+
+**What is left, in order:** the flip itself (DI registration, `MainViewModel`'s
+signer calls, the **seven** publish sites — needs a `Landing-Discipline-Exempt:`
+trailer and starts I5's freeze); the three flaky lifecycle tests
+(`remaining-work` §13, worth doing *before* the flip so the gate means
+something); then P11 steps 3–5 (`IMessageService`, the `INostrService` audit,
+deleting `marmot-cs`); `validate_invitee_capabilities` (§11); and P12.
+
+**Two things no test here can settle**, both needing something outside the repo:
+what a real NIP-46 signer does with a `created_at` it did not choose, and
+`MarmotGroupInvite.Add`/`Remove` not admin-gating the committer — so we can still
+*build* an invite our own peers now refuse.
 
 **P11 is planned and its decisions are made** — `ai-tasks/p11-cutover-plan-2026-09.md`.
 Existing groups are **abandoned**, not migrated (there are no existing users, and
@@ -2065,6 +2085,97 @@ neither is in `default_group_components()`. So a peer's group is refused only if
 it requires one — which nothing does by default. Worth naming them when media
 lands, not before.
 
+### 3ad. The adapter faced a real peer for the first time — and every step-2b blocker is settled
+
+2026-09-16 → 19. **`DarkMatterMlsService` is still unwired** — zero references
+outside its own file — but everything the flip needs now exists and has been
+proved against the reference client rather than against ourselves.
+
+#### The interop suite was testing the wrong layer
+
+Every `DarkMatterInterop` test reached **past** the adapter and drove the engine
+directly, building its own `MarmotSessionHost`. That proved the engine speaks the
+protocol and proved nothing about the layer the cutover switches the app onto —
+and that layer is not a pass-through. It hands the engine a transport that never
+publishes (`CallerPublishes`), builds envelopes with `GroupMessages.Send` instead
+of the session's send path, persists the advanced sender ratchet **itself**, and
+drives staging and merging on the caller's rhythm.
+
+`AdapterInteropTests` and `AdapterInboundJoinInteropTests` (12 tests) enter
+through `IMlsService`. Both seats: hosting a group a real peer joins, and joining
+one a real peer created. **32/32 `DarkMatterInterop` green.**
+
+**The mutation that justifies the whole file:** deleting the adapter's
+hand-rolled ratchet persistence fails exactly one test —
+`AReopenedServiceStillReadsTheGroup`. No engine test can catch it, because the
+engine's own send path persists correctly. No adapter *unit* test can either,
+because two copies of our code stay in perfect agreement while a real peer
+decrypts nothing. Only a real peer plus a restart exposes it.
+
+This also answered, without a device, whether a current peer accepts our commits
+now the `["encoding","base64"]` tag is gone. It does.
+
+#### The five step-2b blockers, and how four of them were mis-recorded
+
+Each was written from the adapter's own report rather than from the call sites.
+**Four were wrong in ways that changed the work.**
+
+- **Blocker 3 was the dangerous one.** Recorded as "the one that breaks loudly".
+  It does not break at all. `PublishCommitAsync` base64s whatever it is given
+  into a *fresh* kind-445 with the `encoding` tag, so a finished event goes out
+  as base64-of-an-event-inside-an-event and every peer drops it silently. **Seven**
+  call sites, not six — and the two in Presentation already
+  `catch (NotSupportedException)` as a Rust-backend fallback, which converts the
+  adapter's deliberate refusal into the corrupting path. `NostrService` now
+  refuses bytes that are already a signed event (`9bb574d`); the call sites move
+  with the flip, because on marmot-cs those bytes really are ciphertext.
+- **Blocker 1 needed no new method.** `IExternalSigner.SignEventAsync` already
+  takes a `created_at` we supply; only `INostrEventSigner` lacks one.
+  `ExternalAccountProofSigner` maps our template onto it and trusts the signer
+  with nothing, because verification against the template decides.
+  **Underneath it, the NIP-46 grant was asking for `443, 444, 445, 1059`** while
+  the app signs eleven kinds — only 445 of which was listed, and 443 is signed by
+  nothing. It is generated from a declared list now, pinned both ways.
+- **Blockers 4 and 5 were one problem, and it was a missing door, not missing
+  data.** Both publish sites already captured the KeyPackage event id and dropped
+  it; `NostrService` already parsed the Welcome's `e` tag and persisted it. One
+  optional parameter plus `MarkKeyPackagePublishedAsync` closed it.
+- **Blocker 6 is decided: `IMlsService` stays synchronous.** Nothing under the
+  gate reaches a network — `CallerPublishes` plus `messages: null` — so the
+  freeze hazard does not exist. **The condition that reverses it is named**: a
+  real `IMessageRelay` puts a relay round trip under the gate, and the async
+  conversion must land with it, not after.
+
+#### Two engine slices that had never existed
+
+- **`MarmotGroupAdminPolicy`** builds the AppDataUpdate commit nothing could
+  build, so a group's app-data dictionary was whatever creation gave it. The
+  commit is built **twice** on purpose: a staged commit's resulting GroupContext
+  is unreadable, and deriving it by hand would make the integrity check circular.
+  `dotnet-mls` needed no change — its own tests only cover the codec, which is
+  why the constant read like a stub.
+- **`CommitAdmission`** closes §12. See `remaining-work` §12 for the full record,
+  including why the ingest refusal is `Retryable` and not `Failed`.
+
+### 3ae. Three process traps this stretch paid for
+
+- **`CLAUDE.md`'s "reproducing CI locally" command had drifted from
+  `integration.yml` in both directions at once** — it ran `FullE2E`, which CI does
+  not, and omitted `DarkMatterInterop`, which CI does. Running it as documented
+  was **72 tests where CI runs 104**, skipping the entire interop suite. Fixed
+  2026-09-18; keep the two in step character-for-character.
+- **An interrupted interop run corrupts the peer container's SQLite.** Every
+  later run then fails with `backend failure: file is not a database`, naming
+  whichever command ran first — so it reads as a fault in an unrelated test.
+  Recreate the `scramble_mdk-cli-data` volume. A clean peer also runs the
+  category in ~2m30 against ~8m40 dirty.
+- **A subagent worktree can be branched from a stale base.** One arrived **182
+  commits behind**, so its mutation results meant nothing on the tip. It said so
+  itself, which is the only reason it was caught. **Re-run a subagent's mutations
+  on the real tree before trusting them**, and check its reported baselines
+  against yours — another reported "UI unchanged" where the tip showed 29
+  failures (that one was a build race, but only re-running established it).
+
 ### 3d. Non-code items still open (not blocking)
 
 - **Open a PR for `feat/dark-matter`.** **104 commits** ahead of `master` and
@@ -2227,6 +2338,11 @@ without the interop suite running).
 | `wn-agent serve` | `unrecognized subcommand` | There is no `serve`. Running `wn-agent` bare is what serves. |
 | Git Bash + `docker exec` | Paths rewritten to `C:/Program Files/Git/...` | Prefix with `MSYS_NO_PATHCONV=1`. |
 | Submodule left on another branch | `Scramble.Core` fails to compile with a missing symbol | `git submodule update --init --recursive` restores the recorded commit. |
+| Reproducing the integration gate from `CLAUDE.md` | It had drifted from `integration.yml` in both directions — ran `FullE2E` which CI does not, omitted `DarkMatterInterop` which CI does. 72 tests locally against CI's 104, skipping the whole interop suite | Keep the two filters in step character-for-character. Check before trusting a green local integration run. |
+| Killing an interop run mid-flight | Corrupts the peer container's SQLite. Every later run fails `backend failure: file is not a database`, naming whichever command ran first — so it reads as a fault in an unrelated test | Recreate the `scramble_mdk-cli-data` volume. A clean peer also runs the category in ~2m30 against ~8m40 dirty. |
+| Trusting a subagent's test counts or mutation results | One worktree was branched **182 commits stale**, so its mutations proved nothing on the tip; another reported "UI unchanged" where the tip showed 29 failures | Re-run its mutations on the real tree and compare its reported baselines against yours before committing. |
+| Testing the adapter only against itself | `DarkMatterMlsService` persists the sender ratchet by hand, outside the engine's send path. Two of our own instances stay in perfect agreement with a ratchet one generation out; a real peer decrypts nothing | `AdapterInteropTests` drives `IMlsService` against the reference client, and only the restart test catches it. Do not let a new adapter path land without a seat in that suite. |
+| Judging a commit's authority on an epoch **number** match | A number is not a state: after a fork two branches sit at the same epoch with different trees and admin lists, so a peer's commit gets judged under our policy against the wrong member | Refuse, but file `Retryable` — convergence re-judges at the true fork epoch. `Failed` hides the branch for good, because a pass lists only `Retryable`. See `remaining-work` §12. |
 | `Utf8JsonWriter` for NIP-01 canonical form | Emoji get surrogate-escaped, so the event id differs from everyone else's | Use the hand-written serialiser in `NostrEventTemplate.Serialize`. No encoder option fixes it. |
 | Pinning only to `nip44.vectors.json` | Passes while missing the 2026-06-28 amendment the file predates | Check `44.md` prose and its inline vectors too. |
 | Using a QUIC varint for an MLS vector length | Agrees at every realistic size, then silently diverges past 2^30 | MLS allows 1/2/4 bytes only. `AppDataDictionary.WriteMlsLength` for MLS lengths, `ComponentCodec.WriteVarint` inside component payloads. |
