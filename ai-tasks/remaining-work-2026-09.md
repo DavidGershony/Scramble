@@ -83,10 +83,12 @@ caller.
 
 **Exit criterion, from the plan:** kill between stage and confirm, and between
 confirm and merge, and the group comes back consistent.
-`tests/Scramble.Marmot.Tests/CrashRecoveryTests.cs` states both as failing tests
-already and is deliberately uncommitted until it can pass — a red test on the
-branch would break the gate, and marking it skipped is not available to us
-(§3t: a skip reads as a pass).
+**Met.** `tests/Scramble.Marmot.Tests/CrashRecoveryTests.cs` states both criteria
+and all 5 pass; it landed with `065ce31`. This paragraph used to say the file was
+deliberately uncommitted until it could pass — a red test on the branch would
+break the gate, and a skip reads as a pass (§3t). That held while it was being
+written and stopped being true when the fix landed underneath it. Corrected
+2026-09-19.
 
 ---
 
