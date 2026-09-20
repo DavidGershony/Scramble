@@ -1330,7 +1330,10 @@ public sealed class DarkMatterMlsService : IMlsService, IDisposable
                 : await session.IngestAsync(commitData);
 
             if (result.Outcome is not IngestOutcome.Processed)
-                throw new InvalidOperationException($"The commit was not applied: {Describe(result.Outcome)}.");
+            {
+                throw new MlsIngestRefusedException(
+                    result.Outcome, $"The commit was not applied: {Describe(result.Outcome)}.");
+            }
         }
         finally
         {
@@ -1774,16 +1777,30 @@ public sealed class DarkMatterMlsService : IMlsService, IDisposable
             };
         }
 
-        throw new InvalidOperationException(
-            $"The message was not delivered: {Describe(result.Outcome)}.");
+        throw new MlsIngestRefusedException(
+            result.Outcome, $"The message was not delivered: {Describe(result.Outcome)}.");
     }
 
+    /// <summary>One outcome in words, for a log line or an exception message.</summary>
+    /// <remarks>
+    /// <b>Every variant that carries a reason states it.</b>
+    /// <see cref="IngestOutcome.Stale"/> and <see cref="IngestOutcome.Rejected"/>
+    /// used to fall to the type-name arm, so a commit from before we joined and a
+    /// commit that does not apply to the history we hold both read as bare
+    /// <c>"Stale"</c> — the one distinction a reader chasing either of them needs.
+    /// The classification also travels as a value on
+    /// <see cref="MlsIngestRefusedException.Outcome"/>; this text is for humans,
+    /// and no caller should be parsing it.
+    /// </remarks>
     private static string Describe(IngestOutcome outcome) => outcome switch
     {
         IngestOutcome.Ignored ignored => $"ignored ({ignored.Category})",
         IngestOutcome.Buffered => "buffered — the group cannot take input while a commit of ours is unresolved",
         IngestOutcome.TransportDeferred => "deferred — held for replay once the group can read it",
         IngestOutcome.LocalState local => $"local state ({local.State})",
+        IngestOutcome.Stale stale => $"stale ({stale.Reason})",
+        IngestOutcome.Rejected rejected => $"rejected ({rejected.Category})",
+        IngestOutcome.ResourceRefused => "resource refused — a local bound stopped us keeping it",
         _ => outcome.GetType().Name,
     };
 

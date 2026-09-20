@@ -7,8 +7,8 @@ using Microsoft.Extensions.Logging;
 using Scramble.Core.Logging;
 using Scramble.Core.Crypto;
 using Scramble.Core.Models;
-using MarmotCs.Protocol.Mip02;
 using Scramble.Marmot;
+using Scramble.Marmot.Ingest;
 using Scramble.Marmot.Wire.Nostr;
 using Scramble.Nostr.Crypto;
 
@@ -2235,37 +2235,140 @@ public class MessageService : IMessageService, IDisposable
     }
 
     /// <summary>
-    /// Detects the "pre-join commit" case: an inbound MLS commit at an epoch
-    /// older than our local group state, typically the commit that added us to
-    /// the group (we joined via the subsequent Welcome and are already at the
-    /// post-commit epoch). This is expected MLS behaviour and should not surface
-    /// as a decryption error.
-    ///
-    /// The match is intentionally narrow. Other Unprocessable failures
-    /// — verify_id mismatches (MDK PR #287), unknown GroupContextExtensions
-    /// proposals (WN PR #791), bad signatures, decryption failures —
-    /// must NOT be swallowed; they indicate real protocol drift or bugs.
-    ///
-    /// Note: marmot-cs's <c>Mdk.ProcessMessageAsync</c> currently flattens
-    /// inner exceptions into <c>UnprocessableResult.Reason = ex.Message</c>
-    /// (see lib/marmot-cs/src/MarmotCs.Core/Mdk.cs:791-798), so we cannot
-    /// discriminate on a typed <see cref="MarmotCs.Core.Errors.StaleEpochException"/>;
-    /// we have to substring-match the reason. Until marmot-cs surfaces a
-    /// typed stale-epoch result this is the best we can do without masking
-    /// real failures.
+    /// Whether an inbound message the engine declined is an expected refusal
+    /// rather than something the user should be told about.
     /// </summary>
-    private static bool IsExpectedPreJoinCommitFailure(Exception ex)
+    /// <remarks>
+    /// <para>
+    /// <b>Most of what a relay delivers should be declined, and saying so is not
+    /// an error.</b> Duplicates, our own echoes, traffic addressed elsewhere,
+    /// commits from before we joined, a branch convergence did not select — every
+    /// one of those is a healthy client working correctly. Reporting them on
+    /// <see cref="DecryptionErrors"/> puts *"Failed to decrypt message… Group may
+    /// need reset"* in front of a user whose group is fine, and buries the
+    /// refusals that do mean something.
+    /// </para>
+    /// <para>
+    /// <b>It classifies on <see cref="IngestOutcome"/>, not on words.</b> This
+    /// predicate used to substring-match marmot-cs's phrasing —
+    /// <c>"UnprocessableResult"</c> plus <c>"epoch"</c> — to find the pre-join
+    /// case. The Dark Matter engine words its refusals differently, so after the
+    /// flip the match could never fire and every expected refusal became a
+    /// user-visible decryption error. A predicate keyed on another component's
+    /// prose fails silently the moment that component is replaced, which is why
+    /// the outcome now travels as a value on
+    /// <see cref="MlsIngestRefusedException"/>.
+    /// </para>
+    /// <para>
+    /// <b>Unknown outcomes are surfaced, not swallowed.</b> The arms below name
+    /// what is expected; anything else — a bad signature, an authorization
+    /// failure, a proposal we refused, a variant added upstream after this was
+    /// written — reaches the user. That is the direction to fail in: a refusal
+    /// wrongly shown is investigable, one wrongly hidden is not. The narrowness
+    /// the old comment argued for is kept, and now it is enumerable: verify_id
+    /// mismatches and unhandled GroupContextExtensions commits land in
+    /// <see cref="StaleReason.InvalidAgainstCanonicalState"/> or
+    /// <see cref="InputRejectionCategory.InvalidEncoding"/>, neither of which is
+    /// listed here.
+    /// </para>
+    /// <para>
+    /// <b>The legacy substring path is kept for the legacy engines.</b>
+    /// <c>ManagedMlsService</c> and <c>MlsService</c> still throw prose, and both
+    /// are still constructed by tests until <c>marmot-cs</c> goes at step 5. It is
+    /// scoped to exceptions that are not <see cref="MlsIngestRefusedException"/>,
+    /// so it cannot second-guess a typed outcome.
+    /// </para>
+    /// </remarks>
+    private static bool IsExpectedInboundRefusal(Exception ex)
     {
-        // ManagedMlsService.DecryptMessageAsync wraps Unprocessable as:
-        //   "Expected ApplicationMessageResult or CommitResult but got
-        //    UnprocessableResult: <reason>"
-        // So we only treat it as pre-join if BOTH markers are present AND the
-        // reason mentions an epoch issue.
+        if (ex is MlsIngestRefusedException refused)
+            return IsExpectedOutcome(refused.Outcome);
+
+        // marmot-cs's Mdk.ProcessMessageAsync flattens inner exceptions into
+        // UnprocessableResult.Reason, so on the legacy engines there is no typed
+        // result to read and the reason has to be matched as text. Both markers
+        // are required, so a verify_id or signature failure is not caught here.
         var msg = ex.Message;
         if (msg is null) return false;
         if (!msg.Contains("UnprocessableResult", StringComparison.Ordinal)) return false;
         return msg.Contains("epoch", StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>The refusals a healthy client produces in normal operation.</summary>
+    private static bool IsExpectedOutcome(IngestOutcome outcome) => outcome switch
+    {
+        // Routing and deduplication: never ours to read in the first place.
+        IngestOutcome.Ignored
+        {
+            Category: InputRejectionCategory.Duplicate
+                   or InputRejectionCategory.OwnEcho
+                   or InputRejectionCategory.WrongRecipient
+                   or InputRejectionCategory.UnknownGroup,
+        } => true,
+
+        // Held, not lost. The bytes are durable and the engine replays them
+        // through MessageIngest.ReplayAsync once the group can read them.
+        //
+        // KNOWN GAP, deliberately not fixed here: nothing in this app ever calls
+        // ReplayAsync, ConvergeAsync or DrainAsync, and MergeStagedAsync /
+        // ClearStagedAsync do not trigger a replay either — so a message buffered
+        // while one of our commits was outstanding stays on disk unread. The
+        // engine's own documentation names the two events that must drive it: a
+        // publish finishing and a convergence pass adopting a branch. Wiring that
+        // needs a way to deliver the replayed messages back out, which this
+        // contract has no member for; it is a separate change.
+        //
+        // Quiet is still right in the meantime. The message was kept, so "failed
+        // to decrypt" is false either way, and a banner the user cannot act on
+        // does not become correct because a different bug exists.
+        IngestOutcome.Buffered => true,
+        IngestOutcome.TransportDeferred => true,
+        IngestOutcome.ResourceRefused => true,
+
+        // Statements about where the message sits in group history, all of them
+        // normal. PreMembership is the case this predicate was written for: the
+        // commit that added us, which we cannot decrypt because we joined at the
+        // epoch after it. LosingBranch is what a lost commit race looks like on
+        // this engine — convergence picked the other branch by CommitOrdering,
+        // and that is the system working.
+        IngestOutcome.Stale
+        {
+            Reason: StaleReason.AlreadySeen
+                 or StaleReason.NotForThisClient
+                 or StaleReason.UnknownGroup
+                 or StaleReason.OwnEcho
+                 or StaleReason.PreMembership
+                 or StaleReason.BeyondAnchor
+                 or StaleReason.BeyondRollbackHorizon
+                 or StaleReason.BeyondAppRetention
+                 or StaleReason.LosingBranch,
+        } => true,
+
+        // Everything else is worth a user's attention, including LocalState —
+        // whose own documentation says to surface it, because no retry fixes
+        // this device's standing in the group.
+        _ => false,
+    };
+
+    /// <summary>
+    /// Whether a refusal means this device can no longer follow the group.
+    /// </summary>
+    /// <remarks>
+    /// <b>The same prose-matching bug as the pre-join predicate had, one arm
+    /// along.</b> This was <c>ex.Message.Contains("epoch")</c>, which read
+    /// marmot-cs's wording; the Dark Matter engine names the condition
+    /// <see cref="StaleReason.InvalidAgainstCanonicalState"/> — "does not apply to
+    /// the history this device actually holds" — and says nothing about epochs, so
+    /// the resync banner had stopped being raised at all. The substring arm is
+    /// kept for the legacy engines, which still throw text.
+    /// </remarks>
+    private static bool IndicatesOutOfSync(Exception ex) =>
+        ex is MlsIngestRefusedException refused
+            ? refused.Outcome is IngestOutcome.Stale
+              {
+                  Reason: StaleReason.InvalidAgainstCanonicalState,
+              }
+            : ex.Message?.Contains("epoch", StringComparison.OrdinalIgnoreCase) == true;
 
     /// <summary>
     /// What to hand the MLS service for one inbound kind-445 event.
@@ -2351,30 +2454,26 @@ public class MessageService : IMessageService, IDisposable
             decrypted = await _mlsService.DecryptMessageAsync(
                 chat.MlsGroupId!, encryptedData, nostrEvent.EventId, eventCreatedAt);
         }
-        catch (MarmotCs.Core.Errors.RaceLostException raceLost)
+        catch (Exception ex) when (IsExpectedInboundRefusal(ex))
         {
-            // MIP-03 tiebreaker: our staged commit lost the race against this incoming commit.
-            // The incoming commit was applied, our pending was cleared. Log and let the caller
-            // retry their operation at the new epoch.
-            _logger.LogWarning(
-                "HandleGroupMessage: MIP-03 race lost — incoming commit {WinnerId} won for group {GroupId}, new epoch {NewEpoch}",
-                raceLost.WinnerEventId, groupIdHex[..Math.Min(16, groupIdHex.Length)], raceLost.NewEpoch);
-            return;
-        }
-        catch (Exception ex) when (IsExpectedPreJoinCommitFailure(ex))
-        {
-            // Pre-join commit: we joined via Welcome at epoch N+1 and cannot
-            // decrypt the commit at epoch N that preceded our Welcome. This is
-            // expected MLS behaviour. We log at Warning (not Error) and don't
-            // surface to the UI via _decryptionErrors.
+            // An expected refusal: a commit from before we joined, a duplicate,
+            // our own echo, a message held for replay, a branch convergence did
+            // not select. Logged at Information because a healthy client produces
+            // these constantly, and deliberately NOT sent to _decryptionErrors —
+            // the UI turns that into "Group may need reset", which would be a lie.
             //
-            // NOTE: this filter is intentionally narrow. Broader catches (e.g.
-            // any "Unprocessable" or any "stale*") mask real bugs such as
-            // verify_id failures (MDK PR #287) and unhandled GroupContextExtensions
-            // commits (WN PR #791) — both of which surface as Unprocessable from
-            // the underlying MDK and must be visible.
-            _logger.LogWarning(
-                "HandleGroupMessage: skipping pre-join commit on event {EventId} in group {GroupId} (epoch={CurrentEpoch}, type={ExType}): {Error}",
+            // There is no arm here for a lost commit race. The old engine threw
+            // RaceLostException from this call and the app caught it; the Dark
+            // Matter engine has no such exception and does not decide races at
+            // ingest at all. An inbound commit arriving while ours is unresolved
+            // comes back Buffered, and which branch wins is settled later by
+            // CommitOrdering — priority class, then committer, then content
+            // digest, all of which every member computes identically. The losing
+            // side then sees Stale(LosingBranch). Both are listed above as
+            // expected, which is the whole of what this layer should do about a
+            // race: nothing.
+            _logger.LogInformation(
+                "HandleGroupMessage: expected refusal for event {EventId} in group {GroupId} (epoch={CurrentEpoch}, type={ExType}): {Error}",
                 nostrEvent.EventId[..Math.Min(16, nostrEvent.EventId.Length)],
                 groupIdHex[..Math.Min(16, groupIdHex.Length)],
                 chat.MlsEpoch,
@@ -2401,9 +2500,9 @@ public class MessageService : IMessageService, IDisposable
                 Timestamp = DateTime.UtcNow
             });
 
-            // If the error mentions an epoch mismatch the device has fallen behind and can no
-            // longer decrypt future messages — mark it so the UI can surface a resync banner.
-            if (!chat.IsOutOfSync && ex.Message?.Contains("epoch", StringComparison.OrdinalIgnoreCase) == true)
+            // The device has fallen behind and can no longer decrypt future messages —
+            // mark it so the UI can surface a resync banner.
+            if (!chat.IsOutOfSync && IndicatesOutOfSync(ex))
             {
                 chat.IsOutOfSync = true;
                 await _storageService.SaveChatAsync(chat);

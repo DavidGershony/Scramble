@@ -4,6 +4,7 @@ using System.Text.Json;
 using Scramble.Core.Services;
 using Scramble.Marmot;
 using Scramble.Marmot.Identity;
+using Scramble.Marmot.Ingest;
 using Scramble.Marmot.Storage;
 using Scramble.Marmot.Storage.Sqlite;
 using Scramble.Nostr.Crypto;
@@ -679,8 +680,16 @@ public sealed class DarkMatterMlsServiceTests : IDisposable
         byte[] contentOnly = Convert.FromBase64String(
             document.RootElement.GetProperty("content").GetString()!);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => alice.Service.DecryptMessageAsync(group.GroupId, contentOnly));
+        // MlsIngestRefusedException rather than InvalidOperationException: a
+        // refusal carries its IngestOutcome, and xUnit's ThrowsAsync matches the
+        // type exactly. Asserting the category as well is the point — "it threw"
+        // would also be satisfied by the engine failing for some unrelated reason.
+        MlsIngestRefusedException ex =
+            await Assert.ThrowsAsync<MlsIngestRefusedException>(
+                () => alice.Service.DecryptMessageAsync(group.GroupId, contentOnly));
+
+        var ignored = Assert.IsType<IngestOutcome.Ignored>(ex.Outcome);
+        Assert.Equal(InputRejectionCategory.InvalidEncoding, ignored.Category);
     }
 
     [Fact]
@@ -706,10 +715,15 @@ public sealed class DarkMatterMlsServiceTests : IDisposable
 
         Assert.Equal("hello", first.Plaintext);
 
-        InvalidOperationException second =
-            await Assert.ThrowsAsync<InvalidOperationException>(
+        MlsIngestRefusedException second =
+            await Assert.ThrowsAsync<MlsIngestRefusedException>(
                 () => bob.Service.DecryptMessageAsync(joined.GroupId, envelope));
 
+        // On the value as well as in the text. MessageService classifies on the
+        // outcome to decide whether a refusal is worth telling the user about,
+        // and a duplicate is the archetype of one that is not.
+        var ignored = Assert.IsType<IngestOutcome.Ignored>(second.Outcome);
+        Assert.Equal(InputRejectionCategory.Duplicate, ignored.Category);
         Assert.Contains("Duplicate", second.Message);
     }
 
@@ -945,5 +959,112 @@ public sealed class DarkMatterMlsServiceTests : IDisposable
                 group.GroupId, [alice.PublicKeyHex, "not-a-key"]));
 
         Assert.Contains("not-a-key", ex.Message);
+    }
+
+    // ------------------------------------------------- refusals carry their reason
+
+    /// <summary>
+    /// A declined message refuses with its <see cref="IngestOutcome"/> attached.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The contract <c>MessageService</c> now depends on.</b> Ingest classifies
+    /// rather than throwing, and this service's caller expects a message or an
+    /// exception — so the classification travels on the exception. Without it the
+    /// app is back to substring-matching an engine's prose to tell a duplicate
+    /// from a bad signature, which is the bug P11 step 3 fixed: the pre-flip
+    /// predicate matched marmot-cs's wording and silently stopped matching
+    /// anything, turning every expected refusal into a user-visible decryption
+    /// error.
+    /// </para>
+    /// <para>
+    /// It stays an <see cref="InvalidOperationException"/> by inheritance, so the
+    /// callers that only catch broadly are unaffected.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task AnUndecodableMessageRefusesWithItsOutcomeAttached()
+    {
+        var (alice, _, group) = await PairAsync();
+
+        MlsIngestRefusedException ex = await Assert.ThrowsAsync<MlsIngestRefusedException>(
+            () => alice.Service.DecryptMessageAsync(group.GroupId, [0x00, 0x01, 0x02, 0x03]));
+
+        var ignored = Assert.IsType<IngestOutcome.Ignored>(ex.Outcome);
+        Assert.Equal(InputRejectionCategory.InvalidEncoding, ignored.Category);
+
+        // The category is in the text as well as on the value, because this is
+        // also what lands in a log line.
+        Assert.Contains("InvalidEncoding", ex.Message);
+    }
+
+    /// <summary>
+    /// Traffic from before we joined is held, not judged.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The case the app most needs to recognise and least ought to shout
+    /// about.</b> A member admitted at epoch N cannot read what was sent at N-1 —
+    /// the keys were never theirs — and a client that reports that as a decryption
+    /// failure tells every new joiner their group is broken. That is the
+    /// regression P11 step 3 fixed at the <see cref="MessageService"/> layer.
+    /// </para>
+    /// <para>
+    /// <b>The outcome is <see cref="IngestOutcome.TransportDeferred"/>, and that
+    /// was worth measuring rather than assuming.</b> This test was written
+    /// expecting <see cref="StaleReason.PreMembership"/> — the reason whose own
+    /// documentation says "from before this device joined; not decryptable and not
+    /// a failure" — and the engine does not use it here. It cannot: at peel time
+    /// "not readable yet" and "never readable" look identical, so it defers
+    /// instead of ruling, and a later epoch or a retained snapshot may still open
+    /// the message. <c>PreMembership</c> is a judgement something reaches later
+    /// with more information, not one ingest makes on arrival.
+    /// </para>
+    /// <para>
+    /// Both are classified quiet by <c>MessageService</c>, so the user-visible
+    /// behaviour is the same either way — but a reader who trusted the reason name
+    /// would be looking for the wrong outcome in a log.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task AMessageFromBeforeWeJoinedIsDeferredRatherThanFailed()
+    {
+        var (alice, _, group) = await TrioAsync();
+
+        // Sent while the group is Alice and Bob, and before Carol exists in it.
+        byte[] earlier = await alice.Service.EncryptMessageAsync(group.GroupId, "before your time");
+
+        Party carol = await PartyAsync();
+        CoreKeyPackage carolKeyPackage = await PublishKeyPackageAsync(carol);
+
+        // Publishing is two steps, and the join is fail-closed on the second.
+        // Without it the Welcome is refused for naming a KeyPackage this device
+        // never published — which is a different test, and one that would hide
+        // this one behind a refusal that never reaches ingest.
+        await carol.Service.MarkKeyPackagePublishedAsync(
+            carolKeyPackage, carolKeyPackage.NostrEventId!);
+
+        MlsWelcome staged = await alice.Service.StageAddMemberAsync(group.GroupId, carolKeyPackage);
+        await alice.Service.MergeStagedAsync(group.GroupId);
+
+        MlsGroupInfo joined = await carol.Service.ProcessWelcomeAsync(
+            staged.WelcomeData,
+            "0".PadLeft(64, '0'),
+            carolKeyPackage.NostrEventId);
+
+        MlsIngestRefusedException ex =
+            await Assert.ThrowsAsync<MlsIngestRefusedException>(
+                () => carol.Service.DecryptMessageAsync(joined.GroupId, earlier));
+
+        Assert.IsType<IngestOutcome.TransportDeferred>(ex.Outcome);
+
+        // Retryable, which is the engine's way of saying the bytes were kept.
+        Assert.True(ex.Outcome.IsRetryable);
+
+        // And the app stays quiet about it — the assertion that ties this to the
+        // regression. IsExpectedInboundRefusal is private, so this is pinned
+        // through MessageService in InboundRefusalClassificationTests; what is
+        // proved here is that the outcome it will be handed is this one.
+        Assert.False(ex.Outcome.Advanced);
     }
 }
