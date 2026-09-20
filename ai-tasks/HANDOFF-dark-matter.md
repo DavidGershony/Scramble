@@ -111,10 +111,9 @@ what is left, what blocks what, and the findings behind each. This file's
 §3a–§3ab are history in order; read backwards only as far as you need.
 
 **The one-line answer:** P0–P10 are done, P11's flip is in (§3af), step 3 is done
-(§3ah), and the next thing worth doing is **`remaining-work` §16 — buffered
-messages are never replayed** — ahead of steps 4–5, because it is user-visible
-message loss rather than cleanup. All of it under I5's freeze, which the flip
-started.
+(§3ah), §16's replay gap is fixed (§3ai) — and it surfaced **§17, a replayed commit
+whose epoch advance is never written down**, which is the next thing worth doing,
+ahead of steps 4–5. All of it under I5's freeze, which the flip started.
 
 **Four things this migration keeps teaching, which are worth reading before
 starting anything here:**
@@ -2483,6 +2482,69 @@ choose, and with a kind granted only after pairing. Test doubles agree with our
 assumptions by construction. **The Android head was not compiled locally** — no
 Android SDK on this machine — so CI is the first build of it.
 
+### 3ai. §16 is fixed, by split-and-mutate, and the mutation round earned its keep
+
+2026-09-20. Buffered messages are delivered now:
+`IMlsService.ReplayBufferedMessagesAsync(groupId)` asks the engine for what it was
+holding, and `MessageService.DrainReplayedMessagesAsync` calls it after **every**
+merge and after every rollback that actually cleared a commit. Delivery reuses the
+live inbound path — the tail of `HandleGroupMessageEventAsync` is now
+`DeliverDecryptedMessageAsync`, so nothing is restated — and dedups on
+`RumorEventId`, because a replayed message never had a transport event id.
+
+**Run as split-and-mutate** (`.claude/skills/split-and-mutate`), which is the first
+time that skill has been used on app-layer rather than protocol code. It was the
+right call for the same reason the skill names: the failure mode here is *silence*.
+The brief fixed the contract — exact signature, empty-not-throwing, no-op on both
+legacy backends, the two call moments, the dedup key, and "a replay failure must not
+fail the commit". The implementer wrote no tests; the tests were written against the
+contract, before the implementation existed and without reading it. All eleven
+passed on first compile, which says the contract was unambiguous, not that the work
+was verified — that came next.
+
+**Six mutations. Five caught, one survived, and the survivor was the point.**
+
+| Mutation | Result |
+|---|---|
+| Nobody ever asks (the pre-fix state) | caught — 3 fail |
+| The adapter answers empty instead of asking the engine | caught — 3 fail |
+| The `RumorEventId` dedup ignored | caught — 1 fails |
+| A replay failure propagates instead of being logged | caught — 1 fails |
+| A replayed message stamped with the replay's time, not its own | caught — 1 fails |
+| **Rollback no longer replays** | **SURVIVED** |
+
+The survivor was a hole in the *tests*, not dead code: the wiring tests covered the
+merge path and the adapter test covered replay-after-clear, and nothing joined them
+up — so deleting the replay call from `RollbackStagedCommitAsync` left all nine
+green. `AFailedPublishAlsoAsksForHeldMessages` closes it, and the mutation fails
+now. Worth noting which arm it was: **the rollback arm matters more than the merge
+arm**, because a failed publish is exactly when other members' traffic has been
+piling up behind our unacknowledged commit.
+
+**The engine facts the brief asserted all held** when the implementer re-checked
+them, including that `ReplayResult.Delivered` carries application messages only.
+Two of my three flagged uncertainties came back as "do nothing" with reasons —
+`chat.MlsEpoch` is only ever set at create/join and the live commit path does not
+maintain it either, so replay maintaining it would be an inconsistency rather than a
+fix.
+
+**One addition beyond the contract, flagged by the implementer and kept:**
+`MlsDecryptedMessage.RumorCreatedAt`. Without it a replayed message has no send time
+and gets stamped with the moment of the replay, sorting an old message to the bottom
+of a conversation it belongs in the middle of. It is now tested and mutated.
+
+**It also found §17, which is not fixed and is arguably worse than §16 was:** a
+replayed *commit* advances the epoch in memory and nothing writes it down, so the
+advance is lost on the next load and the record has already been marked processed.
+Read `remaining-work` §17 before touching replay again.
+
+**Both agents' worktrees arrived stale** — 189 commits the first time, 193 the
+second — and both detected it and fast-forwarded. That is now twice in one session
+on top of the 182-commit case already in §3ae. **Assume a fresh worktree is behind
+and check `git log -1` before anything else**; also `git submodule update --init
+--recursive`, because a fresh worktree has none and `Scramble.Core` will not compile
+without `lib/dotnet-mls`.
+
 ### 3ah. P11 step 3 is done, and the app was telling users to reset healthy groups
 
 2026-09-20. Step 3 was "port `IMessageService`, which sits on `IMlsService` and
@@ -2666,7 +2728,7 @@ rebuild.
 
 | Gate | Green |
 |---|---|
-| Fast unit | **1196 Marmot / 627 Core / 252 UI**, 0 failures (1 Core + 2 UI skips, pre-existing) |
+| Fast unit | **1196 Marmot / 638 Core / 252 UI**, 0 failures (1 Core + 2 UI skips, pre-existing) |
 | Integration (CI's filter) | **105 total: 101 passed, 0 failed, 4 skipped** |
 | `Category=DarkMatterInterop` | **33 / 33**, zero skips |
 | `./scripts/check-drift.ps1` | no rules triggered |

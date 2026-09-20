@@ -860,7 +860,14 @@ old one cover that the new one enters beneath?**
 
 ---
 
-## 16. Buffered messages are never replayed (2026-09-20) — the largest open defect
+## 16. Buffered messages are never replayed — FIXED 2026-09-20
+
+**Closed by a split-and-mutate pass** (`IMlsService.ReplayBufferedMessagesAsync`,
+`MessageService.DrainReplayedMessagesAsync`, called after every merge and every
+rollback that cleared a commit). Eleven tests, six mutations, one of which survived
+first time and found a real hole in the tests — see the handoff. **It surfaced a
+second defect one layer down, which is not fixed: §17.** The original write-up
+follows, because the reasoning about why no gate caught it is worth keeping.
 
 Found during P11 step 3, deliberately not fixed there: the fix needs a contract
 member `IMlsService` does not have, which is a change of its own rather than scope
@@ -912,3 +919,46 @@ side at a time; the lifecycle tests do not interleave a send with a pending comm
 adapter a real `IMessageRelay` is the named condition for converting `IMlsService`
 to async. Whoever builds the replay path should read that item first: the two
 changes want the same seam, and doing them separately means designing it twice.
+
+---
+
+## 17. A replayed commit advances the epoch and never writes it down (2026-09-20)
+
+Found by the implementer of §16 while reading the engine, flagged rather than
+fixed, and confirmed independently afterwards. **It is the same class of defect as
+§16 — state the engine holds correctly and the caller never persists — one layer
+further down.**
+
+**The facts, each checked rather than inferred.**
+
+- `MessageIngest`'s ingestibility gate sits **before** dispatch, so while one of our
+  commits is staged and unacknowledged it buffers *everything*, handshakes included
+  — not just application messages.
+- `MarmotSession.IngestAsync` writes the group down when the epoch moves;
+  `WriteLiveStateAsync` appears six times in that file. `ConvergeAsync` writes
+  before it replays.
+- `MarmotSession.ReplayAsync` is a bare `_ingest.ReplayAsync(_group, GroupId, ct)`,
+  and `MessageIngest.ReplayAsync` contains **no live-state write at all** (grep: 0).
+
+So a replay that applies a buffered commit advances the in-memory group, marks the
+record `Processed` — making it ineligible for a future replay — and loses the epoch
+on the next load.
+
+**The reachable path is a rollback, and that is worth being precise about.** After a
+*merge* of our own commit, a peer's commit that was buffered at the old epoch no
+longer applies and comes back `Stale`, which is harmless. The damaging sequence is:
+our publish fails → `RollbackStagedCommitAsync` clears our commit → the peer's
+buffered commit now applies cleanly → the epoch advances in memory only → restart,
+and the device is behind with no record left to replay. A failed publish is exactly
+when other members' commits have been piling up behind ours.
+
+**Why the §16 fix does not paper over it.** The service layer cannot honestly patch
+this. `PersistRatchetAsync` is the obvious candidate and is wrong by its own
+remarks: it deliberately skips the routing re-sync that only a commit needs. The
+write belongs where the other five live, inside the session.
+
+**What fixing it involves.** A live-state write in `MarmotSession.ReplayAsync` when
+the replay moved the epoch, mirroring `IngestAsync`, plus the routing re-sync a
+commit needs. The test is an engine-suite test: buffer a peer's commit behind a
+staged commit of ours, clear ours, replay, reopen the store, assert the epoch
+survived. That is `Scramble.Marmot.Tests` territory, not `Scramble.Core.Tests`.
