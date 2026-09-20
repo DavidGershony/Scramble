@@ -2457,7 +2457,15 @@ Two things cost a false negative, both now in §4's command list:
 - **`JAVA_HOME` matters as much as the SDK path.** The two MSBuild properties alone
   were not enough.
 
-**This is the only check that the head compiles, and it is manual.**
+**A CI job now builds it** (`.github/workflows/dotnet-android.yml`, added
+2026-09-20): one Debug build on `ubuntu-latest`, no path filter, pinned to the same
+Android workload set `publish.yml` uses. `docs/ci-setup.md` lists `android` among
+the required checks. **It is a compile gate, not a smoke test** — I5's freeze-exit
+condition needs a test that *runs* the head (emulator, create a group, send and
+receive), which still does not exist. A green tick there is necessary and not
+sufficient.
+
+The local command below remains the faster loop, and until now was the only check:
 `dotnet-desktop.yml` builds `Scramble.Desktop.slnf` with `DesktopOnly=true`, so the
 head is excluded; `drift.yml` only path-filters that directory; `publish.yml` is the
 one workflow that builds it, and it triggers on a `v*` tag or a dispatch. So

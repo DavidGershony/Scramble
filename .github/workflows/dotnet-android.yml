@@ -1,0 +1,74 @@
+name: Android head (required)
+
+# Why this exists: until 2026-09-20, nothing in CI compiled the Android head on a
+# PR. `dotnet-desktop.yml` passes DesktopOnly=true, which excludes it by design;
+# `drift.yml` only path-filters src/Scramble.Mobile.Android/** to police shell
+# purity and never builds; `publish.yml` does build it, but only on a `v*` tag or a
+# manual dispatch. So the head the P11 cutover plan designates as *leading* the
+# migration could break on master and nobody would learn until release day.
+#
+# It is deliberately NOT path-filtered. Almost anything in Scramble.Core,
+# Scramble.Presentation or Scramble.UI can break this head — the mobile project is
+# a thin shell that multi-targets the shared views — so "which paths affect
+# Android" is very nearly "all of them", and a filter would mostly serve to hide
+# the breakage it was meant to catch.
+#
+# What this does NOT do, and it matters for I5: it proves the head *compiles*, not
+# that it runs. I5's freeze-exit condition is "an equivalent smoke test green in
+# CI", and a build is not a smoke test. A real one needs an emulator plus a
+# scripted create-group / send-message pass, which is its own piece of work.
+# Do not read a green tick here as the freeze having lifted.
+
+# ReactiveUI / Splat NuGet packages have a revoked author signing certificate.
+# Linux .NET SDK does full OCSP/CRL checking via OpenSSL, which nuget.config's
+# signatureValidationMode=accept cannot suppress. Mirrors publish.yml and
+# integration.yml, both of which hit this on ubuntu runners.
+env:
+  DOTNET_NUGET_SIGNATURE_VERIFICATION: false
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+
+  android:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # lib/dotnet-mls carries the MLS implementation the engine is built on,
+          # and Scramble.Core will not compile without it. A shallow checkout
+          # without submodules fails here with a missing-symbol error that reads
+          # like a code fault — see the handoff's trap table.
+          submodules: recursive
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install Android workload
+        # Pinned to the same workload set publish.yml uses, for the reasons spelled
+        # out there: an unpinned install has resolved to a set whose Mono runtime
+        # packs are not on any public feed (NU1102). Keep the two in step — if one
+        # is bumped, bump both, and verify the version exists on nuget.org under
+        # Microsoft.NET.Workloads.10.0.200 first.
+        run: dotnet workload install android --version 10.0.203.1
+
+      - name: Restore
+        run: dotnet restore src/Scramble.Mobile.Android/Scramble.Mobile.Android.csproj
+
+      # Debug only, not a Debug/Release matrix. This job answers one question —
+      # does the head still compile — and the second configuration doubles the
+      # runner cost to answer it twice. publish.yml builds Release at tag time,
+      # signed, which is where a Release-only failure would actually surface.
+      - name: Build Android head
+        run: >
+          dotnet build src/Scramble.Mobile.Android/Scramble.Mobile.Android.csproj
+          --no-restore --configuration Debug

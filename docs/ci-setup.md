@@ -23,16 +23,39 @@ Add these required status checks:
 ```
 build (Debug)
 build (Release)
+android
 integration
 drift
 ```
 
 `integration` and `drift` are both path-conditional — on PRs that don't
 touch the relevant paths, GitHub reports the check as **skipped**, which
-counts as passing for branch protection.
+counts as passing for branch protection. `android` is **not**
+path-conditional, deliberately: see below.
 
 Enable **Require branches to be up to date before merging** so the required
 checks are computed against `master`'s current tip.
+
+## Why `android` exists and is not path-conditional
+
+Added 2026-09-20. Until then **no workflow compiled the Android head on a PR**:
+`dotnet-desktop.yml` passes `DesktopOnly=true`, which excludes it by design;
+`drift.yml` path-filters `src/Scramble.Mobile.Android/**` only to police shell
+purity and never builds; and `publish.yml` builds it on a `v*` tag or a manual
+dispatch. The head that P11's cutover plan designates as **leading** the migration
+could therefore break on master and nobody would find out until release day.
+
+It is not path-filtered because the mobile project is a thin shell that
+multi-targets the shared views out of `src/Scramble.UI`, so nearly any change to
+`Scramble.Core`, `Scramble.Presentation` or `Scramble.UI` can break it. A filter
+would mostly hide the breakage it exists to catch. The job is one Debug build on
+`ubuntu-latest` — a few minutes, no emulator.
+
+**It is a compile gate, not a smoke test.** `CLAUDE.md`'s I5 lifts the pivot
+freeze when "the pivot's new head has an equivalent smoke test green in CI, plus
+one week of stabilisation". A build is not that. Lifting the freeze still needs a
+test that *runs* the head — emulator, create a group, send and receive — which
+does not exist yet. A green `android` check is necessary and not sufficient.
 
 ## Why `integration` is path-conditional
 
