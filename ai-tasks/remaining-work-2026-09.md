@@ -857,3 +857,58 @@ old one cover that the new one enters beneath?**
   engine's `Nip59GiftWrap`. `InboundWelcomeInteropTests` is the first test to put
   the app's unwrap in front of a real peer's gift wrap, so it covers this too —
   but only in the inbound direction, and only for kind 444.
+
+---
+
+## 16. Buffered messages are never replayed (2026-09-20) — the largest open defect
+
+Found during P11 step 3, deliberately not fixed there: the fix needs a contract
+member `IMlsService` does not have, which is a change of its own rather than scope
+creep into a classification fix.
+
+**The gap.** The engine holds a message it cannot read yet — one that arrived while
+a commit of ours was outstanding, or that belongs to a branch convergence has not
+settled — and answers `Buffered`. The bytes are durable; the engine replays them
+through `MessageIngest.ReplayAsync` once the group can read them. **Nothing in the
+app ever calls it.** Verified by grep across `Scramble.Core`, `Scramble.Presentation`,
+both UI heads and the macOS head:
+
+| Engine entry point | App callers |
+|---|---|
+| `ReplayAsync` | **0** |
+| `ConvergeAsync` | **0** |
+| `DrainAsync` | **0** |
+
+`MergeStagedAsync` and `ClearStagedAsync` do not trigger a replay either. So a
+message buffered during any stage → publish → merge window stays on disk, unread,
+indefinitely.
+
+**Why this is worse than it sounds.** The engine's own documentation names the two
+events that must drive replay — a publish finishing, and a convergence pass adopting
+a branch — and warns that a caller which returns `Buffered` without scheduling a
+drain *"has silently dropped the message while reporting that it kept it."* That is
+exactly the app's present behaviour. It is message loss from the user's point of
+view, with a durable copy on disk proving it did not have to be.
+
+**Why it did not show up in any gate.** Buffering needs a commit of ours to be
+outstanding when someone else's message arrives — a window the tests never open,
+because they publish and merge in the same breath. The interop suite drives one
+side at a time; the lifecycle tests do not interleave a send with a pending commit.
+
+**What fixing it involves.**
+
+1. A way to deliver replayed messages back to `MessageService`. `IMlsService` has no
+   member for "here are messages that became readable" — `DecryptMessageAsync` is
+   one-in-one-out. The honest shape is probably an observable or a drain call that
+   returns the newly-readable messages, which is also the seam a real
+   `IMessageRelay` would want later.
+2. Calling it at the two named events: after `MergeStagedAsync` / `ClearStagedAsync`
+   resolve a publish, and after a convergence pass adopts a branch.
+3. A test that actually opens the window: stage a commit, deliver a peer's message
+   while it is pending, merge, and assert the message arrives. That test is the
+   whole value of the fix, and none of the existing suites can express it yet.
+
+**Note the interaction with `remaining-work` §5's async question.** Giving the
+adapter a real `IMessageRelay` is the named condition for converting `IMlsService`
+to async. Whoever builds the replay path should read that item first: the two
+changes want the same seam, and doing them separately means designing it twice.

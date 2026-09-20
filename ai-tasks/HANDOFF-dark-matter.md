@@ -110,8 +110,10 @@ The submodule sits exactly on the tag; keep it that way. Two interop peers
 what is left, what blocks what, and the findings behind each. This file's
 §3a–§3ab are history in order; read backwards only as far as you need.
 
-**The one-line answer:** P0–P10 are done, P11's flip is in (§3af), and P11 step 3
-(`IMessageService`) is the current work — under I5's freeze, which the flip
+**The one-line answer:** P0–P10 are done, P11's flip is in (§3af), step 3 is done
+(§3ah), and the next thing worth doing is **`remaining-work` §16 — buffered
+messages are never replayed** — ahead of steps 4–5, because it is user-visible
+message loss rather than cleanup. All of it under I5's freeze, which the flip
 started.
 
 **Four things this migration keeps teaching, which are worth reading before
@@ -2481,6 +2483,68 @@ choose, and with a kind granted only after pairing. Test doubles agree with our
 assumptions by construction. **The Android head was not compiled locally** — no
 Android SDK on this machine — so CI is the first build of it.
 
+### 3ah. P11 step 3 is done, and the app was telling users to reset healthy groups
+
+2026-09-20. Step 3 was "port `IMessageService`, which sits on `IMlsService` and
+should mostly follow — size S–M". The mechanical part was S. What it uncovered was
+not.
+
+**Two predicates in `MessageService` classified engine outcomes by matching
+marmot-cs's prose, and both had silently stopped working at the flip.**
+
+- `IsExpectedPreJoinCommitFailure` required the substring `"UnprocessableResult"`,
+  which the Dark Matter adapter never emits. So it matched nothing — and not only
+  for pre-join commits: **every** expected refusal (a duplicate, our own echo,
+  traffic for another group, a message held for replay) fell through to
+  `DecryptionErrors`, which `ChatListViewModel` renders as *"Failed to decrypt
+  message… Group may need reset."* The app was advising a reset of a healthy group
+  on ordinary relay traffic.
+- One arm along, and unlisted when the work started: the out-of-sync mark was
+  `ex.Message.Contains("epoch")`. The engine names that condition
+  `Stale(InvalidAgainstCanonicalState)` and never says "epoch", so **the resync
+  banner had stopped being raised at all.**
+
+Both now classify on a typed `IngestOutcome` carried by a new
+`MlsIngestRefusedException`. Unknown outcomes are surfaced rather than swallowed —
+a refusal wrongly shown is investigable, one wrongly hidden is not. The legacy
+substring path stays for `ManagedMlsService`/`MlsService` until step 5, scoped so it
+cannot second-guess a typed outcome.
+
+**The dead `RaceLostException` catch is gone, and what replaced it is the useful
+part.** The old engine threw it from this call; the new engine does not decide races
+at ingest at all. An inbound commit arriving while ours is unresolved comes back
+`Buffered`; `CommitOrdering` settles the branch later; the loser sees
+`Stale(LosingBranch)`. Both are expected, so the right behaviour at this layer is
+nothing.
+
+**It also found the largest open defect in the migration and correctly refused to
+fix it here:** nothing in the app calls `ReplayAsync`, `ConvergeAsync` or
+`DrainAsync`, so buffered messages are never delivered. `remaining-work` §16.
+
+**Verified on this tree, not taken from the worktree's report** (§3ae's rule). The
+agent's own worktree was **189 commits stale** and it fast-forwarded itself after
+checking the move was lossless. Fast gate here: **1196 / 627 / 252**, which
+reconciles exactly with its reported 626 — its Core baseline was one lower because
+`DesktopDll_MatchesRustBuildOutput_WhenBothExist` skips without the Rust *build
+tree*, which a fresh worktree lacks. Its two load-bearing mutations were re-run
+here and reproduce exactly: predicate ignores the typed outcome → **14 fail**;
+out-of-sync back to the substring → **1 fails**. Integration gate after the merge:
+**101 passed, 0 failed, 4 skipped.**
+
+**One mutation survives and is labelled rather than dressed up:** the new
+`Stale`/`Rejected` detail in `Describe` is diagnostic text only and is not
+load-bearing, because provoking a `Stale` outcome needs a fork — the engine suite's
+job. Worth reading its other note too: running only the new test class hid two
+pre-existing tests the change had broken, because xUnit's `ThrowsAsync` matches an
+exception type exactly. A scoped green is not a green.
+
+**Two free items for step 4**, found on the way: `NostrService.cs:19` still has an
+unused `using MarmotCs.Protocol.Mip02`, and `INostrService.WelcomeMessages` /
+`MarmotWelcomeEvent.RecipientPublicKey` are dead — the live inbound path is
+`MessageService`'s `case 444` off the general `Events` stream. Do not confuse that
+with `MlsWelcome.RecipientPublicKey`, which is live production code asserted by
+`EndToEndChatIntegrationTests`.
+
 ### 3ag. The peer is at `wn 0.10.3`, and §3ac's condition is met
 
 2026-09-20. **Not a decision — an accident that landed on the right side, and it
@@ -2602,7 +2666,7 @@ rebuild.
 
 | Gate | Green |
 |---|---|
-| Fast unit | **1196 Marmot / 596 Core / 252 UI**, 0 failures (1 Core + 2 UI skips, pre-existing) |
+| Fast unit | **1196 Marmot / 627 Core / 252 UI**, 0 failures (1 Core + 2 UI skips, pre-existing) |
 | Integration (CI's filter) | **105 total: 101 passed, 0 failed, 4 skipped** |
 | `Category=DarkMatterInterop` | **33 / 33**, zero skips |
 | `./scripts/check-drift.ps1` | no rules triggered |
