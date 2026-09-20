@@ -1044,6 +1044,16 @@ public class ManagedMlsService : IMlsService
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// No-op: marmot-cs has no held-message store to re-run. Its
+    /// <c>ProcessMessageAsync</c> either applies a message or reports it
+    /// unprocessable, and nothing is kept for a later attempt — so there is
+    /// never anything here to replay.
+    /// </remarks>
+    public Task<IReadOnlyList<MlsDecryptedMessage>> ReplayBufferedMessagesAsync(byte[] groupId) =>
+        Task.FromResult<IReadOnlyList<MlsDecryptedMessage>>([]);
+
     public async Task<byte[]> StageRemoveMemberAsync(byte[] groupId, string memberPublicKey)
     {
         EnsureInitialized();
