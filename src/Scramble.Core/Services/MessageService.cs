@@ -829,6 +829,7 @@ public class MessageService : IMessageService, IDisposable
                 _logger.LogInformation("InvitePeerToSyncGroup: commit confirmed, event {EventId}", commitEventId);
 
                 await _mlsService.MergeStagedAsync(chat.MlsGroupId);
+                await DrainReplayedMessagesAsync(chat.MlsGroupId, "InvitePeerToSyncGroup");
 
                 // Mark commit as processed
                 await _storageService.SaveMessageAsync(new Message
@@ -1283,6 +1284,8 @@ public class MessageService : IMessageService, IDisposable
                     await _mlsService.MergeStagedAsync(chat.MlsGroupId);
                     _logger.LogInformation("AddMember: local MLS state merged to new epoch");
 
+                    await DrainReplayedMessagesAsync(chat.MlsGroupId, "AddMember");
+
                     // Mark commit as processed to prevent re-processing our own relay echo
                     await _storageService.SaveMessageAsync(new Message
                     {
@@ -1414,6 +1417,7 @@ public class MessageService : IMessageService, IDisposable
 
                     // Advance local MLS state
                     await _mlsService.MergeStagedAsync(chat.MlsGroupId!);
+                    await DrainReplayedMessagesAsync(chat.MlsGroupId!, "AddPeerDevice");
 
                     // Mark commit as processed
                     await _storageService.SaveMessageAsync(new Message
@@ -1470,11 +1474,108 @@ public class MessageService : IMessageService, IDisposable
                 return;
 
             await _mlsService.ClearStagedAsync(groupId);
+
+            // The commit is gone, so the group can read input again — and anything
+            // that arrived while it was outstanding is still held. Same obligation
+            // as after a merge; see DrainReplayedMessagesAsync.
+            await DrainReplayedMessagesAsync(groupId, operation);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex,
                 "{Operation}: could not clear the staged commit — further commits on this group will fail to stage",
+                operation);
+        }
+    }
+
+    /// <summary>
+    /// Delivers the inbound messages the engine held while a commit of ours was
+    /// outstanding.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Owed after every commit resolution, both ways round.</b> While one of our
+    /// commits is unresolved the engine cannot take input, so a peer's message that
+    /// arrives in that window is kept rather than delivered — durable, and invisible
+    /// until something asks for it. Merging the commit and abandoning it both end
+    /// the window, so both owe this call; before P11 nothing made it at all and
+    /// those messages stayed on disk unread indefinitely.
+    /// </para>
+    /// <para>
+    /// <b>Never throws.</b> Same reasoning as
+    /// <see cref="RollbackStagedCommitAsync"/>: the operation that triggered this
+    /// has already succeeded, replay is recovery on top of it, and a recovery pass
+    /// that failed the thing it was recovering for would be worse than the gap it
+    /// closes.
+    /// </para>
+    /// <para>
+    /// <b>Deduplicated on the rumor id, not the transport id.</b> A replayed message
+    /// never had a kind-445 event of its own to be remembered by — it comes back out
+    /// of the engine as MLS bytes — so the transport-id check the live path uses
+    /// cannot see it, and a message already stored would be delivered twice. The
+    /// rumor id is the one identifier both paths share.
+    /// </para>
+    /// <para>
+    /// Commits are not expected here and are skipped rather than trusted: a replay
+    /// pass does apply held commits, but they advance the epoch without producing a
+    /// message and the engine does not return them.
+    /// </para>
+    /// </remarks>
+    private async Task DrainReplayedMessagesAsync(byte[] groupId, string operation)
+    {
+        try
+        {
+            IReadOnlyList<MlsDecryptedMessage> replayed =
+                await _mlsService.ReplayBufferedMessagesAsync(groupId);
+
+            if (replayed.Count == 0)
+                return;
+
+            var groupIdHex = Convert.ToHexString(groupId).ToLowerInvariant();
+            var chat = await _storageService.GetChatByGroupIdAsync(groupIdHex);
+
+            if (chat == null)
+            {
+                _logger.LogWarning(
+                    "{Operation}: replay produced {Count} message(s) for group {GroupId} but no chat is stored for it",
+                    operation, replayed.Count, groupIdHex[..Math.Min(16, groupIdHex.Length)]);
+                return;
+            }
+
+            int delivered = 0;
+            int duplicates = 0;
+
+            foreach (MlsDecryptedMessage decrypted in replayed)
+            {
+                if (decrypted.IsCommit)
+                    continue;
+
+                if (!string.IsNullOrEmpty(decrypted.RumorEventId)
+                    && await _storageService.GetMessageByRumorEventIdAsync(decrypted.RumorEventId) != null)
+                {
+                    duplicates++;
+                    continue;
+                }
+
+                // The rumor's own created_at, because a replayed message has no
+                // transport event to take one from. Stamping it with the moment of
+                // the replay would sort an old message to the bottom of the chat.
+                var timestamp = decrypted.RumorCreatedAt > 0
+                    ? DateTimeOffset.FromUnixTimeSeconds(decrypted.RumorCreatedAt).UtcDateTime
+                    : DateTime.UtcNow;
+
+                await DeliverDecryptedMessageAsync(chat, decrypted, nostrEventId: null, timestamp);
+                delivered++;
+            }
+
+            _logger.LogInformation(
+                "{Operation}: replayed {Delivered} buffered message(s) for chat {ChatName} ({Duplicates} already stored)",
+                operation, delivered, chat.Name, duplicates);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "{Operation}: could not replay buffered messages — any message held during this commit stays unread until the next one",
                 operation);
         }
     }
@@ -1510,6 +1611,7 @@ public class MessageService : IMessageService, IDisposable
                 // ↑ throws PublishUnconfirmedException on no-OK
 
                 await _mlsService.MergeStagedAsync(chat.MlsGroupId);
+                await DrainReplayedMessagesAsync(chat.MlsGroupId, "RemoveMember");
             }
 
             chat.ParticipantPublicKeys.Remove(memberPublicKey);
@@ -1564,6 +1666,7 @@ public class MessageService : IMessageService, IDisposable
             await _nostrService.PublishCommitEventAsync(commitData);
 
             await _mlsService.MergeStagedAsync(chat.MlsGroupId);
+            await DrainReplayedMessagesAsync(chat.MlsGroupId, "UpdateAdminPubkeys");
 
             // Update local chat state
             chat.AdminPublicKeys = normalized;
@@ -2309,18 +2412,16 @@ public class MessageService : IMessageService, IDisposable
         // Held, not lost. The bytes are durable and the engine replays them
         // through MessageIngest.ReplayAsync once the group can read them.
         //
-        // KNOWN GAP, deliberately not fixed here: nothing in this app ever calls
-        // ReplayAsync, ConvergeAsync or DrainAsync, and MergeStagedAsync /
-        // ClearStagedAsync do not trigger a replay either — so a message buffered
-        // while one of our commits was outstanding stays on disk unread. The
-        // engine's own documentation names the two events that must drive it: a
-        // publish finishing and a convergence pass adopting a branch. Wiring that
-        // needs a way to deliver the replayed messages back out, which this
-        // contract has no member for; it is a separate change.
+        // Quiet is right because the replay is now actually scheduled: every
+        // MergeStagedAsync and every rollback that clears a pending commit calls
+        // DrainReplayedMessagesAsync, which delivers whatever became readable.
+        // So a message buffered while one of our commits was outstanding arrives
+        // when that commit resolves, and "failed to decrypt" would be false.
         //
-        // Quiet is still right in the meantime. The message was kept, so "failed
-        // to decrypt" is false either way, and a banner the user cannot act on
-        // does not become correct because a different bug exists.
+        // STILL OPEN: the other event the engine names as owing a replay is a
+        // convergence pass adopting a branch, and ConvergeAsync has no app caller
+        // at all. Messages buffered on a branch we later adopt are still unread
+        // until some commit of ours happens to resolve afterwards.
         IngestOutcome.Buffered => true,
         IngestOutcome.TransportDeferred => true,
         IngestOutcome.ResourceRefused => true,
@@ -2543,6 +2644,43 @@ public class MessageService : IMessageService, IDisposable
             return;
         }
 
+        await DeliverDecryptedMessageAsync(chat, decrypted, nostrEvent.EventId, nostrEvent.CreatedAt);
+    }
+
+    /// <summary>
+    /// Turns one decrypted MLS message into a stored message, a
+    /// <see cref="NewMessages"/> notification and a chat update.
+    /// </summary>
+    /// <param name="chat">The chat the message belongs to.</param>
+    /// <param name="decrypted">What the MLS layer handed back. Not a commit.</param>
+    /// <param name="nostrEventId">
+    /// The transport event that carried it, when there was one. Null for a message
+    /// the engine replayed out of its own store — see
+    /// <see cref="DrainReplayedMessagesAsync"/>. It is only ever used for
+    /// relay-echo deduplication, so a null simply skips the bookkeeping that
+    /// exists for echoes that cannot happen.
+    /// </param>
+    /// <param name="timestamp">
+    /// When the message was sent. The transport event's <c>created_at</c> on the
+    /// live path; the inner rumor's on the replay path, which is the only send
+    /// time a replayed message has.
+    /// </param>
+    /// <remarks>
+    /// <b>Lifted out of <c>HandleGroupMessageEventAsync</c> so replay can reuse
+    /// it, and deliberately not copied.</b> Reaction folding, MIP-04 media typing,
+    /// reply resolution, unknown-sender backfill and the unread count are all
+    /// decisions about what a message <i>is</i>, not about how it arrived, and a
+    /// second copy of them would drift from this one the first time any of them
+    /// changed. Everything above the split — the h-tag lookup, the transport
+    /// dedup, the decrypt and its refusal classification — is genuinely about
+    /// arrival and stays where it was.
+    /// </remarks>
+    private async Task DeliverDecryptedMessageAsync(
+        Chat chat,
+        MlsDecryptedMessage decrypted,
+        string? nostrEventId,
+        DateTime timestamp)
+    {
         _logger.LogInformation("HandleGroupMessage: decrypted message from {Sender}, epoch={Epoch}, content length={Len}, hasImage={HasImage}, rumorKind={Kind}",
             decrypted.SenderPublicKey[..Math.Min(16, decrypted.SenderPublicKey.Length)], decrypted.Epoch, decrypted.Plaintext.Length,
             decrypted.ImageUrl != null, decrypted.RumorKind);
@@ -2573,8 +2711,10 @@ public class MessageService : IMessageService, IDisposable
                 _logger.LogWarning("HandleGroupMessage: reaction target event {EventId} not found in local DB", decrypted.ReactionTargetEventId);
             }
 
-            // Mark this event as processed so relay echoes are skipped
-            if (!string.IsNullOrEmpty(nostrEvent.EventId))
+            // Mark this event as processed so relay echoes are skipped. A replayed
+            // reaction has no transport event to echo, so there is nothing to mark;
+            // re-applying one is harmless because the add below is idempotent.
+            if (!string.IsNullOrEmpty(nostrEventId))
             {
                 var reactionMarker = new Message
                 {
@@ -2583,8 +2723,8 @@ public class MessageService : IMessageService, IDisposable
                     SenderPublicKey = decrypted.SenderPublicKey,
                     Type = MessageType.Text,
                     Content = string.Empty,
-                    NostrEventId = nostrEvent.EventId,
-                    Timestamp = nostrEvent.CreatedAt,
+                    NostrEventId = nostrEventId,
+                    Timestamp = timestamp,
                     IsDeleted = true // Hidden from UI
                 };
                 await _storageService.SaveMessageAsync(reactionMarker);
@@ -2638,10 +2778,10 @@ public class MessageService : IMessageService, IDisposable
             EncryptionNonce = decrypted.EncryptionNonce,
             MediaType = decrypted.MediaType,
             EncryptionVersion = decrypted.EncryptionVersion,
-            NostrEventId = nostrEvent.EventId,
+            NostrEventId = nostrEventId,
             RumorEventId = decrypted.RumorEventId,
             MlsEpoch = decrypted.Epoch,
-            Timestamp = nostrEvent.CreatedAt,
+            Timestamp = timestamp,
             ReceivedAt = DateTime.UtcNow,
             Status = MessageStatus.Delivered,
             IsFromCurrentUser = decrypted.SenderPublicKey == _currentUser?.PublicKeyHex
@@ -2965,6 +3105,8 @@ public class MessageService : IMessageService, IDisposable
             await _mlsService.MergeStagedAsync(groupId);
             _logger.LogInformation("PerformSelfUpdate: published and merged self-update commit for group {GroupId}",
                 groupIdHex[..Math.Min(16, groupIdHex.Length)]);
+
+            await DrainReplayedMessagesAsync(groupId, "PerformSelfUpdate");
         }
         catch (Exception ex)
         {

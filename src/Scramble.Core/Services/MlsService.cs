@@ -407,6 +407,17 @@ public class MlsService : IMlsService
         throw new NotSupportedException("Staged commit API is not available with the Rust MDK backend.");
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// No-op, and deliberately not a <see cref="NotSupportedException"/> like the
+    /// staged-commit members above. This one is called on a recovery path that
+    /// runs after every commit resolution and cannot act on a refusal; a backend
+    /// that never buffers a message has nothing to replay, which is an empty list
+    /// rather than an error. The Rust MDK keeps no held-message store.
+    /// </remarks>
+    public Task<IReadOnlyList<MlsDecryptedMessage>> ReplayBufferedMessagesAsync(byte[] groupId) =>
+        Task.FromResult<IReadOnlyList<MlsDecryptedMessage>>([]);
+
     public Task<byte[]> StageRemoveMemberAsync(byte[] groupId, string memberPublicKey)
     {
         throw new NotSupportedException("Staged commit API is not available with the Rust MDK backend.");

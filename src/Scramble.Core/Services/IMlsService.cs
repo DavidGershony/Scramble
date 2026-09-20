@@ -55,6 +55,39 @@ public interface IMlsService
     Task ClearStagedAsync(byte[] groupId);
 
     /// <summary>
+    /// Re-runs the inbound messages the engine held because it could not read
+    /// them yet, and returns the ones that became readable.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Owed after anything that resolves one of our commits</b> — a
+    /// <see cref="MergeStagedAsync"/> or a <see cref="ClearStagedAsync"/> that
+    /// actually cleared something. While a commit of ours is outstanding the
+    /// engine cannot take input, so a peer's message that arrives in that window
+    /// comes back buffered: the bytes are kept and the engine will re-run them,
+    /// but only when somebody asks. A caller that takes the buffered answer and
+    /// never calls this has silently dropped the message while reporting that it
+    /// kept it.
+    /// </para>
+    /// <para>
+    /// <b>Empty is the normal answer and is not a failure.</b> Nothing buffered,
+    /// nothing newly readable, or a backend that never buffers all return an
+    /// empty list. No refusal is thrown for "there was nothing to replay" — the
+    /// caller is a recovery path and has no way to act on one.
+    /// </para>
+    /// <para>
+    /// Application messages only. A held commit is applied by the same pass and
+    /// advances the epoch, but it carries no user-visible content and does not
+    /// appear here, so every element is a message to deliver.
+    /// </para>
+    /// <para>
+    /// Ordered as the engine delivered them: oldest source epoch first, and
+    /// within an epoch the order they arrived in.
+    /// </para>
+    /// </remarks>
+    Task<IReadOnlyList<MlsDecryptedMessage>> ReplayBufferedMessagesAsync(byte[] groupId);
+
+    /// <summary>
     /// Stage a remove-member commit without advancing local MLS state.
     /// </summary>
     Task<byte[]> StageRemoveMemberAsync(byte[] groupId, string memberPublicKey);
@@ -350,6 +383,20 @@ public class MlsDecryptedMessage
     /// The Nostr kind of the inner rumor event (e.g. 9 for regular message, 7 for reaction).
     /// </summary>
     public int RumorKind { get; set; } = 9;
+
+    /// <summary>
+    /// The inner rumor's <c>created_at</c>, in Unix seconds. Zero when unknown.
+    /// </summary>
+    /// <remarks>
+    /// <b>For messages that arrive without a transport envelope.</b> The live
+    /// inbound path timestamps a message from the kind-445 event that carried it,
+    /// which is the closest thing to a send time and is what the UI orders on.
+    /// A message delivered by <see cref="IMlsService.ReplayBufferedMessagesAsync"/>
+    /// has no such envelope — it comes back out of the engine's durable store as
+    /// MLS bytes — so without this it would be stamped with the moment it was
+    /// replayed and sort to the bottom of a chat it belongs in the middle of.
+    /// </remarks>
+    public long RumorCreatedAt { get; set; }
 
     /// <summary>
     /// For reaction events (kind 7): the Nostr event ID of the message being reacted to.

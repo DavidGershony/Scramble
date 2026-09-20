@@ -840,6 +840,70 @@ public sealed class DarkMatterMlsService : IMlsService, IDisposable
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// <b>Empty means nothing became readable, and says nothing about why.</b>
+    /// <c>MessageIngest.ReplayAsync</c> returns an empty result without looking
+    /// when the group still cannot ingest — which is exactly the state a
+    /// still-unresolved commit leaves it in — so a caller that runs this before
+    /// resolving its own commit gets nothing and no complaint. That is why the
+    /// contract puts the call after the merge and not before it.
+    /// </para>
+    /// <para>
+    /// <b>Only the delivered messages are returned; the rest of the result is a
+    /// log line.</b> Still-deferred is not a failure and needs no action — the
+    /// next commit resolution replays again, oldest first — and a retired message
+    /// is one whose epoch fell out of the delivery window, which nothing at this
+    /// layer can undo. Both are recorded because they are the only evidence that
+    /// a message existed and did not arrive.
+    /// </para>
+    /// <para>
+    /// <b>The epoch stamped on each message is the group's now, not the message's
+    /// then.</b> <c>ReceivedGroupMessage</c> does not carry the epoch it was sent
+    /// in, so this matches <see cref="Interpret"/> and uses the live one. For a
+    /// replayed message that is further from the truth than it is on the live
+    /// path, and it is the same approximation either way.
+    /// </para>
+    /// </remarks>
+    public async Task<IReadOnlyList<MlsDecryptedMessage>> ReplayBufferedMessagesAsync(byte[] groupId)
+    {
+        ArgumentNullException.ThrowIfNull(groupId);
+
+        await _gate.WaitAsync();
+        try
+        {
+            var id = new GroupId(groupId);
+            MarmotSession session = await RequireSessionAsync(id);
+
+            ReplayResult result = await session.ReplayAsync();
+
+            if (result.Delivered.Count > 0 || result.StillDeferred > 0 || result.Retired.Count > 0)
+            {
+                var hex = Convert.ToHexString(groupId).ToLowerInvariant();
+                _logger.LogInformation(
+                    "ReplayBufferedMessages: group {GroupId} delivered={Delivered}, stillDeferred={Deferred}, retired={Retired}, skipped={Skipped}",
+                    hex[..Math.Min(16, hex.Length)],
+                    result.Delivered.Count, result.StillDeferred, result.Retired.Count, result.Skipped);
+            }
+
+            if (result.Delivered.Count == 0)
+                return [];
+
+            ulong epoch = session.Group.Epoch;
+
+            var messages = new List<MlsDecryptedMessage>(result.Delivered.Count);
+            foreach (ReceivedGroupMessage received in result.Delivered)
+                messages.Add(Describe(received, epoch));
+
+            return messages;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <inheritdoc />
     public bool HasPendingCommit(byte[] groupId)
     {
         ArgumentNullException.ThrowIfNull(groupId);
@@ -1828,6 +1892,7 @@ public sealed class DarkMatterMlsService : IMlsService, IDisposable
             Epoch = epoch,
             RumorEventId = appEvent.Id,
             RumorKind = checked((int)appEvent.Kind),
+            RumorCreatedAt = appEvent.CreatedAt,
         };
 
         foreach (IReadOnlyList<string> tag in appEvent.Tags)
