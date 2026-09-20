@@ -126,7 +126,7 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
         // Build a fake kind-30443 event JSON using the real MDK-provided tags
         var fakeKeyPackageEventJson = CreateFakeKeyPackageEventJson(_pubKeyB, keyPackageB.Data, keyPackageB.NostrTags);
         keyPackageB.EventJson = fakeKeyPackageEventJson;
-        keyPackageB.NostrEventId = "fake443event" + Guid.NewGuid().ToString("N");
+        keyPackageB.NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
 
         var welcome = await _mlsServiceA.AddMemberAsync(groupInfo.GroupId, keyPackageB);
         Assert.NotNull(welcome.WelcomeData);
@@ -151,7 +151,6 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
             {
                 new() { "p", _pubKeyB },
                 new() { "e", keyPackageB.NostrEventId! },
-                new() { "encoding", "base64" },
                 new() { "h", Convert.ToHexString(groupInfo.GroupId).ToLowerInvariant() },
                 new() { "relays", "wss://test.relay" }
             },
@@ -255,7 +254,7 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
         // Build a real MLS welcome so CanProcessWelcomeAsync accepts the first delivery
         var kpB = await _mlsServiceB.GenerateKeyPackageAsync();
         kpB.EventJson = CreateFakeKeyPackageEventJson(_pubKeyB, kpB.Data, kpB.NostrTags);
-        kpB.NostrEventId = "fakekp_dedup_" + Guid.NewGuid().ToString("N");
+        kpB.NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
         var groupInfo = await _mlsServiceA.CreateGroupAsync("Dedup Test", new[] { "wss://relay.test" });
         var realWelcome = await _mlsServiceA.AddMemberAsync(groupInfo.GroupId, kpB);
 
@@ -271,7 +270,7 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
             {
                 new() { "p", _pubKeyB },
                 new() { "e", kpB.NostrEventId! },
-                new() { "encoding", "base64" },
+                new() { "relays", "wss://test.relay" },
                 new() { "h", Convert.ToHexString(groupInfo.GroupId).ToLowerInvariant() }
             },
             RelayUrl = "wss://test.relay"
@@ -324,7 +323,7 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
         // Add User B to the group
         var fakeKpJson = CreateFakeKeyPackageEventJson(_pubKeyB, keyPackageB.Data, keyPackageB.NostrTags);
         keyPackageB.EventJson = fakeKpJson;
-        keyPackageB.NostrEventId = "fake443_" + Guid.NewGuid().ToString("N");
+        keyPackageB.NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
         var welcome = await _mlsServiceA.AddMemberAsync(groupInfo.GroupId, keyPackageB);
 
         // User B processes welcome
@@ -340,7 +339,6 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
             {
                 new() { "p", _pubKeyB },
                 new() { "e", keyPackageB.NostrEventId! },
-                new() { "encoding", "base64" },
                 new() { "h", Convert.ToHexString(groupInfo.GroupId).ToLowerInvariant() },
                 new() { "relays", "wss://test.relay" }
             },
@@ -443,7 +441,7 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
         // ── Phase 4: Add User B to group ──
         var fakeKpJson = CreateFakeKeyPackageEventJson(_pubKeyB, keyPackageB.Data, keyPackageB.NostrTags);
         keyPackageB.EventJson = fakeKpJson;
-        keyPackageB.NostrEventId = "fake443_" + Guid.NewGuid().ToString("N");
+        keyPackageB.NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
 
         var welcome = await _mlsServiceA.AddMemberAsync(groupInfo.GroupId, keyPackageB);
         Assert.NotNull(welcome.WelcomeData);
@@ -466,7 +464,6 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
             {
                 new() { "p", _pubKeyB },
                 new() { "e", keyPackageB.NostrEventId! },
-                new() { "encoding", "base64" },
                 new() { "h", groupIdHex },
                 new() { "relays", "wss://test.relay" }
             },
@@ -678,7 +675,7 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
 
         var fakeKpJson = CreateFakeKeyPackageEventJson(_pubKeyB, keyPackageB.Data, keyPackageB.NostrTags);
         keyPackageB.EventJson = fakeKpJson;
-        keyPackageB.NostrEventId = "fake443_" + Guid.NewGuid().ToString("N");
+        keyPackageB.NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
 
         var welcome = await _mlsServiceA.AddMemberAsync(groupInfo.GroupId, keyPackageB);
         var fakeWelcomeEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
@@ -780,7 +777,7 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
         // ── Phase 2: Desktop adds Phone to group ──
         var fakeKpJson = CreateFakeKeyPackageEventJson(_pubKeyB, keyPackageB.Data, keyPackageB.NostrTags);
         keyPackageB.EventJson = fakeKpJson;
-        keyPackageB.NostrEventId = "fake443_" + Guid.NewGuid().ToString("N");
+        keyPackageB.NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
 
         var welcome = await _mlsServiceA.AddMemberAsync(groupInfo.GroupId, keyPackageB);
         Assert.NotNull(welcome.WelcomeData);
@@ -846,7 +843,8 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
             Tags = new List<List<string>>
             {
                 new() { "h", commitGroupIdHex },
-                new() { "encoding", "base64" }
+                new() { "encoding", "base64" },
+                new() { "relays", "wss://test.relay" }
             },
             RelayUrl = "wss://test.relay"
         };
@@ -990,7 +988,7 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
         mockNostr.Setup(n => n.SyncStatus).Returns(Observable.Empty<string?>());
 
         mockNostr.Setup(n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>()))
-            .ReturnsAsync(() => "fakekp_" + Guid.NewGuid().ToString("N"));
+            .ReturnsAsync(() => Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"));
         mockNostr.Setup(n => n.PublishWelcomeAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
             .ReturnsAsync(() => "fakewelcome_" + Guid.NewGuid().ToString("N"));
         mockNostr.Setup(n => n.PublishGroupMessageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>()))
@@ -1043,7 +1041,7 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
         mockNostr.Setup(n => n.SyncStatus).Returns(Observable.Empty<string?>());
 
         mockNostr.Setup(n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>()))
-            .ReturnsAsync(() => "fakekp_" + Guid.NewGuid().ToString("N"));
+            .ReturnsAsync(() => Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"));
         mockNostr.Setup(n => n.PublishWelcomeAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
             .ReturnsAsync(() => "fakewelcome_" + Guid.NewGuid().ToString("N"));
         mockNostr.Setup(n => n.PublishGroupMessageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>()))

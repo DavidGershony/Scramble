@@ -49,7 +49,11 @@ public class HeadlessSettingsTests : HeadlessTestBase
 
         Assert.True(settingsVm.KeyPackageSuccess);
         Assert.NotNull(settingsVm.KeyPackageStatus);
-        Assert.Contains("fakekp_", settingsVm.KeyPackageStatus);
+        // The status carries the event id the publish returned. It used to be
+        // matched by the mock's "fakekp_" prefix; the mock now returns an id of
+        // the shape a relay really gives back (32 bytes of hex), because that id
+        // travels into a Welcome's e tag where nothing else is accepted.
+        Assert.Contains("Event ID:", settingsVm.KeyPackageStatus);
 
         // Verify the KeyPackage was published via NostrService
         ctx.MockNostr.Verify(n => n.PublishKeyPackageAsync(

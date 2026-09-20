@@ -66,7 +66,10 @@ public class KeyPackageE2EHeadlessTests : IDisposable
         };
         await storage.SaveCurrentUserAsync(user);
 
-        var mlsService = new ManagedMlsService(storage);
+        // The engine the app registers -- see KeyPackagePublishDiagnosticTests for
+        // why a KeyPackage round trip only holds on one engine at a time.
+        var mlsService = DarkMatterMlsServiceFactory.Create(storage);
+        await mlsService.InitializeAsync(privKey, pubKey);
         var messageService = new MessageService(storage, realNostr, mlsService);
         _disposables.Add(messageService);
         await messageService.InitializeAsync();

@@ -88,7 +88,7 @@ public class FullE2EGroupInteropTests : IAsyncLifetime
         IMlsService MlsService,
         MessageService MessageService);
 
-    private async Task<OCUser> CreateOCUser(string name, string backend = "managed")
+    private async Task<OCUser> CreateOCUser(string name)
     {
         var nostrService = new NostrService();
         _nostrServices.Add(nostrService);
@@ -110,12 +110,14 @@ public class FullE2EGroupInteropTests : IAsyncLifetime
             CreatedAt = DateTime.UtcNow
         });
 
-        IMlsService mlsService = backend switch
-        {
-            "managed" => new ManagedMlsService(storage),
-            "rust" => new MlsService(storage),
-            _ => throw new ArgumentException($"Unknown backend '{backend}'")
-        };
+        // The engine the app registers. These drive MessageService and
+        // NostrService end to end, and both are written against the Dark Matter
+        // engine since P11's flip: a commit reaches the publish as a finished
+        // kind-445, and a KeyPackage is read back with the engine's own codec,
+        // which refuses the legacy engine's tag shape. Running these on
+        // marmot-cs would test a product that no longer exists.
+        IMlsService mlsService = DarkMatterMlsServiceFactory.Create(storage);
+        await mlsService.InitializeAsync(keys.privateKeyHex, keys.publicKeyHex);
 
         var messageService = new MessageService(storage, nostrService, mlsService);
         _messageServices.Add(messageService);
@@ -125,7 +127,7 @@ public class FullE2EGroupInteropTests : IAsyncLifetime
         await nostrService.ConnectAsync(RelayUrl);
         await Task.Delay(1000);
 
-        _output.WriteLine($"[{backend}] Created '{name}': {keys.publicKeyHex[..16]}... connected to {RelayUrl}");
+        _output.WriteLine($"Created '{name}': {keys.publicKeyHex[..16]}... connected to {RelayUrl}");
         _output.WriteLine($"  Relay status: {string.Join(", ", nostrService.ConnectedRelayUrls)}");
 
         return new OCUser(name, keys.publicKeyHex, keys.privateKeyHex,
@@ -137,7 +139,7 @@ public class FullE2EGroupInteropTests : IAsyncLifetime
     // ══════════════════════════════════════════════════════════════════════════
 
     [Fact]
-    public async Task E2E_3Users_AllOC_Managed_FullFlow()
+    public async Task E2E_3Users_AllOC_FullFlow()
     {
         _output.WriteLine("═══════════════════════════════════════════════════════════");
         _output.WriteLine("  FULL E2E: 3 Scramble users (managed) via relay");
@@ -151,9 +153,11 @@ public class FullE2EGroupInteropTests : IAsyncLifetime
         // Step 1: Bob and Charlie publish KeyPackages
         _output.WriteLine("\n[Step 1] Publishing KeyPackages");
         var kpBob = await bob.MlsService.GenerateKeyPackageAsync();
-        await bob.NostrService.PublishKeyPackageAsync(kpBob.Data, bob.PrivKeyHex, kpBob.NostrTags);
+        await KeyPackagePublishing.PublishAndBindAsync(
+            bob.NostrService, bob.MlsService, kpBob, bob.PrivKeyHex);
         var kpCharlie = await charlie.MlsService.GenerateKeyPackageAsync();
-        await charlie.NostrService.PublishKeyPackageAsync(kpCharlie.Data, charlie.PrivKeyHex, kpCharlie.NostrTags);
+        await KeyPackagePublishing.PublishAndBindAsync(
+            charlie.NostrService, charlie.MlsService, kpCharlie, charlie.PrivKeyHex);
         await Task.Delay(2000);
         _output.WriteLine("  KeyPackages published");
 
@@ -296,9 +300,11 @@ public class FullE2EGroupInteropTests : IAsyncLifetime
         // Step 1: KeyPackages
         _output.WriteLine("\n[Step 1] Publishing KeyPackages");
         var kpBob = await bob.MlsService.GenerateKeyPackageAsync();
-        await bob.NostrService.PublishKeyPackageAsync(kpBob.Data, bob.PrivKeyHex, kpBob.NostrTags);
+        await KeyPackagePublishing.PublishAndBindAsync(
+            bob.NostrService, bob.MlsService, kpBob, bob.PrivKeyHex);
         var kpCharlie = await charlie.MlsService.GenerateKeyPackageAsync();
-        await charlie.NostrService.PublishKeyPackageAsync(kpCharlie.Data, charlie.PrivKeyHex, kpCharlie.NostrTags);
+        await KeyPackagePublishing.PublishAndBindAsync(
+            charlie.NostrService, charlie.MlsService, kpCharlie, charlie.PrivKeyHex);
         await Task.Delay(2000);
 
         // Step 2: Alice creates group with Bob + Charlie
@@ -359,10 +365,14 @@ public class FullE2EGroupInteropTests : IAsyncLifetime
         {
             try
             {
-                using var doc = JsonDocument.Parse(ev);
-                var content = doc.RootElement.GetProperty("content").GetString()!;
-                var bytes = Convert.FromBase64String(content);
-                var result = await bob.MlsService.DecryptMessageAsync(chatBob.MlsGroupId!, bytes);
+                // The whole event, not its content. The engine's peeler is the only
+                // thing that verifies an event's id and signature, so it ingests the
+                // envelope and refuses bare ciphertext rather than routing on fields
+                // nobody checked. MessageService does the same thing with
+                // NostrEventReceived.RawJson; catching up from a relay is the same
+                // job by hand.
+                var result = await bob.MlsService.DecryptMessageAsync(
+                    chatBob.MlsGroupId!, System.Text.Encoding.UTF8.GetBytes(ev));
                 if (result.IsCommit)
                 {
                     bobProcessedCommit = true;
@@ -448,7 +458,8 @@ public class FullE2EGroupInteropTests : IAsyncLifetime
         // Step 1: Bob publishes KeyPackage
         _output.WriteLine("\n[Step 1] Publishing KeyPackages");
         var kpBob = await bob.MlsService.GenerateKeyPackageAsync();
-        await bob.NostrService.PublishKeyPackageAsync(kpBob.Data, bob.PrivKeyHex, kpBob.NostrTags);
+        await KeyPackagePublishing.PublishAndBindAsync(
+            bob.NostrService, bob.MlsService, kpBob, bob.PrivKeyHex);
         await Task.Delay(3000);
 
         // Wait for WN to publish KeyPackage
@@ -633,7 +644,8 @@ public class FullE2EGroupInteropTests : IAsyncLifetime
         // Step 1: Create 2-user group, exchange messages
         _output.WriteLine("\n[Step 1] Create group with Alice + Bob");
         var kpBob = await bob.MlsService.GenerateKeyPackageAsync();
-        await bob.NostrService.PublishKeyPackageAsync(kpBob.Data, bob.PrivKeyHex, kpBob.NostrTags);
+        await KeyPackagePublishing.PublishAndBindAsync(
+            bob.NostrService, bob.MlsService, kpBob, bob.PrivKeyHex);
         await Task.Delay(2000);
 
         var chat = await alice.MessageService.CreateGroupAsync("Late Joiner Test",
@@ -660,7 +672,8 @@ public class FullE2EGroupInteropTests : IAsyncLifetime
         _output.WriteLine("\n[Step 3] Add Charlie (late joiner)");
         var charlie = await CreateOCUser("Charlie");
         var kpCharlie = await charlie.MlsService.GenerateKeyPackageAsync();
-        await charlie.NostrService.PublishKeyPackageAsync(kpCharlie.Data, charlie.PrivKeyHex, kpCharlie.NostrTags);
+        await KeyPackagePublishing.PublishAndBindAsync(
+            charlie.NostrService, charlie.MlsService, kpCharlie, charlie.PrivKeyHex);
         await Task.Delay(2000);
 
         await alice.MessageService.AddMemberAsync(chat.Id, charlie.PubKeyHex);

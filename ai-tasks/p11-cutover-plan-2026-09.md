@@ -69,11 +69,20 @@ assumed, because the two are easy to conflate:
 |---|---|---|
 | nsec / npub, contacts, relay lists, signer pairing | `StorageService` → the `User` record (`PrivateKeyHex`, `SignerLocalPrivateKeyHex`) — **zero `MarmotCs` references** | **yes, untouched** |
 | MLS group state, membership, message history | `EncryptedSqliteStorageProvider` → `MarmotCs.Storage.Sqlite` | no — this is what is abandoned |
-| Encryption at rest | `ISecureStorage` (DPAPI, Android Keystore, …) | yes, engine-agnostic |
+| Encryption at rest | `ISecureStorage` (DPAPI, Android Keystore, …) | **the mechanism yes, the MLS store no** — see below |
 
 So after the cutover the account is the same account, with no groups. **Dogfood
 and interop devices are covered by this too** — a second identity used for
 interop testing keeps its keys and loses its groups.
+
+**Correction, 2026-09-19: the at-rest row above was read from the mechanism, not
+from the call sites.** `ISecureStorage` survives and still protects everything
+`StorageService` puts through it, but nothing in `Scramble.Marmot.*` knows that
+concept exists — so MLS group state, KeyPackage private material, exported epoch
+state and message wire bytes move from protected fields to plaintext BLOBs at the
+cutover. It did not block the flip (nothing ships from this branch, and the fix
+stands alone) and it does block a release. Both candidate fixes are in
+`remaining-work-2026-09.md` §14.
 
 ---
 
@@ -112,8 +121,32 @@ no behaviour; step 2 is where the app starts using the new engine.**
    to `Indeterminate` *is* what the old contract means by "staged", so the
    decision procedure is unchanged and only its timing moves.
 
-   **2b. Flip the registration — not started.** This is the pivot; I5's freeze
-   starts here.
+   **2b. Flip the registration — DONE 2026-09-19.** The pivot; **I5's freeze
+   started at this commit.** Every head registers `DarkMatterMlsService` through
+   `DarkMatterMlsServiceFactory`, and `ShellViewModel`'s fallback with it — a head
+   that forgets to set the factory should be missing platform wiring, not quietly
+   running a different MLS implementation.
+
+   **Six of the ten changes it needed are not in the table below**, because this
+   plan was written from the adapter's report rather than from the call sites —
+   the same failure mode §2b's five blockers had. Five would have shipped broken,
+   and three of those are one bug: marmot-cs's MIP codecs and the
+   `["encoding","base64"]` tag current peers refuse. `HANDOFF-dark-matter.md` §3af is the record; in short:
+
+   | Not in the plan | What it was |
+   |---|---|
+   | The inbound path | handed the engine MIP-03 ciphertext, which it refuses. `NostrEventReceived.RawJson` now carries the envelope |
+   | `PublishRawEventJsonAsync` | does not throw on a missing relay OK, so every site would have merged unconfirmed commits silently. `PublishCommitEventAsync` added |
+   | An eighth publish site | `PerformSelfUpdateAsync` never merged, because `UpdateKeysAsync` used to auto-merge. Unmerged, the first key rotation wedges the group for good |
+   | `FetchKeyPackagesAsync` | parsed kind-30443 with marmot-cs's MIP-00 parser, which **requires** the `encoding` tag the engine must not emit. Every current KeyPackage silently dropped |
+   | `PublishWelcomeAsync` | built the kind-444 rumor with marmot-cs's builder, which **adds** that same tag. Every Welcome droppable by the reference client, after the commit had advanced the epoch |
+   | `HandleWelcomeEventAsync` | parsed the inbound rumor with marmot-cs's parser, which **rejects a Welcome without** that tag — and returns silently. The app had never been able to accept a conformant peer's invite |
+
+   **Also deliberately left undone:** at-rest encryption for the engine's store,
+   which §2's table below gets wrong. It is a release blocker, recorded as
+   `remaining-work-2026-09.md` §14.
+
+   **Original entry below.**
 
    **All five are now settled — four of them landed engine-side between
    2026-09-16 and 2026-09-18, and what is left of each belongs in the flip

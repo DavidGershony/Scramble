@@ -226,8 +226,8 @@ public class MessageServiceTests : IDisposable
             Tags = new List<List<string>>
             {
                 new() { "h", "abcdef1234" },
-                new() { "e", "kp-event-id" },
-                new() { "encoding", "base64" }
+                new() { "e", "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" },
+                new() { "relays", "wss://test.relay" }
             }
         });
 
@@ -237,7 +237,7 @@ public class MessageServiceTests : IDisposable
         _storageMock.Verify(s => s.SavePendingInviteAsync(It.Is<PendingInvite>(i =>
             i.SenderPublicKey == senderPubKey &&
             i.GroupId == "abcdef1234" &&
-            i.KeyPackageEventId == "kp-event-id" &&
+            i.KeyPackageEventId == "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" &&
             i.NostrEventId == eventId
         )), Times.Once);
 
@@ -1169,8 +1169,7 @@ public class MessageServiceTests : IDisposable
             Tags = new List<List<string>>
             {
                 new() { "h", "abcdef1234" },
-                new() { "e", "kp-event-id" },
-                new() { "encoding", "base64" },
+                new() { "e", "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" },
                 new() { "relays", "wss://relay1.example.com", "wss://relay2.example.com" }
             }
         });

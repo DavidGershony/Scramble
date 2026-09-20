@@ -160,6 +160,13 @@ services, and **four of the five are on the repo's own high-risk table**:
 
 Plus both UI heads, and a data migration for existing local groups.
 
+**Step 2b landed 2026-09-19 — the flip is in, and I5's freeze is running.**
+Every head registers `DarkMatterMlsService`; the desktop head is bugfix-only
+until Android has an equivalent smoke test green in CI plus one week. What the
+flip actually needed, including four changes this plan did not have and one that
+would have made every account uninvitable, is `HANDOFF-dark-matter.md` §3af.
+Steps 3–5 remain.
+
 **Planned and decided in `p11-cutover-plan-2026-09.md`** (2026-09-15): existing
 groups are abandoned rather than migrated, Android leads, no staged rollout.
 There are no existing users, which removes the phase's only irreversible step.
@@ -708,12 +715,15 @@ interleaved operations, every message round-tripped through a real relay — so 
 delivery-timing sensitivity is the likeliest cause rather than an MLS fault. Not
 investigated further; it was not what this session was doing.
 
-**It was not the Dark Matter work.** `DarkMatterMlsService` has zero references
-anywhere outside its own file — grep `src/Scramble.Core`, `Scramble.Desktop`,
-`Scramble.Mobile.Android`, `Scramble.Presentation` — so nothing in these tests
-can reach it. That is worth re-checking the moment step 2b flips the
-registration, because from then on the same failure *would* be reachable and
-this paragraph stops being a defence.
+**It was not the Dark Matter work** *when this was written*, because
+`DarkMatterMlsService` then had zero references outside its own file.
+**That defence expired on 2026-09-19**, when the flip registered it on every
+head. The three named tests were flaky before the engine was reachable from
+them, so a failure in those three is still not evidence on its own — but the
+reasoning is now "these three, historically", not "nothing can reach the new
+engine". Any *fourth* test showing this shape is a regression until proved
+otherwise, and giving these three their own category (below) is what would keep
+the distinction honest.
 
 ### What to do about it
 
@@ -754,3 +764,96 @@ offered above, not the lazier one.
   in both directions: it ran `FullE2E`, which CI does not, and omitted
   `DarkMatterInterop`, which CI does. Running it as documented skipped the entire
   interop suite — 72 tests locally against CI's 104. Fixed 2026-09-18.
+
+---
+
+## 14. The engine's store is not encrypted at rest (2026-09-19) — RELEASE BLOCKER
+
+Found while writing the flip's DI, by reading what the legacy registration did
+rather than what the plan said about it.
+
+**The plan's §2 table is wrong in the way that matters.** It lists at-rest
+encryption as `ISecureStorage` (DPAPI, Android Keystore), "yes, engine-agnostic".
+The *mechanism* survives — it still protects the `User` record and everything
+else `StorageService` puts through it. What does not survive is the MLS store:
+
+| | Legacy engine | Dark Matter engine |
+|---|---|---|
+| MLS group state | `EncryptedSqliteStorageProvider` → `ISecureStorage` | `groups.live_state`, plain BLOB |
+| KeyPackage private material | protected | `key_packages.private_material`, plain BLOB |
+| Exported epoch state | protected | `epoch_archive.group_state`, plain BLOB |
+| Message plaintext / wire | protected | `messages.wire`, plain BLOB |
+| Snapshots | n/a | `snapshots.data`, plain BLOB |
+
+`SqliteMarmotStorageProvider` has no `ISecureStorage` seam and never had one; the
+engine was built standalone and nothing in `Scramble.Marmot.*` knows that concept
+exists. So the cutover moves ratchet state and leaf private keys from protected
+fields to plaintext rows in the profile database.
+
+**Why it did not block the flip.** Nothing ships from this branch — no PR, no
+release, no users — and the fix is a storage-layer change that stands alone: it
+does not need the flip reverted, and the flip does not need it to be proved. The
+alternative was bolting a twelve-sub-interface decorator onto a pivot commit that
+already needed a `Landing-Discipline-Exempt:` trailer.
+
+**It does block a release.** On Android app-private storage hides most of it; on
+desktop DPAPI was doing real work against a copied database file, and that
+protection is simply gone.
+
+**Two shapes, and the cheaper one is probably better.**
+
+1. **An `ISecureStorage` decorator over `IMarmotStorageProvider`** — mirrors what
+   the legacy engine did, and is twelve sub-interfaces wide. Every field that
+   should be protected and is not is a silent leak, so it needs a test that
+   enumerates the sensitive columns rather than a test per method.
+2. **Encrypt the database file** — give the engine its own SQLite file keyed
+   through `ISecureStorage` (SQLCipher via `SQLitePCLRaw.bundle_e_sqlcipher`, a
+   `Password=` in the connection string). One seam instead of twelve, and no
+   column-by-column judgement to get wrong. It is a native-dependency change that
+   has to be proved on Android, and it gives up sharing one file per profile —
+   which `DarkMatterMlsServiceFactory.TablePrefix` documents as a deliberate
+   choice, so that choice would have to be revisited.
+
+Decide before any release, not before step 3.
+
+---
+
+## 15. The app's own inbound invite path had never faced a peer (2026-09-20)
+
+Found while flipping, and it is the most interesting failure in this migration so
+far because of *where* it hid rather than what it was.
+
+**The bug.** `MessageService.HandleWelcomeEventAsync` parsed the kind-444 rumor
+with marmot-cs's `WelcomeEventParser`, which requires an `["encoding","base64"]`
+tag that no conformant peer emits, and returned silently when it threw. The app
+could not accept an invite from anybody but itself. Fixed by reading through the
+engine's `WelcomeEvent.Read`; see `HANDOFF-dark-matter.md` §3af.
+
+**Why every gate was green.** Two suites each covered half the seam:
+
+| Suite | Drives the app's inbound path? | Runs? |
+|---|---|---|
+| `WhitenoiseGroupInteropTests` (incl. `WhitenoiseCreatesGroup_ScrambleJoins`) | **yes** | **no** — 3 of the gate's 4 skips; that peer was retired |
+| `FullE2EGroupInteropTests.E2E_3Users_2OC_1WN_FullFlow` | yes | no — the gate's 4th skip |
+| `DarkMatterInterop.AdapterInboundJoinInteropTests` | **no** — unwraps with the engine's codec, enters at `IMlsService` | yes |
+| every app-to-app test | yes | yes — and passed, because both sides emitted the same bad tag |
+
+**The generalisable finding: a skipped suite is not neutral, it is a hole with a
+name.** §3's "green can mean less than it looks" already records skipped suites;
+this is the sharper version — the skip was *specifically* over the one path
+nothing else exercised, and the suite that replaced that peer deliberately entered
+below it. Worth asking of any suite retired in favour of another: **what did the
+old one cover that the new one enters beneath?**
+
+**Two things this leaves open.**
+
+- **`WhitenoiseGroupInteropTests` still skips**, and now that `mdk-cli` covers the
+  same ground through `InboundWelcomeInteropTests`, the honest options are to
+  retire those tests with the peer they were written for or to mark them clearly
+  as unrunnable. Leaving four permanent skips in a required gate is how this
+  happened.
+- **The app's gift-wrap path has still never faced a peer.** `NostrService` seals
+  and unwraps with marmot-cs's `Nip44Encryption`; the interop suite uses the
+  engine's `Nip59GiftWrap`. `InboundWelcomeInteropTests` is the first test to put
+  the app's unwrap in front of a real peer's gift wrap, so it covers this too —
+  but only in the inbound direction, and only for kind 444.

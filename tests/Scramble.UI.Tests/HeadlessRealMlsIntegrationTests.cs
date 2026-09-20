@@ -114,7 +114,7 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
             {
                 new() { "p", ctx.User.PublicKeyHex },
                 new() { "e", bobKp.NostrEventId! },
-                new() { "encoding", "base64" }
+                new() { "relays", "wss://test.relay" }
             },
             RelayUrl = "wss://test.relay"
         };
@@ -473,7 +473,7 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
             {
                 new() { "p", ctx.User.PublicKeyHex },
                 new() { "e", bobKp.NostrEventId! },
-                new() { "encoding", "base64" }
+                new() { "relays", "wss://test.relay" }
             },
             RelayUrl = "wss://test.relay"
         };

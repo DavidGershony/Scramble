@@ -18,6 +18,8 @@ using Scramble.Core.Models;
 using MarmotCs.Protocol.Mip00;
 using MarmotCs.Protocol.Mip02;
 using MarmotCs.Protocol.Nip44;
+using Scramble.Marmot;
+using Scramble.Marmot.Wire.Nostr;
 
 namespace Scramble.Core.Services;
 
@@ -1070,7 +1072,12 @@ public class NostrService : INostrService, IDisposable
                 CreatedAt = DateTimeOffset.FromUnixTimeSeconds(createdAt).UtcDateTime,
                 Tags = tags,
                 RelayUrl = relayUrl,
-                Signature = sig
+                Signature = sig,
+                // The text as it arrived, not a re-serialisation of the fields
+                // above. The engine verifies the id over a canonical form, and a
+                // round trip through a writer that escapes one character
+                // differently produces a different id. See NostrEventReceived.RawJson.
+                RawJson = eventData.GetRawText()
             };
         }
         catch (Exception ex)
@@ -1559,6 +1566,37 @@ public class NostrService : INostrService, IDisposable
         }
     }
 
+    /// <summary>
+    /// The tags of an outbound kind-444 Welcome rumor: exactly <c>e</c> and
+    /// <c>relays</c>, in that order.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>It replaced marmot-cs's <c>WelcomeEventBuilder</c>, which adds
+    /// <c>["encoding","base64"]</c>.</b> Current peers reject a Welcome carrying
+    /// that tag before any MLS processing, so every invite this app sent would
+    /// have been dropped by the reference client — on the Welcome rather than on
+    /// the commit, and without an error either side could explain. The engine's
+    /// own publisher has emitted exactly these two tags since outbound interop
+    /// went green; this is that shape, reached through the engine's own codec so
+    /// the two cannot drift.
+    /// </para>
+    /// <para>
+    /// <b>The recipient <c>p</c> tag is gone with it.</b> It was on the rumor,
+    /// where it is redundant — the kind-1059 gift wrap carries the <c>p</c> that
+    /// routes, and a rumor is only readable by the recipient in the first place.
+    /// Nothing reads it back: <c>MarmotWelcomeEvent.RecipientPublicKey</c> has no
+    /// consumer, and the inbound path identifies the sender from the verified
+    /// seal. Extra tags in a rumor are a peer's judgement call to reject, and
+    /// there is nothing here worth spending that on.
+    /// </para>
+    /// </remarks>
+    internal static List<List<string>> BuildWelcomeRumorTags(
+        string keyPackageEventId, IReadOnlyList<string> relayUrls) =>
+        WelcomeEvent.BuildTags(Convert.FromHexString(keyPackageEventId), relayUrls)
+            .Select(t => t.ToList())
+            .ToList();
+
     public async Task<string> PublishKeyPackageAsync(byte[] keyPackageData, string? privateKeyHex, List<List<string>>? mdkTags = null)
     {
         if (mdkTags == null || mdkTags.Count == 0)
@@ -1650,13 +1688,7 @@ public class NostrService : INostrService, IDisposable
             _logger.LogWarning(ex, "Failed to discover recipient relays for Welcome delivery");
         }
 
-        // Build the unsigned kind 444 rumor tags via MIP-02 protocol library
-        var (_, mip02Tags) = WelcomeEventBuilder.BuildWelcomeEvent(
-            welcomeData, keyPackageEventId, relayUrls.ToArray());
-
-        // Convert string[][] to List<List<string>> and add p-tag for recipient routing
-        var rumorTags = mip02Tags.Select(t => t.ToList()).ToList();
-        rumorTags.Insert(0, new List<string> { "p", recipientPublicKey });
+        var rumorTags = BuildWelcomeRumorTags(keyPackageEventId, relayUrls);
 
         // Determine sender pubkey
         string? senderPrivateKeyHex = null;
@@ -2356,6 +2388,29 @@ public class NostrService : INostrService, IDisposable
         return eventId;
     }
 
+    /// <inheritdoc />
+    public async Task<string> PublishCommitEventAsync(byte[] commitEventJson)
+    {
+        ArgumentNullException.ThrowIfNull(commitEventJson);
+
+        var eventId = await PublishRawEventJsonAsync(commitEventJson);
+
+        // Read once. PublishRawEventJsonAsync sets LastPublishOkResult, and it is
+        // shared mutable state on this service — a concurrent publish can
+        // overwrite it between a check and a use.
+        var (accepted, reason) = LastPublishOkResult;
+        if (!accepted)
+        {
+            // 445 rather than the event's own kind: every caller of this member
+            // publishes a commit, and parsing the JSON a second time to learn
+            // what we already know would be the only reason to.
+            throw new PublishUnconfirmedException(eventId, 445, reason);
+        }
+
+        _logger.LogInformation("PublishCommitEventAsync: commit event {EventId} confirmed", eventId);
+        return eventId;
+    }
+
     public async Task<(bool accepted, string? reason)> WaitForRelayOkAsync(string eventId, int timeoutMs = 5000)
     {
         var tracker = new PublishOkTracker(1);
@@ -2488,66 +2543,75 @@ public class NostrService : INostrService, IDisposable
 
                 if (kind == 30443)
                 {
-                    var content = eventData.GetProperty("content").GetString();
-                    var eventId = eventData.GetProperty("id").GetString();
-                    var createdAt = eventData.GetProperty("created_at").GetInt64();
-
-                    if (!string.IsNullOrEmpty(content))
+                    // Parsed by the engine's own kind-30443 codec, which verifies
+                    // the event id and signature before reading a tag.
+                    //
+                    // It replaced the MIP-00 parser in lib/marmot-cs, and not as a
+                    // tidy-up: that parser *requires* an ["encoding","base64"] tag
+                    // and throws FormatException without one. Current peers reject
+                    // an event carrying that tag, so the engine stopped emitting
+                    // it -- which means the old parser silently dropped every
+                    // current-format KeyPackage, ours and the reference client's
+                    // alike. The symptom was "No KeyPackage found for member": an
+                    // account that had published one, read as one that never had.
+                    try
                     {
-                        try
+                        KeyPackagePublication publication = KeyPackageEvent.Parse(eventData.GetRawText());
+
+                        // A KeyPackage is a claim about whoever signed the event,
+                        // so one authored by anybody else is not this account's
+                        // KeyPackage however it came to be on this relay.
+                        if (!string.Equals(publication.AuthorPublicKeyHex, publicKeyHex,
+                                StringComparison.OrdinalIgnoreCase))
                         {
-                            // Parse and validate via MIP-00 protocol library
-                            var tags = eventData.GetProperty("tags");
-                            var tagsArray = tags.EnumerateArray()
-                                .Select(t => t.EnumerateArray().Select(v => v.GetString() ?? "").ToArray())
-                                .ToArray();
-
-                            var (keyPackageData, keyPackageRefHex, parsedRelays) =
-                                KeyPackageEventParser.ParseKeyPackageEvent(content, tagsArray);
-
-                            // Basic sanity check: MLS KeyPackages are typically > 100 bytes
-                            if (keyPackageData.Length < 64)
-                            {
-                                _logger.LogWarning(
-                                    "KeyPackage event {EventId} content too short ({Length} bytes), likely invalid",
-                                    eventId, keyPackageData.Length);
-                                continue;
-                            }
-
-                            // Extract ciphersuite ID from tags (not part of MIP-00 parser output)
-                            ushort ciphersuiteId = 0x0001;
-                            var csTag = tagsArray.FirstOrDefault(t => t.Length >= 2 && t[0] == "mls_ciphersuite");
-                            if (csTag != null && csTag[1].StartsWith("0x") &&
-                                ushort.TryParse(csTag[1][2..], System.Globalization.NumberStyles.HexNumber, null, out var parsed))
-                                ciphersuiteId = parsed;
-
-                            // Extract d-tag (slot ID) for multi-device differentiation
-                            var dTagValue = tagsArray
-                                .FirstOrDefault(t => t.Length >= 2 && t[0] == "d")?[1];
-
-                            var keyPackage = new KeyPackage
-                            {
-                                Id = eventId ?? Guid.NewGuid().ToString(),
-                                OwnerPublicKey = publicKeyHex,
-                                Data = keyPackageData,
-                                EventJson = eventData.GetRawText(),
-                                NostrEventId = eventId,
-                                CiphersuiteId = ciphersuiteId,
-                                SlotId = dTagValue,
-                                CreatedAt = DateTimeOffset.FromUnixTimeSeconds(createdAt).UtcDateTime,
-                                ExpiresAt = DateTimeOffset.FromUnixTimeSeconds(createdAt).UtcDateTime.AddDays(30),
-                                RelayUrls = parsedRelays.Length > 0
-                                    ? parsedRelays.ToList()
-                                    : new List<string> { relayUrl }
-                            };
-                            keyPackages.Add(keyPackage);
-                            _logger.LogDebug("Found valid KeyPackage {EventId} from {Relay} (ciphersuite=0x{Cs:x4}, kpRef={KpRef}, {Len} bytes)",
-                                eventId, relayUrl, ciphersuiteId, keyPackageRefHex[..Math.Min(16, keyPackageRefHex.Length)], keyPackageData.Length);
+                            _logger.LogWarning(
+                                "KeyPackage event {EventId} is authored by {Author}, not {Requested} - ignoring",
+                                publication.EventIdHex[..Math.Min(16, publication.EventIdHex.Length)],
+                                publication.AuthorPublicKeyHex[..16], publicKeyHex[..16]);
+                            continue;
                         }
-                        catch (FormatException)
+
+                        var keyPackage = new KeyPackage
                         {
-                            _logger.LogWarning("Invalid base64 content in KeyPackage event {EventId}", eventId);
-                        }
+                            Id = publication.EventIdHex,
+                            OwnerPublicKey = publicKeyHex,
+                            Data = publication.KeyPackageBytes,
+                            // Kept whole: StageAddMemberAsync re-verifies the event
+                            // rather than trusting the fields beside it.
+                            EventJson = eventData.GetRawText(),
+                            NostrEventId = publication.EventIdHex,
+                            // The leaf's own suite is the first advertised one. The
+                            // engine re-derives it from the decoded KeyPackage, so
+                            // this exists for the UI's "unsupported cipher suite"
+                            // message and nothing else.
+                            CiphersuiteId = publication.CipherSuites.Count > 0
+                                ? publication.CipherSuites[0]
+                                : (ushort)0x0001,
+                            SlotId = publication.SlotId,
+                            CreatedAt = DateTimeOffset.FromUnixTimeSeconds(publication.CreatedAt).UtcDateTime,
+                            ExpiresAt = DateTimeOffset.FromUnixTimeSeconds(publication.CreatedAt).UtcDateTime.AddDays(30),
+                            // A kind-30443 carries no relay hints of its own - a
+                            // peer resolves an account's relays from its
+                            // kind-10002/10050 lists. Where we found it is the only
+                            // relay this event can speak for.
+                            RelayUrls = new List<string> { relayUrl }
+                        };
+                        keyPackages.Add(keyPackage);
+                        _logger.LogDebug(
+                            "Found valid KeyPackage {EventId} from {Relay} (ciphersuite=0x{Cs:x4}, kpRef={KpRef}, {Len} bytes)",
+                            publication.EventIdHex[..Math.Min(16, publication.EventIdHex.Length)], relayUrl,
+                            keyPackage.CiphersuiteId,
+                            publication.KeyPackageRefHex[..Math.Min(16, publication.KeyPackageRefHex.Length)],
+                            publication.KeyPackageBytes.Length);
+                    }
+                    catch (Exception ex) when (ex is PeelFailedException or FormatException)
+                    {
+                        // One malformed publication must not cost the others: an
+                        // account can have several, and a peer that gets one wrong
+                        // is still invitable through the rest.
+                        _logger.LogWarning(ex,
+                            "Ignoring a malformed kind-30443 from {Relay} for {PubKey}",
+                            relayUrl, publicKeyHex[..Math.Min(16, publicKeyHex.Length)]);
                     }
                 }
             }

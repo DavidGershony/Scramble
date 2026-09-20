@@ -89,9 +89,9 @@ public partial class App : Avalonia.Application
             // the case where OnCreate ran before Shell was available).
             MainActivity.SetShell(shellViewModel);
 
-            // MLS service factory — Android cannot load the Rust uniffi backend (MlsService)
-            // without the native libs cross-compiled for ARM; force Managed (pure-C#) here.
-            shellViewModel.MlsServiceFactory = storage => new ManagedMlsService(storage);
+            // MLS service — the Dark Matter engine. Pure C#, so the ARM native-library
+            // problem that forced the backend choice here no longer applies.
+            shellViewModel.MlsServiceFactory = DarkMatterMlsServiceFactory.Create;
 
             // File picker — use Avalonia's cross-platform StorageProvider API
             ChatViewModel.FilePickerFunc = async () =>

@@ -8,6 +8,9 @@ using Scramble.Core.Logging;
 using Scramble.Core.Crypto;
 using Scramble.Core.Models;
 using MarmotCs.Protocol.Mip02;
+using Scramble.Marmot;
+using Scramble.Marmot.Wire.Nostr;
+using Scramble.Nostr.Crypto;
 
 namespace Scramble.Core.Services;
 
@@ -815,18 +818,14 @@ public class MessageService : IMessageService, IDisposable
         // Stage the add-member commit with the specific peer device KP
         var staged = await _mlsService.StageAddMemberAsync(chat.MlsGroupId, peerKeyPackage);
 
-        // Publish commit and wait for relay confirmation
-        var nostrGroupId = _mlsService.GetNostrGroupId(chat.MlsGroupId);
-        var commitGroupId = nostrGroupId != null
-            ? Convert.ToHexString(nostrGroupId).ToLowerInvariant()
-            : groupIdHex;
-
+        // Publish commit and wait for relay confirmation. The group's transport
+        // address is inside the event the engine already signed, so there is no
+        // longer an h-tag for this caller to choose.
         try
         {
             if (staged.CommitData != null && staged.CommitData.Length > 0)
             {
-                var commitEventId = await _nostrService.PublishCommitAsync(
-                    staged.CommitData, commitGroupId, _currentUser.PrivateKeyHex);
+                var commitEventId = await _nostrService.PublishCommitEventAsync(staged.CommitData);
                 _logger.LogInformation("InvitePeerToSyncGroup: commit confirmed, event {EventId}", commitEventId);
 
                 await _mlsService.MergeStagedAsync(chat.MlsGroupId);
@@ -1276,12 +1275,7 @@ public class MessageService : IMessageService, IDisposable
                 // 2. Publish commit and wait for relay confirmation
                 if (_currentUser != null && staged.CommitData != null && staged.CommitData.Length > 0)
                 {
-                    var nostrGroupId = _mlsService.GetNostrGroupId(chat.MlsGroupId);
-                    var commitGroupId = nostrGroupId != null
-                        ? Convert.ToHexString(nostrGroupId).ToLowerInvariant()
-                        : groupIdHex;
-                    var commitEventId = await _nostrService.PublishCommitAsync(
-                        staged.CommitData, commitGroupId, _currentUser.PrivateKeyHex);
+                    var commitEventId = await _nostrService.PublishCommitEventAsync(staged.CommitData);
                     // ↑ throws PublishUnconfirmedException on no-OK (Phase 3)
                     _logger.LogInformation("AddMember: commit confirmed by relay, event {EventId}", commitEventId);
 
@@ -1412,15 +1406,9 @@ public class MessageService : IMessageService, IDisposable
                 var staged = await _mlsService.StageAddMemberAsync(chat.MlsGroupId!, peerKeyPackage);
 
                 // Publish commit and wait for relay confirmation
-                var nostrGroupId = _mlsService.GetNostrGroupId(chat.MlsGroupId!);
-                var commitGroupId = nostrGroupId != null
-                    ? Convert.ToHexString(nostrGroupId).ToLowerInvariant()
-                    : groupIdHex;
-
                 if (staged.CommitData != null && staged.CommitData.Length > 0)
                 {
-                    var commitEventId = await _nostrService.PublishCommitAsync(
-                        staged.CommitData, commitGroupId, _currentUser.PrivateKeyHex);
+                    var commitEventId = await _nostrService.PublishCommitEventAsync(staged.CommitData);
                     _logger.LogInformation("AddPeerDevice: commit confirmed for group {GroupId}, event {EventId}",
                         groupIdHex[..Math.Min(16, groupIdHex.Length)], commitEventId);
 
@@ -1518,8 +1506,7 @@ public class MessageService : IMessageService, IDisposable
         {
             if (_currentUser != null)
             {
-                var groupIdHex = Convert.ToHexString(chat.MlsGroupId).ToLowerInvariant();
-                await _nostrService.PublishGroupMessageAsync(commitData, groupIdHex, _currentUser.PrivateKeyHex);
+                await _nostrService.PublishCommitEventAsync(commitData);
                 // ↑ throws PublishUnconfirmedException on no-OK
 
                 await _mlsService.MergeStagedAsync(chat.MlsGroupId);
@@ -1574,8 +1561,7 @@ public class MessageService : IMessageService, IDisposable
 
         try
         {
-            var groupIdHex = Convert.ToHexString(chat.MlsGroupId).ToLowerInvariant();
-            await _nostrService.PublishGroupMessageAsync(commitData, groupIdHex, _currentUser.PrivateKeyHex);
+            await _nostrService.PublishCommitEventAsync(commitData);
 
             await _mlsService.MergeStagedAsync(chat.MlsGroupId);
 
@@ -1970,20 +1956,36 @@ public class MessageService : IMessageService, IDisposable
                 nostrEvent.EventId[..Math.Min(16, nostrEvent.EventId.Length)]);
         }
 
-        // Parse Welcome event tags via MIP-02 protocol library
+        // Read the Welcome's tags with the engine's own kind-444 codec.
+        //
+        // It replaced marmot-cs's WelcomeEventParser, which *requires* an
+        // ["encoding","base64"] tag and throws FormatException without one — and
+        // the catch below returns, silently. Current peers must not emit that tag,
+        // so this path had been dropping every Welcome a current peer sent: no
+        // invite, no error, nothing in the UI. It worked only because the app's own
+        // Welcomes carried the same non-conformant tag, which is interop failing in
+        // a mirror.
+        //
+        // The engine's reader also rejects a *repeated* e or relays tag rather than
+        // taking the first — explicitly a MUST NOT, because "take the first" lets
+        // an attacker prepend a tag and steer the join.
         string? keyPackageEventId;
         List<string> relayUrls;
         try
         {
-            var tagsArray = nostrEvent.Tags.Select(t => t.ToArray()).ToArray();
-            var (_, parsedKpId, parsedRelays) = WelcomeEventParser.ParseWelcomeEvent(
-                nostrEvent.Content, tagsArray);
-            keyPackageEventId = parsedKpId;
-            relayUrls = parsedRelays
+            WelcomeRumor rumor = WelcomeEvent.Read(new Rumor(
+                nostrEvent.PublicKey,
+                new DateTimeOffset(nostrEvent.CreatedAt, TimeSpan.Zero).ToUnixTimeSeconds(),
+                nostrEvent.Kind,
+                nostrEvent.Tags.Select(t => (IReadOnlyList<string>)t).ToList(),
+                nostrEvent.Content));
+
+            keyPackageEventId = Convert.ToHexString(rumor.KeyPackageEventId).ToLowerInvariant();
+            relayUrls = rumor.Relays
                 .Where(u => u.StartsWith("wss://") || u.StartsWith("ws://"))
                 .ToList();
         }
-        catch (FormatException ex)
+        catch (Exception ex) when (ex is PeelFailedException or FormatException)
         {
             _logger.LogWarning("HandleWelcome: rejecting malformed Welcome {EventId}: {Reason}",
                 nostrEvent.EventId[..Math.Min(16, nostrEvent.EventId.Length)], ex.Message);
@@ -2265,6 +2267,29 @@ public class MessageService : IMessageService, IDisposable
         return msg.Contains("epoch", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// What to hand the MLS service for one inbound kind-445 event.
+    /// </summary>
+    /// <remarks>
+    /// <b>The envelope when we have it, the ciphertext when we do not.</b> The
+    /// Dark Matter engine ingests the whole signed event: its peeler is the only
+    /// thing that verifies the id and signature, so handing it content stripped
+    /// out of the event would mean routing on fields nobody checked — and it
+    /// refuses bare ciphertext rather than guess. The legacy engines take MIP-03
+    /// ciphertext and nothing else.
+    /// <para>
+    /// So the shape of the payload is decided by what the caller actually has,
+    /// not by which engine is registered. <see cref="NostrEventReceived.RawJson"/>
+    /// is set by every relay parse path; it is empty only for an event that never
+    /// had an envelope — a gift-wrap rumor, or one a test built by hand — and the
+    /// base64 content is then the only thing there is.
+    /// </para>
+    /// </remarks>
+    private static byte[] InboundPayloadFor(NostrEventReceived nostrEvent) =>
+        string.IsNullOrEmpty(nostrEvent.RawJson)
+            ? Convert.FromBase64String(nostrEvent.Content)
+            : System.Text.Encoding.UTF8.GetBytes(nostrEvent.RawJson);
+
     private async Task HandleGroupMessageEventAsync(NostrEventReceived nostrEvent)
     {
         // Find the group tag (MIP-03 uses 'h', legacy uses 'g')
@@ -2310,7 +2335,7 @@ public class MessageService : IMessageService, IDisposable
         _logger.LogDebug("HandleGroupMessage: raw content prefix ({Len} chars): {Prefix}",
             nostrEvent.Content.Length,
             nostrEvent.Content[..Math.Min(80, nostrEvent.Content.Length)]);
-        var encryptedData = Convert.FromBase64String(nostrEvent.Content);
+        var encryptedData = InboundPayloadFor(nostrEvent);
         _logger.LogInformation("HandleGroupMessage: decrypting {Len} bytes for chat {ChatName}, first4hex={First4}",
             encryptedData.Length, chat.Name,
             Convert.ToHexString(encryptedData[..Math.Min(4, encryptedData.Length)]).ToLowerInvariant());
@@ -2806,22 +2831,49 @@ public class MessageService : IMessageService, IDisposable
         }
     }
 
-    // TODO: Migrate to staged commit path (StageSelfUpdateAsync + MergeStagedAsync)
-    // for full MIP-03 compliance. Currently uses auto-merge UpdateKeysAsync which
-    // advances local state before relay confirmation.
-    private async Task PerformSelfUpdateAsync(byte[] groupId)
+    /// <summary>
+    /// Rotates this member's leaf key, stage-publish-merge.
+    /// </summary>
+    /// <remarks>
+    /// <b>The merge is not optional, and it used to be absent.</b>
+    /// <c>UpdateKeysAsync</c> applied the rotation itself on the old engine, so
+    /// this method published and stopped. The Dark Matter engine stages it like
+    /// every other commit — which means a rotation left unmerged is a pending
+    /// staged commit, and the engine refuses to stage a second one while one is
+    /// pending. Publishing without finishing would therefore wedge the group at
+    /// the first key rotation: no further add, remove or admin change could be
+    /// staged, for a reason nothing in the UI could explain or clear.
+    /// <para>
+    /// Rolled back on any failure, for the same reason the membership paths are:
+    /// an unpublished rotation applied locally moves this member to an epoch the
+    /// group cannot reach, and gains no forward secrecy anybody agrees about.
+    /// </para>
+    /// <para>
+    /// Internal rather than private so that the publish-then-merge order, and the
+    /// rollback, can be tested without the five-minute scheduler in front of them.
+    /// </para>
+    /// </remarks>
+    internal async Task PerformSelfUpdateAsync(byte[] groupId)
     {
         if (_currentUser == null) return;
 
-        var commitData = await _mlsService.UpdateKeysAsync(groupId);
-        var nostrGroupId = _mlsService.GetNostrGroupId(groupId);
         var groupIdHex = Convert.ToHexString(groupId).ToLowerInvariant();
-        var commitGroupId = nostrGroupId != null
-            ? Convert.ToHexString(nostrGroupId).ToLowerInvariant()
-            : groupIdHex;
+        var commitData = await _mlsService.UpdateKeysAsync(groupId);
 
-        await _nostrService.PublishGroupMessageAsync(commitData, commitGroupId, _currentUser.PrivateKeyHex);
-        _logger.LogInformation("PerformSelfUpdate: published self-update commit for group {GroupId}", groupIdHex[..Math.Min(16, groupIdHex.Length)]);
+        try
+        {
+            await _nostrService.PublishCommitEventAsync(commitData);
+            await _mlsService.MergeStagedAsync(groupId);
+            _logger.LogInformation("PerformSelfUpdate: published and merged self-update commit for group {GroupId}",
+                groupIdHex[..Math.Min(16, groupIdHex.Length)]);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "PerformSelfUpdate: self-update failed for group {GroupId}, rolling back",
+                groupIdHex[..Math.Min(16, groupIdHex.Length)]);
+            await RollbackStagedCommitAsync(groupId, "PerformSelfUpdate");
+            throw;
+        }
     }
 
     public async Task DeclineInviteAsync(string inviteId)
@@ -3157,7 +3209,7 @@ public class MessageService : IMessageService, IDisposable
             }
 
             // Decrypt
-            var encryptedData = Convert.FromBase64String(nostrEvent.Content);
+            var encryptedData = InboundPayloadFor(nostrEvent);
 
             MlsDecryptedMessage decrypted;
             try

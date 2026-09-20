@@ -1,4 +1,5 @@
 using Xunit;
+using Scramble.Diagnostics.TestHelpers;
 
 namespace Scramble.Diagnostics.Compliance.MlsLifecycle;
 
@@ -35,7 +36,8 @@ public class KeyPackageExhaustionTests : MlsLifecycleTestBase
         // logic decides how many; we just want the initial storedKeyPackageCount
         // above zero so exhaustion is meaningful.
         var kp = await bob.MlsService.GenerateKeyPackageAsync();
-        await bob.NostrService.PublishKeyPackageAsync(kp.Data, bob.PrivKeyHex, kp.NostrTags);
+        await KeyPackagePublishing.PublishAndBindAsync(
+            bob.NostrService, bob.MlsService, kp, bob.PrivKeyHex);
         var initialCount = bob.MlsService.GetStoredKeyPackageCount();
         Assert.True(initialCount > 0, $"Bob should have >0 stored KPs, got {initialCount}");
         Output.WriteLine($"[kp-exhaustion] Bob initial stored KP count = {initialCount}");

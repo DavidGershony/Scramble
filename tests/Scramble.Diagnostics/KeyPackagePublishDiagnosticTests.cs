@@ -42,7 +42,12 @@ public class KeyPackagePublishDiagnosticTests
         var storage = new StorageService(dbPath, new MockSecureStorage());
         await storage.InitializeAsync();
 
-        var mlsService = new ManagedMlsService(storage);
+        // The engine the app registers. A KeyPackage it publishes carries the
+        // seven current kind-30443 tags and no "encoding" tag, and
+        // FetchKeyPackagesAsync reads it back with the engine's own codec -- which
+        // refuses the legacy engine's shape, so this round trip only holds on one
+        // engine at a time.
+        var mlsService = DarkMatterMlsServiceFactory.Create(storage);
         await mlsService.InitializeAsync(TestPrivateKeyHex, pubKeyHex);
 
         // --- Step 1: Connect to relays ---
@@ -164,7 +169,7 @@ public class KeyPackagePublishDiagnosticTests
         var storage = new StorageService(dbPath, new MockSecureStorage());
         await storage.InitializeAsync();
 
-        var mlsService = new ManagedMlsService(storage);
+        var mlsService = DarkMatterMlsServiceFactory.Create(storage);
         await mlsService.InitializeAsync(TestPrivateKeyHex, pubKeyHex);
 
         var keyPackage = await mlsService.GenerateKeyPackageAsync();
@@ -482,7 +487,7 @@ public class KeyPackagePublishDiagnosticTests
         var storage = new StorageService(dbPath, new MockSecureStorage());
         await storage.InitializeAsync();
 
-        var mlsService = new ManagedMlsService(storage);
+        var mlsService = DarkMatterMlsServiceFactory.Create(storage);
         await mlsService.InitializeAsync(privKey, pubKey);
 
         // Connect
@@ -564,7 +569,7 @@ public class KeyPackagePublishDiagnosticTests
         var storage = new StorageService(dbPath, new MockSecureStorage());
         await storage.InitializeAsync();
 
-        var mlsService = new ManagedMlsService(storage);
+        var mlsService = DarkMatterMlsServiceFactory.Create(storage);
         await mlsService.InitializeAsync(privKey, pubKey);
 
         // Connect to the local relay

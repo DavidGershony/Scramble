@@ -1,7 +1,12 @@
 # HANDOFF — Dark Matter migration: you are here
 
-**Updated:** 2026-09-19 (twentieth revision) · **Branch:** `feat/dark-matter`
-· **Last commit at time of writing:** `53cce82`
+**Updated:** 2026-09-19 (twenty-first revision) · **Branch:** `feat/dark-matter`
+· **Last commit at time of writing:** `9626da9`
+
+> **I5's pivot freeze is ON.** The flip landed (§3af), so `src/Scramble.UI` and
+> `src/Scramble.Desktop` are **bugfix-only** until the Android head has an
+> equivalent smoke test green in CI plus one week of stabilisation. Feature work
+> on the desktop head takes a `Pivot-Exempt:` trailer.
 
 Read this first. It tells you exactly what exists, what is next, and how to do
 it. It supersedes `step6-build-start-prompt.md`, which described the state
@@ -39,20 +44,24 @@ layer** (`MarmotSessionHost` / `MarmotSession`) that owns a group's lifetime.
 build has been additive throughout so it cannot break the product; P11 is where
 `Scramble.Core` stops using `marmot-cs` and starts using this.
 
-**Where P11 actually stands (2026-09-19).** `DarkMatterMlsService` exists and
-has **zero references outside its own file**. Step 2a (the unwired adapter) is
-done; **every step-2b blocker is settled** and four of the five were mis-recorded
-until they were checked against the call sites — see §3ad. The adapter has now
-been proved against the reference client through `IMlsService` rather than
-through the engine (§3ad), which is a different and stronger claim than the
-suite made before.
+**Where P11 actually stands (2026-09-19). The flip is in (§3af).** Every head
+registers `DarkMatterMlsService`; the app no longer calls `marmot-cs` for MLS.
+Step 2a (the unwired adapter) and step 2b (the registration, the signer seam,
+the commit publish sites) are both done. **Six of the ten changes the flip
+needed were not in the plan**, five of which would have shipped broken and three
+of which are the same bug: marmot-cs's MIP codecs and the `["encoding","base64"]`
+tag current peers refuse. One codec **requires** it, one **emits** it, and one
+**rejects a Welcome without it** — so invites failed in both directions, and the
+third of them had been silently rejecting every real peer's invite since long
+before this branch. Read §3af before touching any of
+it.
 
-**What is left, in order:** the flip itself (DI registration, `MainViewModel`'s
-signer calls, the **seven** publish sites — needs a `Landing-Discipline-Exempt:`
-trailer and starts I5's freeze); the three flaky lifecycle tests
-(`remaining-work` §13, worth doing *before* the flip so the gate means
-something); then P11 steps 3–5 (`IMessageService`, the `INostrService` audit,
-deleting `marmot-cs`); `validate_invitee_capabilities` (§11); and P12.
+**What is left, in order:** P11 steps 3–5 (`IMessageService`, the `INostrService`
+audit, deleting `marmot-cs` and Core's duplicate codecs); **at-rest encryption
+for the engine's store, which is a release blocker** (`remaining-work` §14); the
+three flaky lifecycle tests (`remaining-work` §13 — now more urgent, not less:
+the gate has to mean something during the freeze);
+`validate_invitee_capabilities` (§11); and P12.
 
 **Two things no test here can settle**, both needing something outside the repo:
 what a real NIP-46 signer does with a `created_at` it did not choose, and
@@ -101,8 +110,9 @@ The submodule sits exactly on the tag; keep it that way. Two interop peers
 what is left, what blocks what, and the findings behind each. This file's
 §3a–§3ab are history in order; read backwards only as far as you need.
 
-**The one-line answer:** P0–P10 are done; P11 step 1 (the inbound fan-in) is the
-current work.
+**The one-line answer:** P0–P10 are done, P11's flip is in (§3af), and P11 step 3
+(`IMessageService`) is the current work — under I5's freeze, which the flip
+started.
 
 **Four things this migration keeps teaching, which are worth reading before
 starting anything here:**
@@ -2174,6 +2184,306 @@ Each was written from the adapter's own report rather than from the call sites.
   under its own, which is noise about the recovery. It is gated on
   `HasPendingCommit` so a failure *after* a successful merge clears nothing.
 
+### 3af. THE FLIP IS IN — and six of the ten changes were not in the plan
+
+2026-09-19. `DarkMatterMlsService` is registered on every head. **I5's pivot
+freeze starts here: `src/Scramble.UI` + `src/Scramble.Desktop` are bugfix-only
+until the Android head has an equivalent smoke test green in CI plus one week.**
+Anything else landing there takes a `Pivot-Exempt:` trailer.
+
+The commit carries a `Landing-Discipline-Exempt:` trailer under I4: it is more
+than eight files across DI, Services, ViewModels and both heads, and it cannot
+be split without leaving the app broken in between — which is the one thing
+I4's "land the refactor first" exists to avoid.
+
+#### What the plan had right
+
+DI registration (three heads, through one factory), `MainViewModel` calling
+`SetExternalSigner` and losing the `SetNostrEventSigner` at `:469`, and the
+commit publish sites. All landed as described.
+
+#### Six things the plan did not have, five of which would have shipped broken
+
+- **Inbound handed the engine ciphertext, not the envelope.**
+  `HandleGroupMessageEventAsync` did `Convert.FromBase64String(nostrEvent.Content)`
+  and passed the MIP-03 ciphertext. The engine ingests the *event*, because its
+  peeler is the only thing that verifies an id and a signature, and it refuses
+  bare ciphertext rather than guess. `NostrEventReceived` now carries `RawJson`,
+  set from `eventData.GetRawText()` in the one `ParseNostrEvent` all three relay
+  paths share, and `InboundPayloadFor` chooses: the envelope when there is one,
+  the base64 content when there is not (a gift-wrap rumor never had an envelope).
+  **Not a re-serialisation** — an id is a hash of a canonical form, and a round
+  trip that escapes one character differently produces an id the engine refuses.
+- **`PublishRawEventJsonAsync` does not throw when no relay confirms.** It logs
+  and returns the id, which is right for an application message and fatal for a
+  commit: every site would have merged on an unconfirmed publish and no rollback
+  arm would ever have fired — publish-before-apply in name only, silently.
+  `INostrService.PublishCommitEventAsync` is the new door: publish the finished
+  event as-is, `PublishUnconfirmedException` if nothing takes it.
+- **There were eight commit publish sites, not seven, and the eighth changed
+  meaning.** `PerformSelfUpdateAsync` published `UpdateKeysAsync` bytes and never
+  merged, because on marmot-cs that call auto-merged. The engine stages it. Left
+  alone, the first key rotation would have wedged the group for good: a staged
+  commit nothing merges, and the engine refuses to stage a second while one is
+  pending, so no add, remove or admin change could ever be staged again — with
+  nothing in the UI able to explain or clear it. It is stage-publish-merge now,
+  with the same rollback as every other commit path.
+- **Both ViewModel sites needed rerouting, not unwrapping.** They called
+  `IMlsService.AddMemberAsync` — which the adapter refuses — inside a
+  `catch (Exception)` that turns it into an invite-error string, so invites would
+  have failed from both the chat screen and group creation, reported as a failed
+  invite rather than a missing engine. They call `IMessageService.AddMemberAsync`
+  now, which already stages, publishes, merges on confirmation, rolls back
+  otherwise, and adds every one of the invitee's devices. About forty lines of
+  MLS sequencing left Presentation, which the cutover rules wanted anyway.
+
+#### The three that would have broken interop completely, all the same bug
+
+**`NostrService.FetchKeyPackagesAsync` parsed kind-30443 with marmot-cs's
+MIP-00 parser, and that parser *requires* an `["encoding","base64"]` tag.**
+It throws `FormatException` without one. The engine stopped emitting that tag
+because current peers reject events carrying it (§5) — so after the flip the
+fetch would have silently dropped **every** current-format KeyPackage, ours and
+the reference client's alike. Nobody could be invited, in either direction, and
+the symptom is `"No KeyPackage found for member"`: an account that had published
+one, read as an account that never had.
+
+It now parses with `KeyPackageEvent.Parse`, the engine's own codec — which
+verifies the event id and signature before reading a tag, and returns the slot,
+the KeyPackageRef and the cipher suites as well. A publication authored by
+anybody other than the account we asked about is refused; one malformed
+publication no longer costs the others.
+
+**How it was found, which is the part worth keeping:** by moving
+`RelayHarness/PublishFailureTests` onto the Dark Matter engine. Those two tests
+drive `MessageService.AddMemberAsync` against a `FaultyRelay` and had been
+running on `ManagedMlsService`, so they proved the confirmation for an engine
+the app no longer uses. On the new engine they failed immediately — and not on
+the fault they were written for. A green suite on the old engine would have said
+nothing about any of this.
+
+**Then the same bug, one door along: `PublishWelcomeAsync` built its kind-444
+rumor with marmot-cs's `WelcomeEventBuilder`, which *adds*
+`["encoding","base64"]`.** Found by grepping the other MIP parsers the moment the
+KeyPackage one turned up, rather than by a test — there is no test above
+`IMlsService` that sends a Welcome to a real peer. So every invite this app sent
+was droppable by the reference client on the Welcome, after the commit had
+already gone out and the epoch had already advanced.
+
+The rumor is now built by the engine's `WelcomeEvent.BuildTags` — exactly `e`
+and `relays`, the shape outbound interop has been green against since §3m. **The
+recipient `p` tag went with it:** it sat on the rumor where it is redundant (the
+kind-1059 wrap carries the `p` that routes, and a rumor is only readable by its
+recipient anyway), nothing reads it back — `MarmotWelcomeEvent.RecipientPublicKey`
+has no consumer at all, and the whole `WelcomeMessages` observable has none
+either — and an extra tag is a peer's judgement call to reject.
+
+`NostrServiceTests.WelcomeRumorCarriesNoEncodingTag` and
+`…CarriesExactlyTheTwoRoutingTags` pin it; mutation — put `WelcomeEventBuilder`
+back — **both fail**.
+
+**And then the third, which was the worst of them and the oldest.**
+`MessageService.HandleWelcomeEventAsync` parsed the inbound rumor with
+`WelcomeEventParser.ParseWelcomeEvent` — *also* mandatory-`encoding` — and its
+`catch (FormatException)` **returns**. So the app has been **silently dropping
+every Welcome a conformant peer ever sent**: no invite, no error, nothing in the
+UI. It worked only because our own Welcomes carried the same non-conformant tag,
+which is interop failing in a mirror, and it is exactly the shape §3 keeps
+recording: a green suite agreeing with itself.
+
+Note what that means for the earlier claim in §3ad. Inbound joins were proved
+against the reference client *through `IMlsService`* — which enters below this
+method. The app's own inbound invite path had never faced a peer at all.
+
+Inbound now reads through `WelcomeEvent.Read`, the same codec the outbound side
+builds with, wrapped over a `Rumor` built from the received event. It also
+**rejects a repeated `e` or `relays` tag** instead of taking the first, which is
+explicitly a MUST NOT — "take the first" lets an attacker prepend a tag and steer
+the join — and it requires the `relays` tag MIP-02 mandates.
+
+**This cost twenty-five test fixtures, and that was the tell.** Every hand-built
+kind-444 in the suite carried `["encoding","base64"]`, an `e` tag like
+`"kp-event-id"` or `"fake443_<guid>"`, and often no `relays` tag at all — a shape
+no relay could deliver. They are now built the way the wire is, which is what
+makes the suite a mutation detector: put `WelcomeEventParser` back and **12 tests
+fail**. Two incidental finds while fixing them: a `PublishKeyPackageAsync` mock
+returned `"fakekp_<guid>"` as an event id (now 32 bytes of hex, because that id
+travels into an `e` tag), and `AcceptInviteAsync`'s relay-overlap check was
+reached for the first time by a fixture that finally had relays — an unstubbed
+`ConnectedRelayUrls` handed it null.
+
+**Two tests now cover the seam, at the two levels it needs.**
+
+- **`InboundWelcomeTests`** (7, fast gate). The reproduction is
+  `AWelcomeFromAConformantPeerBecomesAnInvite`: a rumor with exactly the two tags
+  MIP-02 mandates and nothing else. Beside it, `AnUnknownTagDoesNotCostTheInvite`
+  guards the opposite error — a peer that adds a tag must still be able to invite
+  us, since the kind-444 rules constrain those two and are silent on others — and
+  four fail-closed controls (repeated `e`, repeated `relays`, non-hex `e`, no
+  `relays`). Mutation: restore `WelcomeEventParser` and **3 of 7 fail**. The four
+  fail-closed ones keep passing, which is the honest outcome to record: they would
+  pass for the wrong reason, so they are not what proves the fix.
+- **`InboundWelcomeInteropTests`** (`DarkMatterInterop`). The one that would have
+  caught it: the reference client creates a group and invites us; the app makes
+  itself invitable through its own publishers (kind-10002/10050 plus a *bound*
+  KeyPackage), `NostrService` unwraps the gift wrap, `MessageService` raises the
+  invite, `AcceptInviteAsync` joins, and the peer then sends a message that has to
+  arrive in the chat. It asserts through the app's own observables rather than the
+  engine's state, deliberately: what broke was the app's reading of a rumor, and a
+  test that reads the rumor itself cannot see that.
+
+  Two things it documents by doing them. `AcceptInviteAsync` does **not** subscribe
+  to the group's kind-445 traffic — that is the head's job, and
+  `ChatListViewModel` does it right after accepting — so the test does what a head
+  does, addressing the subscription by the *transport* group id. And publishing a
+  KeyPackage is two steps: the relay, then `MarkKeyPackagePublishedAsync`.
+
+**Worth a look before P12's media work:** three MIP codecs were on live paths and
+all three were wrong in the same direction. What is left of `MarmotCs.Protocol.*`
+in `Scramble.Core` is `Nip44Encryption`, used for the gift-wrap seal and NIP-17
+DMs — generic crypto with no tag rules, so not this bug, but **the app's
+gift-wrap path has still never faced a real peer** (the interop suite wraps with
+the engine's `Nip59GiftWrap`). It goes at step 5 with the rest. Anything else
+reaching for `MarmotCs.Protocol.*` should be assumed to have this bug until read.
+
+#### What is tested, and what each mutation caught
+
+- `RelayHarness/PublishFailureTests` (2, now on the new engine, in the I2 gate) —
+  MessageService + engine + a relay that takes events and never answers. Mutation:
+  make `PublishCommitEventAsync` return quietly on no-OK — **both fail**. The
+  no-OK path cannot be mocked: the timeout, the tracker and the exception all
+  live between the socket and the caller.
+- `SelfUpdateCommitTests` (5). Mutations: drop the merge — **2 fail**; drop the
+  rollback — **2 fail**.
+- `InboundEnvelopeTests` (3). Mutation: always use the base64 content —
+  **2 fail**, and the third (the no-envelope fallback) keeps passing, which is
+  what it is for.
+- `StagedCommitRollbackTests`, `HeadlessTestBase`, `HeadlessGroupMemberTests`
+  moved onto the new publish member.
+  `HeadlessGroupLifecycleTests.CreateGroup_WithInvite_PublishesWelcome` lost its
+  `"rust"` row: creation now stages, and `MlsService` refuses the staged API, so
+  that row asserted a configuration the app can no longer be started in.
+
+#### The I2 suite had to move engines with the app, and that is the flip's real cost
+
+**Every test that publishes a commit *through `MessageService`* had to move onto
+the Dark Matter engine**, because after the flip `MessageService` publishes a
+finished kind-445 and the legacy engines hand it MIP-03 ciphertext. Left alone
+they do not fail on an assertion — they fail on a `JsonException` inside the
+publish, then sit through a `WaitForMessageAsync` timeout each, which is how a
+40-minute integration run becomes an hour-plus one.
+
+Converted (one construction line each):
+
+- `Compliance/MlsLifecycle/MlsLifecycleTestBase` — five classes, live relay,
+  multi-party groups, including the three known-flaky ones.
+- `DeviceSyncE2ETests` — its invite goes through `InvitePeerToSyncGroupAsync`,
+  one of the eight publish sites.
+- `RelayHarness/PublishFailureTests` — above.
+
+**And a second thing the conversion exposed: a test that publishes a KeyPackage
+must bind it.** Publishing is two steps — the bytes to a relay, then
+`MarkKeyPackagePublishedAsync` to bind the event id to the private material this
+device kept (§3ad blocker 4/5). `MessageService.AutoPublishKeyPackageIfNeededAsync`
+does both; a dozen tests reached past it to `INostrService` and did only the
+first. That was invisible while nothing looked the binding up, and at the flip it
+became a failed join — reported as *"This invite targets a KeyPackage whose
+private key is no longer available"*, because `AcceptInviteAsync` reports every
+KeyPackage-named refusal that way, including the fail-closed *"this device never
+published it"*. `TestHelpers/KeyPackagePublishing.PublishAndBindAsync` now does
+both steps, and the tests that later join use it.
+
+**Four more fell out of the first clean run, and each was a different flavour of
+the same thing — a test describing the old engine.** Recorded because the shapes
+recur:
+
+- `DeviceSyncPrivateNotesTests` has its **own** copy of the base's party helper,
+  which still built `ManagedMlsService`. Converting the base missed it, and the
+  mismatch only surfaced through `FetchKeyPackagesAsync`: a legacy KeyPackage is
+  not one the engine's codec accepts, so the peer device could not be found at
+  all. **A private copy of a fixture is a fixture that does not get fixed.**
+- `FullE2EGroupInteropTests.E2E_OfflineCatchUp` and the Bob-catch-up block in
+  `WebAppInteropInvestigationTests` both fetched a kind-445 off the relay,
+  base64-decoded its content, and handed the engine ciphertext — the same mistake
+  the production path had, in test code. `ignored (InvalidEncoding)` is what that
+  looks like from ingest. They pass the whole event now.
+- `WebAppInteropInvestigationTests` called `IMlsService.AddMemberAsync` in three
+  places, which the engine refuses by design. Staged, published, merged now — a
+  diagnostic that inspects a Welcome still has to come by one honestly.
+
+**Not converted, and not broken:** tests that never publish a commit
+(`KeyPackageE2EHeadlessTests`, `Compliance/Mip03/InitialGroupCreationTests`) or
+that drive the legacy engine and `NostrService`'s old publish members directly
+and consistently (`GroupEpochSyncDiagnosticTests`,
+`ExporterSecretDiagnosticTests`, `WhitenoiseGroupInteropTests`,
+`WebAppInteropInvestigationTests`). They still pass, and they now describe an
+engine the product does not ship — `InitialGroupCreationTests` most pointedly,
+since it is a MIP-03 *compliance* test asserting the old engine's group
+creation. **They go at step 5 with `marmot-cs`**, not before: converting a test
+that is neither broken nor load-bearing for the flip is scope this commit did not
+need.
+
+#### Two things this commit deliberately did not do
+
+- **The engine's rows are not encrypted at rest, and the legacy engine's were.**
+  `EncryptedSqliteStorageProvider` put MLS state, welcome data and message
+  content through `ISecureStorage` (DPAPI, Android Keystore);
+  `SqliteMarmotStorageProvider` writes `groups.live_state`,
+  `key_packages.private_material`, `epoch_archive.group_state` and
+  `messages.wire` as plain BLOBs. The plan's §2 table says at-rest encryption
+  "survives, engine-agnostic" — true of the mechanism, false of the MLS store,
+  and it was written from the mechanism rather than from the call sites, which is
+  the same shape as the five step-2b blockers. **This is a release blocker**, in
+  `remaining-work` §14. Twelve sub-interfaces where a missed field is a silent
+  leak is not something to bolt onto a pivot commit; nothing ships from this
+  branch, which is the only reason that ordering is acceptable.
+- **`--mdk managed|rust` is refused rather than ignored.** It selected between
+  two marmot-cs backends and there is nothing left to select. Accepting it
+  silently would tell a reader their choice took effect. The flag goes with
+  marmot-cs at step 5.
+
+#### Still unverified, and it needs a device
+
+Unchanged by this commit, and now the only thing between here and a working
+app on hardware: what a real NIP-46 signer does with a `created_at` it did not
+choose, and with a kind granted only after pairing. Test doubles agree with our
+assumptions by construction. **The Android head was not compiled locally** — no
+Android SDK on this machine — so CI is the first build of it.
+
+### 3ag. The peer is at `wn 0.10.3`, and §3ac's condition is met
+
+2026-09-20. **Not a decision — an accident that landed on the right side, and it
+is recorded as an accident.** Recreating the peer container (the documented
+remedy for a corrupted peer is the *volume*, not the container) forced
+`build-marmot-peers.ps1` to re-resolve the newest `wn-agent-v*` tag, which moved
+the peer from the verified `0.9.21` to **`0.10.3`**.
+
+§3ac decided to stay at 0.9.21 because `marmotkit-v0.10.0` had no release and no
+client ran it. **That has changed**, and `./scripts/check-shipped-pins.ps1` says
+so exactly:
+
+| Client | mdk | Tag | Relation to our peer |
+|---|---|---|---|
+| whitenoise-android | `7d8bba36` | (untagged) | **the same commit** |
+| whitenoise-ios | `7dba6fc8` | `marmotkit-v0.10.2` | 7 behind |
+| whitenoise-mac | `908780b3` | `marmotkit-v0.9.16` | 200 behind |
+| whitenoise-linux | `c4530625` | (untagged) | 317 behind |
+
+So the peer is now **the exact commit the Android app ships**, which is the
+strongest position this suite has been in, and §3ac's "re-check when the apps
+adopt it" is satisfied rather than deferred.
+
+**What is still owed:** §3ac's *method*. That assessment compared blob SHAs of
+the wire-relevant crates between the two tags — `git/trees/<tag>?recursive=1`,
+never `gh api .../compare`, whose `.files` caps at 300 and silently drops whole
+crates. Nobody has run that comparison over `0.9.21 → 0.10.3`. Until somebody
+does, "the wire did not change" is an assumption, not a finding — and a green
+interop run is evidence about our own code, not a substitute for it.
+
+**Do not read a failure here as a flip regression without checking the pin
+first.** Pinning back is `MDK_REF` in `tests/wn-agent-docker/Dockerfile` plus a
+rebuild.
+
 ### 3ae. Three process traps this stretch paid for
 
 - **`CLAUDE.md`'s "reproducing CI locally" command had drifted from
@@ -2257,21 +2567,34 @@ Each was written from the adapter's own report rather than from the call sites.
 
 ## 4. How to work here
 
-**The baseline, as of `53cce82` (2026-09-19).** Anything different is yours:
+**The baseline, after the flip (2026-09-20).** Anything different is yours:
 
 | Gate | Green |
 |---|---|
-| Fast unit | **1196 Marmot / 579 Core / 253 UI**, 0 failures (1 Core + 2 UI skips, pre-existing) |
-| Integration (CI's filter) | **104 total**, 4 skips |
-| `Category=DarkMatterInterop` | **32 / 32**, zero skips |
+| Fast unit | **1196 Marmot / 596 Core / 252 UI**, 0 failures (1 Core + 2 UI skips, pre-existing) |
+| Integration (CI's filter) | **105 total: 101 passed, 0 failed, 4 skipped** |
+| `Category=DarkMatterInterop` | **33 / 33**, zero skips |
 | `./scripts/check-drift.ps1` | no rules triggered |
 
-**Three of those integration tests are flaky and it is recorded**, not a mystery:
-`NonPowerOfTwoTree(5)`, `NonPowerOfTwoTree(7)` and `EpochRatchetStress`, all
-`WaitForMessageAsync` timeouts, all passing in isolation. A failure in one of
-*those three* is not evidence of a regression, and a pass is not evidence of its
-absence; any other failure is a real signal. It is **not** accumulated relay
-state — that was tested and disproved. See `remaining-work` §13.
+**The 4 skips are all Whitenoise**, and they are named in the output:
+`GroupChat_3Users_2Scramble_1Whitenoise`, `GroupChat_4Users_2Scramble_2Whitenoise`,
+`GroupChat_WhitenoiseCreatesGroup_ScrambleJoins` and `E2E_3Users_2OC_1WN_FullFlow`.
+That container is not run any more, and one of those four is the test that would
+have caught §3af's inbound bug — see `remaining-work` §15, which is about the
+skips themselves.
+
+**UI is 252 rather than 253** because `CreateGroup_WithInvite_PublishesWelcome`
+lost its `"rust"` row: the staged API that group creation now uses does not exist
+on that backend, so the row asserted a configuration the app cannot be started in.
+**Core is 596 rather than 579** with the 17 tests §3af lists.
+
+**The three formerly-flaky integration tests passed**
+(`NonPowerOfTwoTree(5)`, `(7)`, `EpochRatchetStress`), on a clean peer, in a
+9m45s run — against 44m and three failures on a peer whose volume was 22 hours
+old. That is one data point, not a fix: `remaining-work` §13 still stands, and
+giving those three their own category is still the honest move. But **recreate
+`scramble_mdk-cli-data` before concluding anything about them** — the volume, not
+the container (§3ag).
 
 **Commands.** Prefer the `run-tests` skill — it owns the stage scripts, brings
 the right containers up, and knows that a skipped interop test is a failure.
@@ -2376,9 +2699,15 @@ without the interop suite running).
 | Submodule left on another branch | `Scramble.Core` fails to compile with a missing symbol | `git submodule update --init --recursive` restores the recorded commit. |
 | Reproducing the integration gate from `CLAUDE.md` | It had drifted from `integration.yml` in both directions — ran `FullE2E` which CI does not, omitted `DarkMatterInterop` which CI does. 72 tests locally against CI's 104, skipping the whole interop suite | Keep the two filters in step character-for-character. Check before trusting a green local integration run. |
 | Killing an interop run mid-flight | Corrupts the peer container's SQLite. Every later run fails `backend failure: file is not a database`, naming whichever command ran first — so it reads as a fault in an unrelated test | Recreate the `scramble_mdk-cli-data` volume. A clean peer also runs the category in ~2m30 against ~8m40 dirty. |
+| Publishing a KeyPackage in a test without `MarkKeyPackagePublishedAsync` | The join is fail-closed on the event id the Welcome names, so the invite is refused — and `AcceptInviteAsync` reports it as "the private key is no longer available", which sounds like consumed material rather than a missing binding | `KeyPackagePublishing.PublishAndBindAsync`. Publishing is two steps; the app's own auto-publish path does both |
 | Trusting a subagent's test counts or mutation results | One worktree was branched **182 commits stale**, so its mutations proved nothing on the tip; another reported "UI unchanged" where the tip showed 29 failures | Re-run its mutations on the real tree and compare its reported baselines against yours before committing. |
 | Testing the adapter only against itself | `DarkMatterMlsService` persists the sender ratchet by hand, outside the engine's send path. Two of our own instances stay in perfect agreement with a ratchet one generation out; a real peer decrypts nothing | `AdapterInteropTests` drives `IMlsService` against the reference client, and only the restart test catches it. Do not let a new adapter path land without a seat in that suite. |
 | Judging a commit's authority on an epoch **number** match | A number is not a state: after a fork two branches sit at the same epoch with different trees and admin lists, so a peer's commit gets judged under our policy against the wrong member | Refuse, but file `Retryable` — convergence re-judges at the true fork epoch. `Failed` hides the branch for good, because a pass lists only `Retryable`. See `remaining-work` §12. |
+| Parsing an inbound kind-444 with marmot-cs's `WelcomeEventParser` | It *requires* `["encoding","base64"]` and the caller's `catch (FormatException)` returns — so every Welcome from a conformant peer is dropped with no invite and no error. It looked fine only because our own Welcomes carried the same bad tag | `WelcomeEvent.Read` over a `Rumor`. One codec for both directions, and it rejects a repeated routing tag rather than taking the first |
+| Building a kind-444 Welcome rumor with marmot-cs's `WelcomeEventBuilder` | It adds `["encoding","base64"]`, which current peers reject before any MLS processing — so the invite dies on the Welcome, after the commit has gone out and the epoch has advanced | `WelcomeEvent.BuildTags`. Exactly `e` and `relays`, which is what outbound interop is green against |
+| Parsing a current kind-30443 with marmot-cs's MIP-00 `KeyPackageEventParser` | It *requires* an `["encoding","base64"]` tag and throws without one. Current peers reject events carrying that tag, so the engine does not emit it — and the fetch then drops every current-format KeyPackage, ours and the reference client's, reporting `"No KeyPackage found for member"`. An account that published one, read as one that never had | `KeyPackageEvent.Parse`, the engine's codec. It verifies the event id and signature before reading a tag |
+| Publishing a commit with `PublishRawEventJsonAsync` | It logs and returns the id when no relay confirms. The caller then merges a commit that may be on no relay at all, and the rollback arm never fires — publish-before-apply in name only, silently | `PublishCommitEventAsync`. A commit needs a confirmation to merge on; an application message does not, which is why the two are different members |
+| Proving a service-layer rule against `ManagedMlsService` | It is not the engine the app registers. `RelayHarness/PublishFailureTests` proved commit confirmation for a path that no longer exists; moving them onto the new engine failed instantly, and not on the fault they were written for | A test above `IMlsService` has to run on the engine the heads register, or it is testing a deleted app |
 | `Utf8JsonWriter` for NIP-01 canonical form | Emoji get surrogate-escaped, so the event id differs from everyone else's | Use the hand-written serialiser in `NostrEventTemplate.Serialize`. No encoder option fixes it. |
 | Pinning only to `nip44.vectors.json` | Passes while missing the 2026-06-28 amendment the file predates | Check `44.md` prose and its inline vectors too. |
 | Using a QUIC varint for an MLS vector length | Agrees at every realistic size, then silently diverges past 2^30 | MLS allows 1/2/4 bytes only. `AppDataDictionary.WriteMlsLength` for MLS lengths, `ComponentCodec.WriteVarint` inside component payloads. |
@@ -2399,6 +2728,7 @@ without the interop suite running).
 | Invalidating a reorg's losing history by epoch alone | At the fork epoch a message survives (both branches share its keys) and a commit does not (only one branch head survives) | Sweep by epoch above the fork, then invalidate commits *at* the fork by kind. |
 | Filing a message under the epoch you were at when it arrived | A competing commit was framed against the epoch you have left; recording yours describes every fork as starting wherever you happened to be | Both wire formats carry the epoch in the clear. Read it, and decode before the ingestibility gate so a buffered record gets it too. |
 | Testing a read-before-apply rule with an Add commit | Its proposals are inline and its committer keeps its leaf, so the case cannot tell the orderings apart — the test passes either way | Use a commit that cites a proposal by hash. A departure commit does. |
+| Recreating the peer *container* when the remedy is its *volume* | `build-marmot-peers.ps1` re-resolves the newest upstream tag on a rebuild, so the peer silently moves — every interop test retargeted at once, mid-validation of something else | `docker volume rm scramble_mdk-cli-data` and leave the container alone. If the peer does move, say so before reading any result |
 | Taking the version our peer was built from as the version users run | On 2026-09-13 the iOS and Android apps were 12 commits *ahead* of the newest `wn-agent` tag, while Mac was 80 behind it and Linux 197 | `./scripts/check-shipped-pins.ps1`. Each client records its own mdk pin; read those rather than the tag list. |
 | Reaching for a White Noise app as the interop peer | They consume mdk rather than implementing the protocol, so they exercise code the CLI peer already covers — and every one of them is a GUI | Keep `mdk-cli`. Use the apps to answer what ships, not to test the wire. |
 | Checking an upstream range with `gh api .../compare` | `.files` caps at 300, so a large range silently drops whole crates — ours dropped `crates/traits` entirely, which is where the account-identity proof lives. A clean-looking diff that never looked | Compare `git/trees/<tag>?recursive=1` blob SHAs at both tags and check `truncated` is false. Identity, not inspection. |

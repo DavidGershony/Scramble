@@ -142,8 +142,8 @@ public class SkippedInviteTests : IDisposable
             Tags = new List<List<string>>
             {
                 new() { "h", "abcdef1234" },
-                new() { "e", "kp-event-id" },
-                new() { "encoding", "base64" }
+                new() { "e", "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" },
+                new() { "relays", "wss://test.relay" }
             }
         });
 
@@ -192,8 +192,8 @@ public class SkippedInviteTests : IDisposable
             Tags = new List<List<string>>
             {
                 new() { "h", "abcdef1234" },
-                new() { "e", "kp-event-id" },
-                new() { "encoding", "base64" }
+                new() { "e", "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" },
+                new() { "relays", "wss://test.relay" }
             }
         });
 

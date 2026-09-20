@@ -878,21 +878,6 @@ public partial class ChatViewModel : ViewModelBase
                 return;
             }
 
-            // Step 1: Fetch the invitee's KeyPackage from relays
-            _logger.LogDebug("Fetching KeyPackage for {PubKey}", pubKeyHex[..16] + "...");
-            InviteSuccess = "Fetching user's KeyPackage...";
-
-            var keyPackages = await _nostrService.FetchKeyPackagesAsync(pubKeyHex);
-            var keyPackage = keyPackages.FirstOrDefault();
-
-            if (keyPackage == null)
-            {
-                _logger.LogWarning("No KeyPackage found for {PubKey}", pubKeyHex);
-                InviteError = "No KeyPackage found for this user. They need to publish a KeyPackage first.";
-                InviteSuccess = null;
-                return;
-            }
-
             if (_currentChat.MlsGroupId == null)
             {
                 InviteError = "Cannot invite to a non-MLS group.";
@@ -900,58 +885,33 @@ public partial class ChatViewModel : ViewModelBase
                 return;
             }
 
-            // Step 2: Create MLS Welcome message using their KeyPackage
-            _logger.LogDebug("Creating MLS Welcome message");
+            // The whole invite — KeyPackage fetch, one staged commit per device,
+            // publish, merge, Welcome, participant list — belongs to
+            // IMessageService.AddMemberAsync.
+            //
+            // It used to be spelled out here, and that is what made the sequence
+            // wrong: this path drove IMlsService.AddMemberAsync, which applies
+            // the commit before anyone has published it, then re-wrapped the
+            // result. The service's version stages, publishes, merges only on a
+            // relay's confirmation, and rolls back otherwise — and it adds every
+            // one of the invitee's devices rather than the first KeyPackage it
+            // finds. There is no reason for a ViewModel to own an MLS sequence
+            // the service already owns correctly.
             InviteSuccess = "Creating encrypted invite...";
 
-            var welcome = await _mlsService.AddMemberAsync(_currentChat.MlsGroupId, keyPackage);
+            await _messageService.AddMemberAsync(_currentChat.Id, pubKeyHex);
 
-            // Step 3: Publish Commit BEFORE Welcome (MIP-02/03)
-            // Existing group members need the Commit to advance their epoch.
-            if (welcome.CommitData != null && welcome.CommitData.Length > 0)
+            _logger.LogInformation("Invited {PubKey} to group {ChatId}", pubKeyHex[..16] + "...", _currentChat.Id);
+
+            // AddMemberAsync persisted the participant on its own copy of the
+            // chat, so this updates what is on screen and deliberately does not
+            // save: saving this copy would write back whatever it is missing.
+            if (!_currentChat.ParticipantPublicKeys.Any(p =>
+                    string.Equals(p, pubKeyHex, StringComparison.OrdinalIgnoreCase)))
             {
-                _logger.LogDebug("Publishing Commit to Nostr (kind 445) for existing members");
-                InviteSuccess = "Publishing commit...";
-
-                try
-                {
-                    var commitEventJson = await _mlsService.EncryptCommitAsync(
-                        _currentChat.MlsGroupId, welcome.CommitData);
-                    var commitEventId = await _nostrService.PublishRawEventJsonAsync(commitEventJson);
-                    _logger.LogInformation("Published Commit {EventId} for invite to {PubKey}",
-                        commitEventId[..Math.Min(16, commitEventId.Length)], pubKeyHex[..16] + "...");
-                }
-                catch (NotSupportedException)
-                {
-                    var groupIdHex = Convert.ToHexString(_currentChat.MlsGroupId).ToLowerInvariant();
-                    var commitEventId = await _nostrService.PublishCommitAsync(
-                        welcome.CommitData, groupIdHex, _currentUserPrivateKeyHex);
-                    _logger.LogInformation("Published Commit {EventId} for invite to {PubKey} (legacy)",
-                        commitEventId[..Math.Min(16, commitEventId.Length)], pubKeyHex[..16] + "...");
-                }
+                _currentChat.ParticipantPublicKeys.Add(pubKeyHex);
             }
-
-            // Step 4: Publish Welcome to relays (kind 444)
-            _logger.LogDebug("Publishing Welcome message to relays");
-            InviteSuccess = "Publishing invite to Nostr...";
-
-            var eventId = await _nostrService.PublishWelcomeAsync(
-                welcome.WelcomeData,
-                pubKeyHex,
-                _currentUserPrivateKeyHex,
-                keyPackage.NostrEventId ?? "unknown");
-
-            _logger.LogInformation("Published Welcome message {EventId} for {PubKey}",
-                eventId, pubKeyHex[..16] + "...");
-
-            // Step 4: Add to local participants list ONLY after Welcome is published
-            _currentChat.ParticipantPublicKeys.Add(pubKeyHex);
             _currentChat.LastActivityAt = DateTime.UtcNow;
-
-            // Save updated chat
-            await _storageService.SaveChatAsync(_currentChat);
-
-            // Update participant count
             ParticipantCount = _currentChat.ParticipantPublicKeys.Count;
 
             _logger.LogInformation("Successfully invited {PubKey} to group {GroupId}", pubKeyHex, ChatId);

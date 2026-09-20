@@ -1229,6 +1229,12 @@ public partial class ChatListViewModel : ViewModelBase
             };
             _logger.LogInformation("Created MLS group {GroupId}", groupIdHex[..Math.Min(16, groupIdHex.Length)]);
 
+            // Saved before the invites, not after: each invite goes through
+            // IMessageService.AddMemberAsync, which loads the chat by id from
+            // storage. It is saved again at the end of the flow with whatever the
+            // loop added.
+            await _storageService.SaveChatAsync(chat);
+
             var invited = new List<string>();
             var inviteErrors = new List<string>();
 
@@ -1241,45 +1247,16 @@ public partial class ChatListViewModel : ViewModelBase
 
                 try
                 {
-                    var keyPackages = await _nostrService.FetchKeyPackagesAsync(publicKeyHex);
-                    var keyPackage = keyPackages
-                        .OrderByDescending(k => k.CreatedAt)
-                        .FirstOrDefault(k => k.IsCipherSuiteSupported)
-                        ?? keyPackages.FirstOrDefault();
-
-                    if (keyPackage == null)
-                    {
-                        inviteErrors.Add($"{publicKeyHex[..Math.Min(12, publicKeyHex.Length)]}... - No KeyPackage");
-                        continue;
-                    }
-                    if (!keyPackage.IsCipherSuiteSupported)
-                    {
-                        inviteErrors.Add($"{publicKeyHex[..Math.Min(12, publicKeyHex.Length)]}... - Unsupported cipher suite 0x{keyPackage.CiphersuiteId:x4}");
-                        continue;
-                    }
-
-                    var welcome = await _mlsService.AddMemberAsync(chat.MlsGroupId, keyPackage);
-
-                    // MIP-02: epoch 0 (initial creation) sends Welcome only — existing-group invites publish Commit first.
-                    if (groupInfo.Epoch + (ulong)i > 0 && welcome.CommitData != null && welcome.CommitData.Length > 0)
-                    {
-                        try
-                        {
-                            var commitEventJson = await _mlsService.EncryptCommitAsync(chat.MlsGroupId, welcome.CommitData);
-                            await _nostrService.PublishRawEventJsonAsync(commitEventJson);
-                        }
-                        catch (NotSupportedException)
-                        {
-                            await _nostrService.PublishCommitAsync(
-                                welcome.CommitData, groupIdHex, currentUser.PrivateKeyHex);
-                        }
-                    }
-
-                    var welcomeEventId = await _nostrService.PublishWelcomeAsync(
-                        welcome.WelcomeData, publicKeyHex, currentUser.PrivateKeyHex, welcome.KeyPackageEventId);
-                    _logger.LogInformation("Published Welcome {EventId} for {PubKey}",
-                        welcomeEventId[..Math.Min(16, welcomeEventId.Length)],
-                        publicKeyHex[..Math.Min(16, publicKeyHex.Length)]);
+                    // One call per invitee, and the service owns the sequence:
+                    // fetch every KeyPackage the account published, stage a commit
+                    // per device, publish it, merge only on a relay's
+                    // confirmation, roll back otherwise, then the Welcome.
+                    //
+                    // This loop used to do all of it, through
+                    // IMlsService.AddMemberAsync — which applies the commit
+                    // before it is published — and then re-wrap the result. Both
+                    // halves were wrong, and only one of them was ever visible.
+                    await _messageService.AddMemberAsync(chat.Id, publicKeyHex);
 
                     if (!chat.ParticipantPublicKeys.Any(p => string.Equals(p, publicKeyHex, StringComparison.OrdinalIgnoreCase)))
                         chat.ParticipantPublicKeys.Add(publicKeyHex);

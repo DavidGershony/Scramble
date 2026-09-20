@@ -108,7 +108,14 @@ public abstract class MlsLifecycleTestBase : IAsyncLifetime
             CreatedAt = DateTime.UtcNow
         });
 
-        IMlsService mls = new ManagedMlsService(storage);
+        // The engine the app registers, not the one it used to. These tests drive
+        // MessageService end to end over a live relay, so running them on
+        // ManagedMlsService after P11's flip would exercise a combination the
+        // product no longer has -- and would not even work: what a staged commit
+        // returns differs between the two (a finished kind-445 here, MIP-03
+        // ciphertext there) and MessageService publishes it accordingly.
+        IMlsService mls = DarkMatterMlsServiceFactory.Create(storage);
+        await mls.InitializeAsync(keys.privateKeyHex, keys.publicKeyHex);
         var messages = new MessageService(storage, nostr, mls);
         _messageServices.Add(messages);
         await messages.InitializeAsync();
@@ -129,7 +136,8 @@ public abstract class MlsLifecycleTestBase : IAsyncLifetime
         foreach (var p in parties)
         {
             var kp = await p.MlsService.GenerateKeyPackageAsync();
-            await p.NostrService.PublishKeyPackageAsync(kp.Data, p.PrivKeyHex, kp.NostrTags);
+            await KeyPackagePublishing.PublishAndBindAsync(
+                p.NostrService, p.MlsService, kp, p.PrivKeyHex);
             Output.WriteLine($"[{p.Name}] published KP slot={p.MlsService.GetLocalKeyPackageSlotId()?[..12] ?? "(none)"}");
         }
         await Task.Delay(750);

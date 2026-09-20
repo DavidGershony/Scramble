@@ -110,9 +110,10 @@ public class HeadlessGroupMemberTests : HeadlessTestBase
         await creator.MessageService.AddMemberAsync(chat.Id, joiner.User.PublicKeyHex);
         await creator.MessageService.RemoveMemberAsync(chat.Id, joiner.User.PublicKeyHex);
 
-        // Verify commit was published (PublishGroupMessageAsync for the removal commit)
-        creator.MockNostr.Verify(n => n.PublishGroupMessageAsync(
-            It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>()), Times.AtLeastOnce);
+        // The removal commit goes out through the member that publishes a
+        // finished kind-445 and demands a relay OK before the caller merges.
+        creator.MockNostr.Verify(n => n.PublishCommitEventAsync(It.IsAny<byte[]>()),
+            Times.AtLeastOnce);
     }
 
     // --- Multi-device Add Member ---

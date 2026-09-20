@@ -103,7 +103,7 @@ public abstract class HeadlessTestBase : IDisposable
         mockNostr.Setup(n => n.PublishRelayListAsync(It.IsAny<List<RelayPreference>>(), It.IsAny<string?>()))
             .ReturnsAsync(() => "fakenip65_" + Guid.NewGuid().ToString("N"));
         mockNostr.Setup(n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>()))
-            .ReturnsAsync(() => "fakekp_" + Guid.NewGuid().ToString("N"));
+            .ReturnsAsync(() => Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"));
         mockNostr.Setup(n => n.PublishWelcomeAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
             .ReturnsAsync(() => "fakewelcome_" + Guid.NewGuid().ToString("N"));
         mockNostr.Setup(n => n.PublishGroupMessageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>()))
@@ -111,6 +111,10 @@ public abstract class HeadlessTestBase : IDisposable
         mockNostr.Setup(n => n.PublishRawEventJsonAsync(It.IsAny<byte[]>()))
             .ReturnsAsync(() => "fakemsg_" + Guid.NewGuid().ToString("N"));
         mockNostr.Setup(n => n.PublishCommitAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(() => "fakecommit_" + Guid.NewGuid().ToString("N"));
+        // Where every commit goes now: a staged commit is already a signed
+        // kind-445, so MessageService publishes it as-is and requires a relay OK.
+        mockNostr.Setup(n => n.PublishCommitEventAsync(It.IsAny<byte[]>()))
             .ReturnsAsync(() => "fakecommit_" + Guid.NewGuid().ToString("N"));
         mockNostr.Setup(n => n.WaitForRelayOkAsync(It.IsAny<string>(), It.IsAny<int>()))
             .ReturnsAsync((true, (string?)null));
@@ -175,7 +179,11 @@ public abstract class HeadlessTestBase : IDisposable
     protected static void PrepareKeyPackageForAddMember(KeyPackage kp, string ownerPubKey)
     {
         kp.EventJson = CreateFakeKeyPackageEventJson(ownerPubKey, kp.Data, kp.NostrTags);
-        kp.NostrEventId = "fake443_" + Guid.NewGuid().ToString("N");
+        // 32 bytes of hex, because that is what a kind-30443 event id is and what
+        // the Welcome's e tag must carry -- the engine's kind-444 reader refuses
+        // anything else, so an id shaped like "fake443_<guid>" makes a fixture no
+        // relay could have delivered.
+        kp.NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
     }
 
     protected static void TryDeleteFile(string path)

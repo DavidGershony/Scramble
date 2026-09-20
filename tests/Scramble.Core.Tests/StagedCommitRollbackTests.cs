@@ -16,6 +16,11 @@ namespace Scramble.Core.Tests;
 /// These tests pin the rollback to "any failure between staging and a confirmed merge", and pin
 /// the two boundaries that matter: it must not fire after the merge succeeded, and it must not
 /// bury the original failure when the rollback itself fails.
+///
+/// Every commit here is published by <see cref="INostrService.PublishCommitEventAsync"/>: what a
+/// staging call returns is a finished kind-445 event, so the members that build one around it
+/// refuse these bytes outright. The exception carried out of a failed publish is what each of
+/// these tests supplies.
 /// </summary>
 public class StagedCommitRollbackTests : IDisposable
 {
@@ -124,7 +129,7 @@ public class StagedCommitRollbackTests : IDisposable
     public async Task RemoveMember_PublishThrowsNonPublishException_ClearsStagedCommit()
     {
         await _sut.InitializeAsync();
-        _nostrMock.Setup(n => n.PublishGroupMessageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>()))
+        _nostrMock.Setup(n => n.PublishCommitEventAsync(It.IsAny<byte[]>()))
             .ThrowsAsync(new ArgumentException("commitData is already a signed Nostr event"));
 
         await Assert.ThrowsAsync<ArgumentException>(
@@ -139,7 +144,7 @@ public class StagedCommitRollbackTests : IDisposable
     public async Task RemoveMember_MergeThrows_ClearsStagedCommit()
     {
         await _sut.InitializeAsync();
-        _nostrMock.Setup(n => n.PublishGroupMessageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>()))
+        _nostrMock.Setup(n => n.PublishCommitEventAsync(It.IsAny<byte[]>()))
             .ReturnsAsync("event-1");
         _mlsMock.Setup(m => m.MergeStagedAsync(It.IsAny<byte[]>()))
             .ThrowsAsync(new InvalidOperationException("merge failed"));
@@ -155,7 +160,7 @@ public class StagedCommitRollbackTests : IDisposable
     public async Task RemoveMember_PublishUnconfirmed_StillClearsAndRethrowsUnconfirmed()
     {
         await _sut.InitializeAsync();
-        _nostrMock.Setup(n => n.PublishGroupMessageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>()))
+        _nostrMock.Setup(n => n.PublishCommitEventAsync(It.IsAny<byte[]>()))
             .ThrowsAsync(Unconfirmed());
 
         await Assert.ThrowsAsync<PublishUnconfirmedException>(
@@ -170,7 +175,7 @@ public class StagedCommitRollbackTests : IDisposable
     public async Task UpdateAdminPubkeys_PublishThrowsNonPublishException_ClearsStagedCommit()
     {
         await _sut.InitializeAsync();
-        _nostrMock.Setup(n => n.PublishGroupMessageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>()))
+        _nostrMock.Setup(n => n.PublishCommitEventAsync(It.IsAny<byte[]>()))
             .ThrowsAsync(new ArgumentException("commitData is already a signed Nostr event"));
 
         await Assert.ThrowsAsync<ArgumentException>(
@@ -185,7 +190,7 @@ public class StagedCommitRollbackTests : IDisposable
     public async Task UpdateAdminPubkeys_PublishUnconfirmed_StillClearsAndRethrowsUnconfirmed()
     {
         await _sut.InitializeAsync();
-        _nostrMock.Setup(n => n.PublishGroupMessageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>()))
+        _nostrMock.Setup(n => n.PublishCommitEventAsync(It.IsAny<byte[]>()))
             .ThrowsAsync(Unconfirmed());
 
         var thrown = await Assert.ThrowsAsync<PublishUnconfirmedException>(
@@ -199,7 +204,7 @@ public class StagedCommitRollbackTests : IDisposable
     public async Task UpdateAdminPubkeys_RollbackThrows_OriginalFailureStillSurfaces()
     {
         await _sut.InitializeAsync();
-        _nostrMock.Setup(n => n.PublishGroupMessageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>()))
+        _nostrMock.Setup(n => n.PublishCommitEventAsync(It.IsAny<byte[]>()))
             .ThrowsAsync(new ArgumentException("commitData is already a signed Nostr event"));
         _mlsMock.Setup(m => m.ClearStagedAsync(It.IsAny<byte[]>()))
             .ThrowsAsync(new NotSupportedException("staged commit API unavailable on this backend"));
@@ -215,7 +220,7 @@ public class StagedCommitRollbackTests : IDisposable
     public async Task UpdateAdminPubkeys_FailureAfterMerge_DoesNotClearTheMergedCommit()
     {
         await _sut.InitializeAsync();
-        _nostrMock.Setup(n => n.PublishGroupMessageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>()))
+        _nostrMock.Setup(n => n.PublishCommitEventAsync(It.IsAny<byte[]>()))
             .ReturnsAsync("event-1");
         _storageMock.Setup(s => s.SaveChatAsync(It.IsAny<Chat>()))
             .ThrowsAsync(new IOException("database is locked"));
@@ -234,7 +239,7 @@ public class StagedCommitRollbackTests : IDisposable
     public async Task InvitePeerToSyncGroup_CommitPublishThrows_ClearsStagedCommit()
     {
         await _sut.InitializeAsync();
-        _nostrMock.Setup(n => n.PublishCommitAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>()))
+        _nostrMock.Setup(n => n.PublishCommitEventAsync(It.IsAny<byte[]>()))
             .ThrowsAsync(new ArgumentException("commitData is already a signed Nostr event"));
 
         await Assert.ThrowsAsync<ArgumentException>(
@@ -248,7 +253,7 @@ public class StagedCommitRollbackTests : IDisposable
     public async Task InvitePeerToSyncGroup_WelcomeFailsAfterMerge_DoesNotClearTheMergedCommit()
     {
         await _sut.InitializeAsync();
-        _nostrMock.Setup(n => n.PublishCommitAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>()))
+        _nostrMock.Setup(n => n.PublishCommitEventAsync(It.IsAny<byte[]>()))
             .ReturnsAsync("commit-event-1");
         _nostrMock.Setup(n => n.PublishWelcomeAsync(
                 It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string>()))

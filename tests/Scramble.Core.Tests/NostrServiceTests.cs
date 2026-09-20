@@ -96,6 +96,38 @@ public class NostrServiceTests
         Assert.IsNotType<ArgumentException>(ex);
     }
 
+    // ------------------------------------------- the outbound Welcome rumor
+
+    [Fact]
+    public void WelcomeRumorCarriesNoEncodingTag()
+    {
+        // marmot-cs's WelcomeEventBuilder adds ["encoding","base64"], and current
+        // peers reject a Welcome carrying it before any MLS processing -- so every
+        // invite this app sent was droppable by the reference client, on the
+        // Welcome rather than on the commit, with no error either side could
+        // explain.
+        var tags = NostrService.BuildWelcomeRumorTags(
+            new string('a', 64), new[] { "wss://relay.example.com" });
+
+        Assert.DoesNotContain(tags, t => t.Count > 0 && t[0] == "encoding");
+    }
+
+    [Fact]
+    public void WelcomeRumorCarriesExactlyTheTwoRoutingTags()
+    {
+        // Both are routing-significant and each must appear exactly once: a peer
+        // that took the first of a repeated tag could be steered by a prepended
+        // one. An extra tag of our own is also a peer's judgement call to reject,
+        // and the p tag it used to carry was redundant -- the kind-1059 wrap
+        // carries the p that routes.
+        var tags = NostrService.BuildWelcomeRumorTags(
+            new string('a', 64), new[] { "wss://relay.example.com", "wss://other.example.com" });
+
+        Assert.Equal(2, tags.Count);
+        Assert.Equal(new[] { "e", new string('a', 64) }, tags[0]);
+        Assert.Equal(new[] { "relays", "wss://relay.example.com", "wss://other.example.com" }, tags[1]);
+    }
+
     [Fact]
     public void GenerateKeyPair_ShouldReturnValidKeys()
     {

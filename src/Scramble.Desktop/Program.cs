@@ -46,13 +46,13 @@ class Program
 
         if (mdkBackendArg != null)
         {
-            var backend = mdkBackendArg.ToLowerInvariant() switch
-            {
-                "managed" => MdkBackend.Managed,
-                "rust" => MdkBackend.Rust,
-                _ => throw new ArgumentException($"Unknown --mdk value '{mdkBackendArg}'. Use 'rust' or 'managed'.")
-            };
-            ProfileConfiguration.SetMdkBackend(backend);
+            // Refused rather than ignored. It used to select between the two
+            // marmot-cs backends; since P11's flip the Dark Matter engine is the
+            // only one registered, and accepting the flag silently would tell a
+            // reader their choice took effect. The flag goes with marmot-cs.
+            throw new ArgumentException(
+                $"--mdk '{mdkBackendArg}' is no longer selectable: the Dark Matter engine is the "
+                + "only MLS backend. Remove the flag.");
         }
 
         if (allowLocalRelays)

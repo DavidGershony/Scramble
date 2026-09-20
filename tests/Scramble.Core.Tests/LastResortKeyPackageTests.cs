@@ -103,7 +103,7 @@ public class LastResortKeyPackageTests : IAsyncLifetime
             Data = keyPackageB.Data,
             NostrTags = keyPackageB.NostrTags,
             EventJson = fakeKpJsonA,
-            NostrEventId = "fakekp_a_" + Guid.NewGuid().ToString("N")
+            NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N")
         };
         var welcomeA = await _mlsA.AddMemberAsync(groupA.GroupId, kpForA);
         _output.WriteLine($"Sender A Welcome: {welcomeA.WelcomeData.Length} bytes");
@@ -120,7 +120,7 @@ public class LastResortKeyPackageTests : IAsyncLifetime
                 new() { "p", _pubKeyB },
                 new() { "h", Convert.ToHexString(groupA.GroupId).ToLowerInvariant() },
                 new() { "e", kpForA.NostrEventId! },
-                new() { "encoding", "base64" }
+                new() { "relays", "wss://test.relay" }
             },
             RelayUrl = "wss://test.relay"
         };
@@ -142,7 +142,7 @@ public class LastResortKeyPackageTests : IAsyncLifetime
             Data = keyPackageB.Data,
             NostrTags = keyPackageB.NostrTags,
             EventJson = fakeKpJsonC,
-            NostrEventId = "fakekp_c_" + Guid.NewGuid().ToString("N")
+            NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N")
         };
         var welcomeC = await _mlsC.AddMemberAsync(groupC.GroupId, kpForC);
         _output.WriteLine($"Sender C Welcome: {welcomeC.WelcomeData.Length} bytes");
@@ -159,7 +159,7 @@ public class LastResortKeyPackageTests : IAsyncLifetime
                 new() { "p", _pubKeyB },
                 new() { "h", Convert.ToHexString(groupC.GroupId).ToLowerInvariant() },
                 new() { "e", kpForC.NostrEventId! },
-                new() { "encoding", "base64" }
+                new() { "relays", "wss://test.relay" }
             },
             RelayUrl = "wss://test.relay"
         };
@@ -200,7 +200,7 @@ public class LastResortKeyPackageTests : IAsyncLifetime
             Data = keyPackageB.Data,
             NostrTags = keyPackageB.NostrTags,
             EventJson = CreateFakeKeyPackageEventJson(_pubKeyB, keyPackageB.Data, keyPackageB.NostrTags),
-            NostrEventId = "fakekp_a_" + Guid.NewGuid().ToString("N")
+            NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N")
         };
         var welcomeA = await _mlsA.AddMemberAsync(groupA.GroupId, kpForA);
 
@@ -234,7 +234,7 @@ public class LastResortKeyPackageTests : IAsyncLifetime
             Data = keyPackageB.Data,
             NostrTags = keyPackageB.NostrTags,
             EventJson = CreateFakeKeyPackageEventJson(_pubKeyB, keyPackageB.Data, keyPackageB.NostrTags),
-            NostrEventId = "fakekp_a_" + Guid.NewGuid().ToString("N")
+            NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N")
         };
         var welcomeA = await _mlsA.AddMemberAsync(groupA.GroupId, kpForA);
 
@@ -278,7 +278,7 @@ public class LastResortKeyPackageTests : IAsyncLifetime
                 new() { "p", recipientPubKey },
                 new() { "h", Convert.ToHexString(groupId).ToLowerInvariant() },
                 new() { "e", kpEventId },
-                new() { "encoding", "base64" }
+                new() { "relays", "wss://test.relay" }
             },
             RelayUrl = "wss://test.relay"
         };
@@ -321,8 +321,12 @@ public class LastResortKeyPackageTests : IAsyncLifetime
         mock.Setup(n => n.GroupMessages).Returns(Observable.Empty<MarmotGroupMessageEvent>());
         mock.Setup(n => n.ConnectionStatus).Returns(Observable.Empty<NostrConnectionStatus>());
         mock.Setup(n => n.SyncStatus).Returns(Observable.Empty<string?>());
+        // Reached for the first time now that these fixtures carry the relays tag
+        // the wire requires: AcceptInvite checks the group's relays against the
+        // connected ones, and an unstubbed property hands it null.
+        mock.Setup(n => n.ConnectedRelayUrls).Returns(new List<string> { "wss://test.relay" });
         mock.Setup(n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>()))
-            .ReturnsAsync(() => "fakekp_" + Guid.NewGuid().ToString("N"));
+            .ReturnsAsync(() => Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"));
         mock.Setup(n => n.PublishWelcomeAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
             .ReturnsAsync(() => "fakewelcome_" + Guid.NewGuid().ToString("N"));
         mock.Setup(n => n.PublishRawEventJsonAsync(It.IsAny<byte[]>()))

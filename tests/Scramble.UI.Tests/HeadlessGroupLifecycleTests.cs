@@ -55,8 +55,8 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
             Tags = new List<List<string>>
             {
                 new() { "p", bob.User.PublicKeyHex },
-                new() { "e", welcome.KeyPackageEventId ?? "test-kp-id" },
-                new() { "encoding", "base64" }
+                new() { "e", welcome.KeyPackageEventId ?? "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" },
+                new() { "relays", "wss://test.relay" }
             },
             RelayUrl = "wss://test.relay"
         };
@@ -115,7 +115,7 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
             {
                 new() { "p", ctx.User.PublicKeyHex },
                 new() { "e", bobKp.NostrEventId! },
-                new() { "encoding", "base64" }
+                new() { "relays", "wss://test.relay" }
             },
             RelayUrl = "wss://test.relay"
         };
@@ -135,8 +135,13 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
         Assert.Equal(0, chatListVm.PendingInviteCount);
     }
 
+    // Managed only, and not because the Rust backend is unavailable here: group
+    // creation now invites through IMessageService.AddMemberAsync, which stages
+    // the commit, and MlsService refuses the staged API outright
+    // ("not available with the Rust MDK backend"). Driving this path against it
+    // would assert a configuration the app can no longer be started in — no head
+    // registers that backend since P11's flip. The row goes with marmot-cs.
     [AvaloniaTheory]
-    [InlineData("rust")]
     [InlineData("managed")]
     public async Task CreateGroup_WithInvite_PublishesWelcome(string backend)
     {
@@ -215,7 +220,7 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
             {
                 new() { "p", ctx.User.PublicKeyHex },
                 new() { "e", bobKp.NostrEventId! },
-                new() { "encoding", "base64" }
+                new() { "relays", "wss://test.relay" }
             },
             RelayUrl = "wss://test.relay"
         };
