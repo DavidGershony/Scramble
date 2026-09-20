@@ -202,6 +202,15 @@ dotnet test tests/Scramble.Diagnostics/ --filter "Category=Integration|Category=
 
 # Drift check
 ./scripts/check-drift.ps1
+
+# The Android head. No CI workflow builds it on a PR -- dotnet-desktop.yml passes
+# DesktopOnly=true, drift.yml only path-filters it, and publish.yml runs on a v*
+# tag -- so this is the only routine check that it compiles at all. It needs both
+# properties and JAVA_HOME, and it must be run from PowerShell: passing
+# AndroidSdkDirectory through Git Bash did not take.
+$env:JAVA_HOME='C:\work\jdk'
+dotnet build src\Scramble.Mobile.Android\Scramble.Mobile.Android.csproj `
+  -p:AndroidSdkDirectory='C:\work\android-sdk' -p:JavaSdkDirectory='C:\work\jdk'
 ```
 
 ## Documentation index

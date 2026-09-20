@@ -2442,6 +2442,29 @@ need.
   silently would tell a reader their choice took effect. The flag goes with
   marmot-cs at step 5.
 
+#### The Android head compiles (2026-09-20)
+
+**It does build, and until now nobody had checked** — this session first reported
+it as unbuildable here, which was wrong: the SDK is at `C:\work\android-sdk`
+with a JDK beside it at `C:\work\jdk` (android-35 and android-36, build-tools 35
+and 36). `dotnet build` on the head succeeds with the flip in place, 0 errors.
+
+Two things cost a false negative, both now in §4's command list:
+
+- **Run it from PowerShell.** `-p:AndroidSdkDirectory=...` passed through Git Bash
+  did not take: the build failed `XA5300 The Android SDK directory could not be
+  found`, as though no SDK existed at all.
+- **`JAVA_HOME` matters as much as the SDK path.** The two MSBuild properties alone
+  were not enough.
+
+**This is the only check that the head compiles, and it is manual.**
+`dotnet-desktop.yml` builds `Scramble.Desktop.slnf` with `DesktopOnly=true`, so the
+head is excluded; `drift.yml` only path-filters that directory; `publish.yml` is the
+one workflow that builds it, and it triggers on a `v*` tag or a dispatch. So
+**I5's freeze-exit condition — "an equivalent smoke test green in CI" — cannot be
+met by any job that currently exists.** Adding one is the cheapest way to make the
+freeze mean something.
+
 #### Still unverified, and it needs a device
 
 Unchanged by this commit, and now the only thing between here and a working
@@ -2631,6 +2654,12 @@ docker exec mdk-cli-interop wn --home /data/wn --socket /data/wn/wnd.sock `
   --secret-store file --account <hex> groups show <group-id-hex> --json
 
 ./scripts/check-drift.ps1
+
+# The Android head, which nothing else builds. PowerShell, not Git Bash -- the
+# property did not take through bash -- and JAVA_HOME as well as the two paths.
+$env:JAVA_HOME='C:\work\jdk'
+dotnet build src\Scramble.Mobile.Android\Scramble.Mobile.Android.csproj `
+  -p:AndroidSdkDirectory='C:\work\android-sdk' -p:JavaSdkDirectory='C:\work\jdk'
 ```
 
 **Adding a project.** Add it to `Scramble.sln`, to `Scramble.Desktop.slnf` (or
