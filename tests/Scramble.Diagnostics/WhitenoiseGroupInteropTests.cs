@@ -17,7 +17,25 @@ namespace Scramble.Diagnostics;
 /// Prerequisites:
 ///   docker compose -f docker-compose.test.yml up -d --build
 /// </summary>
-[Trait("Category", "Integration")]
+// NOT Category=Integration, deliberately, since 2026-09-21.
+//
+// These three were three of the four permanent skips in the required integration
+// gate: the Whitenoise container is not run any more (whitenoise-rs is archived
+// upstream, and wn-agent never subscribes so it cannot receive an invite), so the
+// peer they were written for is gone and mdk-cli replaced it.
+//
+// Permanent skips in a required gate are worse than absent tests, and this file is
+// the proof. GroupChat_WhitenoiseCreatesGroup_ScrambleJoins is exactly the scenario
+// that would have caught the inbound-Welcome defect in HANDOFF §3af -- the app could
+// not accept a conformant peer's invite at all -- and it sat skipping while every
+// gate reported green. See remaining-work §15.
+//
+// Kept rather than deleted because the scenarios are still the ones worth running if
+// anybody revives that peer, and because a deleted test cannot be revived by reading
+// it. Run them with: dotnet test --filter "Category=WhitenoiseInterop".
+// What now covers this ground against a live peer is
+// DarkMatterInterop/InboundWelcomeInteropTests, which drives the app's own inbound
+// path against mdk-cli.
 [Trait("Category", "WhitenoiseInterop")]
 public class WhitenoiseGroupInteropTests : IAsyncLifetime
 {

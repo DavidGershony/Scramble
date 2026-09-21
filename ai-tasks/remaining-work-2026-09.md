@@ -845,13 +845,19 @@ nothing else exercised, and the suite that replaced that peer deliberately enter
 below it. Worth asking of any suite retired in favour of another: **what did the
 old one cover that the new one enters beneath?**
 
-**Two things this leaves open.**
+**Two things this leaves open.** *(The first is now closed — 2026-09-21.)*
 
-- **`WhitenoiseGroupInteropTests` still skips**, and now that `mdk-cli` covers the
-  same ground through `InboundWelcomeInteropTests`, the honest options are to
-  retire those tests with the peer they were written for or to mark them clearly
-  as unrunnable. Leaving four permanent skips in a required gate is how this
-  happened.
+- ~~**`WhitenoiseGroupInteropTests` still skips**~~ **✅ DONE 2026-09-21. The
+  required gate has no permanent skips left.** The three in
+  `WhitenoiseGroupInteropTests` lost their `Category=Integration` trait, so they
+  leave the required whitelist while staying in the tree and runnable with
+  `--filter "Category=WhitenoiseInterop"` — kept rather than deleted because the
+  scenarios are still the right ones if that peer is ever revived, and a deleted
+  test cannot be revived by reading it. The fourth,
+  `FullE2EGroupInteropTests.E2E_3Users_2OC_1WN_FullFlow`, was **removed**: xUnit
+  traits are additive and its class is `Integration` for the tests that do run, so
+  it could not be retagged out, and its peer is archived upstream so it could never
+  run again as written. Its dead `WhitenoiseDockerClient` fixture went with it.
 - **The app's gift-wrap path has still never faced a peer.** `NostrService` seals
   and unwraps with marmot-cs's `Nip44Encryption`; the interop suite uses the
   engine's `Nip59GiftWrap`. `InboundWelcomeInteropTests` is the first test to put

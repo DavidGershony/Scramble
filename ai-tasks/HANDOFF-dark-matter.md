@@ -111,9 +111,12 @@ what is left, what blocks what, and the findings behind each. This file's
 §3a–§3ab are history in order; read backwards only as far as you need.
 
 **The one-line answer:** P0–P10 are done, P11's flip is in (§3af), step 3 is done
-(§3ah), §16's replay gap is fixed (§3ai) — and it surfaced **§17, a replayed commit
-whose epoch advance is never written down**, which is the next thing worth doing,
-ahead of steps 4–5. All of it under I5's freeze, which the flip started.
+(§3ah), §16's replay gap is fixed (§3ai), and so is the §17 it surfaced (§3aj).
+The gate has no skips left. **Next: P11 steps 4–5** — the `INostrService` audit,
+then deleting `marmot-cs`, Core's duplicate codecs and the last Marmot type in
+Presentation. Before any release: `remaining-work` §14, at-rest encryption. Before
+I5's freeze can honestly lift: a smoke test that *runs* the Android head, which
+does not exist. All of it under that freeze.
 
 **Four things this migration keeps teaching, which are worth reading before
 starting anything here:**
@@ -2482,6 +2485,43 @@ choose, and with a kind granted only after pairing. Test doubles agree with our
 assumptions by construction. **The Android head was not compiled locally** — no
 Android SDK on this machine — so CI is the first build of it.
 
+### 3aj. §17 fixed, and the required gate has no permanent skips left
+
+2026-09-21. Two stability items, and one of them changed what §13 should do.
+
+**§17 — a replayed commit's epoch is written down now.** Six lines in
+`MarmotSession.ReplayAsync`, mirroring `IngestAsync`: remember the epoch, replay,
+write the live state if it moved. `WriteLiveStateAsync` already carries the routing
+re-sync a commit needs, which is why the service-layer patch would have been wrong.
+
+**Test-first, and the test failed against the real defect rather than a mutation** —
+the in-memory assertion passed at epoch 2 and the reopened session read 1. That is
+stronger evidence than any mutation, because nothing about the scenario was arranged
+to fail. Its sibling
+`AMessageHeldWhileWeWereMidPublishIsDeliveredOnceThePublishFinishes` buffers an
+*application* message, which moves no epoch — which is exactly why this hid behind a
+test that looked like it covered the area.
+
+**The required gate has zero skips now.** All four permanent skips were Whitenoise.
+The three in `WhitenoiseGroupInteropTests` lost `Category=Integration` and stay in
+the tree under `Category=WhitenoiseInterop`; the fourth
+(`E2E_3Users_2OC_1WN_FullFlow`) was removed, because xUnit traits are additive and
+its class is `Integration` for the tests that do run, so it could not be retagged
+out. Its peer is archived upstream. `remaining-work` §15 records why this mattered:
+one of those four was the exact scenario that would have caught §3af's
+inbound-Welcome defect, and it sat skipping while every gate reported green.
+
+**§13's three flaky tests were NOT quarantined, and the evidence is why.** Four full
+runs this session: the one on a 22-hour-old peer volume took **44 minutes** and
+failed all three; the three on a recreated volume took 7, 10 and 16 minutes and
+passed all three. That is §13's own conclusion — contention during a full run —
+with the contention finally identified: not the relay volume it had already ruled
+out, but the interop phase grinding on a dirty peer. **The stability lever is
+recreating `scramble_mdk-cli-data` before a full run** (the volume, not the
+container — §3ag), and treating a run over ~20 minutes as a sign the peer is dirty.
+Quarantining tests that now pass would have cut multi-party coverage on a hypothesis
+the evidence had weakened.
+
 ### 3ai. §16 is fixed, by split-and-mutate, and the mutation round earned its keep
 
 2026-09-20. Buffered messages are delivered now:
@@ -2728,17 +2768,15 @@ rebuild.
 
 | Gate | Green |
 |---|---|
-| Fast unit | **1196 Marmot / 638 Core / 252 UI**, 0 failures (1 Core + 2 UI skips, pre-existing) |
-| Integration (CI's filter) | **105 total: 101 passed, 0 failed, 4 skipped** |
+| Fast unit | **1197 Marmot / 638 Core / 252 UI**, 0 failures (1 Core + 2 UI skips, pre-existing) |
+| Integration (CI's filter) | **101 passed, 0 failed, 0 skipped** |
 | `Category=DarkMatterInterop` | **33 / 33**, zero skips |
 | `./scripts/check-drift.ps1` | no rules triggered |
 
-**The 4 skips are all Whitenoise**, and they are named in the output:
-`GroupChat_3Users_2Scramble_1Whitenoise`, `GroupChat_4Users_2Scramble_2Whitenoise`,
-`GroupChat_WhitenoiseCreatesGroup_ScrambleJoins` and `E2E_3Users_2OC_1WN_FullFlow`.
-That container is not run any more, and one of those four is the test that would
-have caught §3af's inbound bug — see `remaining-work` §15, which is about the
-skips themselves.
+**There are no skips in the required gate any more** (§3aj). All four were
+Whitenoise, and one of them was the test that would have caught §3af's inbound
+bug while reporting green — `remaining-work` §15 is about the skips themselves,
+and is worth reading before anyone adds another.
 
 **UI is 252 rather than 253** because `CreateGroup_WithInvite_PublishesWelcome`
 lost its `"rust"` row: the staged API that group creation now uses does not exist
