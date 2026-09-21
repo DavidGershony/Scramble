@@ -7,7 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using NBitcoin.Secp256k1;
-using MarmotCs.Protocol.Nip44;
+using Scramble.Nostr.Crypto;
 using Scramble.Core.Crypto;
 using Scramble.Core.Logging;
 using System.Net;
@@ -1542,16 +1542,16 @@ public class ExternalSignerService : IExternalSigner, IDisposable
 
     private static string EncryptNip44(string plaintext, string privateKeyHex, string pubKeyHex)
     {
-        var conversationKey = Nip44Encryption.DeriveConversationKey(
+        var conversationKey = Nip44.DeriveConversationKey(
             Convert.FromHexString(privateKeyHex), Convert.FromHexString(pubKeyHex));
-        return Nip44Encryption.Encrypt(plaintext, conversationKey);
+        return Nip44.Encrypt(plaintext, conversationKey);
     }
 
     private static string DecryptNip44(string base64Payload, string privateKeyHex, string pubKeyHex)
     {
-        var conversationKey = Nip44Encryption.DeriveConversationKey(
+        var conversationKey = Nip44.DeriveConversationKey(
             Convert.FromHexString(privateKeyHex), Convert.FromHexString(pubKeyHex));
-        return Nip44Encryption.Decrypt(base64Payload, conversationKey);
+        return Nip44.Decrypt(base64Payload, conversationKey);
     }
 
     public void Dispose()
