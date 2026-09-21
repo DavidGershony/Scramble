@@ -5,7 +5,6 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Scramble.Core.Configuration;
-using Scramble.Core.Marmot;
 using Scramble.Core.Models;
 using Scramble.Core.Services;
 using Scramble.Diagnostics.TestHelpers;

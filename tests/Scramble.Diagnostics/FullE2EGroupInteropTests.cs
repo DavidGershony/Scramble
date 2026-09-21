@@ -5,7 +5,6 @@ using Scramble.Core.Configuration;
 using Scramble.Core.Models;
 using Scramble.Core.Services;
 using Scramble.Diagnostics.TestHelpers;
-using Scramble.Diagnostics.WhitenoiseInterop;
 using Xunit;
 namespace Scramble.Diagnostics;
 

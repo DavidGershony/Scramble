@@ -110,15 +110,14 @@ The submodule sits exactly on the tag; keep it that way. Two interop peers
 what is left, what blocks what, and the findings behind each. This file's
 §3a–§3ab are history in order; read backwards only as far as you need.
 
-**The one-line answer:** P0–P10 are done, P11's flip is in (§3af), steps 3 (§3ah)
-and 4 (§3ak) are done, §16's replay gap is fixed (§3ai) and so is the §17 it
-surfaced (§3aj). The gate has no skips left and interop is proved in both
-directions. **Next: P11 step 5** — delete `marmot-cs`, Core's duplicate codecs, the
-two legacy publish members, the dead `WelcomeMessages` observable, and the last
-Marmot type in Presentation (`SettingsViewModel.cs:141`). Before any release:
-`remaining-work` §14, at-rest encryption. Before I5's freeze can honestly lift: a
-smoke test that *runs* the Android head, which does not exist. All of it under that
-freeze.
+**The one-line answer: P11 is complete.** P0–P10 done, the flip in (§3af), steps 3
+(§3ah), 4 (§3ak) and 5 (§3al) done, §16's replay gap fixed (§3ai) and the §17 it
+surfaced too (§3aj). One MLS engine, proved against the reference client in both
+directions, with no skips in the required gate. **What is left is no longer P11:**
+`remaining-work` §14 (at-rest encryption) blocks a release; a smoke test that *runs*
+the Android head is what lets I5's freeze lift on evidence rather than by fiat; and
+`src/Scramble.Native` plus its CI steps are dead weight awaiting their own commit.
+P12 has not started.
 
 **Four things this migration keeps teaching, which are worth reading before
 starting anything here:**
@@ -2487,6 +2486,74 @@ choose, and with a kind granted only after pairing. Test doubles agree with our
 assumptions by construction. **The Android head was not compiled locally** — no
 Android SDK on this machine — so CI is the first build of it.
 
+### 3al. P11 step 5 — marmot-cs is gone, and the fast gate does not compile Diagnostics
+
+2026-09-21/22. Five commits, each green on its own, because the order is what keeps
+them that way: delete the tests that pin the dying code, convert the tests that
+should outlive it, then delete the code, then cut it out of the build.
+
+| Wave | Commit | What |
+|---|---|---|
+| 1 | `098cfb9` | 17 test files that pin the dying engines |
+| 2 | `6da73e3` | the app tests onto the one engine — 24 constructions, 13 files |
+| 3 | `27f7b09` | `ManagedMlsService`, `MlsService`, `MarmotWrapper`/`MarmotInterop`, `EncryptedSqliteStorageProvider`, `MdkBackend`, `--mdk` |
+| 4 | `f8225eb` | `ExternalSignerService`'s NIP-44, in its own commit as CLAUDE.md requires for that file |
+| 5 | `7585ede` | project references, solution entries, the submodule, the CI path triggers |
+
+**What wave 1 deleted and why it was safe** is in its commit message; the short
+version is that C#-vs-Rust parity is not a property anyone needs once both are
+going, and the service-state blob tests
+(`Export`/`ImportServiceStateAsync`) pin members the adapter refuses by design —
+the engine's KeyPackage material is durable rows, so there is no blob and no V4→V5
+migration of one. Checked what was worth keeping first: "material survives a
+restart" lives in `DarkMatterMlsServiceTests` and, against a real peer, in
+`AReopenedServiceStillReadsTheGroup`.
+
+**Wave 2 is where the findings were, and they were all one shape: fixtures written
+against an engine that validated nothing.**
+
+- The headless fixture built **fake** kind-30443 events — a random id and 128 `a`
+  characters for a signature. The engine verifies an event's id and signature before
+  reading a field of it, because an invitee's account key is only as trustworthy as
+  the event carrying it.
+- Nothing called `MarkKeyPackagePublishedAsync`, so the fail-closed join refused
+  every invite. **The sharpest variant is worth remembering**: a fixture that signed
+  *and* bound correctly and then overwrote `NostrEventId` with a fresh guid, naming
+  an id the store had never seen. An event id is the hash of a canonical event, not a
+  value a test may pick — and every individual step in that fixture looked done.
+- `LastResortKeyPackageTests` modelled "one KeyPackage, two senders" as the same
+  bytes under **two invented event ids**, which no relay can produce — so it was not
+  testing reuse at all.
+- `MediaMessageImetaTests` shared one store between both parties and stripped the
+  content out of a kind-445 before ingest.
+- And `EndToEndChatIntegrationTests` **required** `["encoding","base64"]` on a
+  generated KeyPackage: the tag a sender MUST NOT emit, that current peers reject at
+  the envelope, and that broke three codecs in §3af. Inverted to
+  `Assert.DoesNotContain`. App-to-app tests passed because both sides were wrong the
+  same way. **It survived wave 1**, which is the part to sit with: a whole pass over
+  these files did not see it.
+
+**A trap this session paid for, and the reason §3al exists at all:
+`Scramble.Desktop.slnf` does not include `Scramble.Diagnostics`.** So
+`dotnet build Scramble.Desktop.slnf` — and therefore every "0 errors" and every
+green fast gate — never compiles the integration suite. Step 5 left two dead
+`using` lines in Diagnostics (`Scramble.Diagnostics.WhitenoiseInterop`, deleted in
+wave 1, and `Scramble.Core.Marmot`, deleted in wave 3) and the fast gate reported
+green four times over them. The integration gate then failed to *build*, which
+reads as a test run with no summary line rather than as a failure — worth knowing,
+because `grep "^Passed!"` on that output finds nothing and silence looks like
+success. **After changing anything in `src/`, build Diagnostics explicitly**
+(`dotnet build tests/Scramble.Diagnostics`) before believing the fast gate.
+
+**Deliberately left, and separable:** `src/Scramble.Native` (the Rust crate), its
+build steps in `dotnet-desktop.yml`, and `NativeDllConsistencyTests` are now dead
+weight — nothing P/Invokes into that DLL since `MarmotWrapper` went. Removing it
+touches a workflow that cannot be exercised locally, so it wants its own commit.
+
+**The one live `MarmotCs` reference left in the repo** is
+`src/Scramble.Android/Fragments/SettingsFragment.cs`, in the abandoned legacy head
+that I1-L forbids touching and that no gate compiles.
+
 ### 3ak. P11 step 4 — the audit, and the interop half that never existed
 
 2026-09-21. The plan called step 4 "audit rather than port — most of it is transport
@@ -2850,7 +2917,7 @@ when the container was rebuilt instead of just recreated.
 
 | Gate | Green |
 |---|---|
-| Fast unit | **1197 Marmot / 638 Core / 252 UI**, 0 failures (1 Core + 2 UI skips, pre-existing) |
+| Fast unit | **1197 Marmot / 561 Core / 252 UI**, 0 failures (2 UI skips, pre-existing) |
 | Integration (CI's filter) | **101 passed, 0 failed, 0 skipped** |
 | `Category=DarkMatterInterop` | **33 / 33**, zero skips |
 | `./scripts/check-drift.ps1` | no rules triggered |
@@ -2983,6 +3050,7 @@ without the interop suite running).
 | Reproducing the integration gate from `CLAUDE.md` | It had drifted from `integration.yml` in both directions — ran `FullE2E` which CI does not, omitted `DarkMatterInterop` which CI does. 72 tests locally against CI's 104, skipping the whole interop suite | Keep the two filters in step character-for-character. Check before trusting a green local integration run. |
 | Killing an interop run mid-flight | Corrupts the peer container's SQLite. Every later run fails `backend failure: file is not a database`, naming whichever command ran first — so it reads as a fault in an unrelated test | Recreate the `scramble_mdk-cli-data` volume. A clean peer also runs the category in ~2m30 against ~8m40 dirty. |
 | Publishing a KeyPackage in a test without `MarkKeyPackagePublishedAsync` | The join is fail-closed on the event id the Welcome names, so the invite is refused — and `AcceptInviteAsync` reports it as "the private key is no longer available", which sounds like consumed material rather than a missing binding | `KeyPackagePublishing.PublishAndBindAsync`. Publishing is two steps; the app's own auto-publish path does both |
+| Believing a green fast gate covers the integration suite | `Scramble.Desktop.slnf` does not include `Scramble.Diagnostics`, so `dotnet build Scramble.Desktop.slnf` never compiles it. Step 5 left two dead `using` lines there and the fast gate reported green over them four times; the integration gate then failed to *build*, which prints no summary line at all — so `grep "^Passed!"` finds nothing and the silence reads as success | After any `src/` change, `dotnet build tests/Scramble.Diagnostics` explicitly. And on a gate run, check a summary line exists before believing there were no failures |
 | Trusting a subagent's test counts or mutation results | One worktree was branched **182 commits stale**, so its mutations proved nothing on the tip; another reported "UI unchanged" where the tip showed 29 failures | Re-run its mutations on the real tree and compare its reported baselines against yours before committing. |
 | Testing the adapter only against itself | `DarkMatterMlsService` persists the sender ratchet by hand, outside the engine's send path. Two of our own instances stay in perfect agreement with a ratchet one generation out; a real peer decrypts nothing | `AdapterInteropTests` drives `IMlsService` against the reference client, and only the restart test catches it. Do not let a new adapter path land without a seat in that suite. |
 | Judging a commit's authority on an epoch **number** match | A number is not a state: after a fork two branches sit at the same epoch with different trees and admin lists, so a peer's commit gets judged under our policy against the wrong member | Refuse, but file `Retryable` — convergence re-judges at the true fork epoch. `Failed` hides the branch for good, because a pass lists only `Retryable`. See `remaining-work` §12. |

@@ -160,6 +160,13 @@ services, and **four of the five are on the repo's own high-risk table**:
 
 Plus both UI heads, and a data migration for existing local groups.
 
+**P11 IS COMPLETE (2026-09-22).** Steps 1–5 all landed; `marmot-cs` is out of the
+build and the app has one MLS engine, proved against the reference client in both
+directions. The write-ups are handoff §3af (the flip), §3ah (step 3), §3ak (step 4)
+and §3al (step 5). What is left is not P11: §14 (at-rest encryption) blocks a
+release, an Android smoke test that *runs* is what lifts I5's freeze on evidence,
+and `src/Scramble.Native` plus its CI steps are now dead weight.
+
 **Step 2b landed 2026-09-19 — the flip is in, and I5's freeze is running.**
 Every head registers `DarkMatterMlsService`; the desktop head is bugfix-only
 until Android has an equivalent smoke test green in CI plus one week. What the
