@@ -1,6 +1,3 @@
 [submodule "lib/dotnet-mls"]
 	path = lib/dotnet-mls
 	url = https://github.com/DavidGershony/dotnet-mls
-[submodule "lib/marmot-cs"]
-	path = lib/marmot-cs
-	url = https://github.com/DavidGershony/marmot-cs.git

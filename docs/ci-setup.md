@@ -64,7 +64,6 @@ paths:
 
 - `src/Scramble.Core/**`
 - `src/Scramble.Presentation/**`
-- `lib/marmot-cs/**`
 - `lib/dotnet-mls/**`
 - `tests/Scramble.Diagnostics/**`
 - `tests/Scramble.Core.Tests/**`
