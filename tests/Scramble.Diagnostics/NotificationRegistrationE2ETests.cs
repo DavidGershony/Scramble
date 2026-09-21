@@ -3,7 +3,7 @@ using System.Net;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
-using MarmotCs.Protocol.Nip44;
+using Scramble.Nostr.Crypto;
 using Scramble.Core.Configuration;
 using Scramble.Core.Services;
 using Xunit;
@@ -113,9 +113,9 @@ public class NotificationRegistrationE2ETests : IAsyncLifetime
         var giftContent = eventObj.GetProperty("content").GetString()!;
 
         // Decrypt gift wrap layer
-        var giftConvKey = Nip44Encryption.DeriveConversationKey(
+        var giftConvKey = Nip44.DeriveConversationKey(
             Convert.FromHexString(_serverPrivKeyHex), Convert.FromHexString(ephemeralPubkey));
-        var sealJson = Nip44Encryption.Decrypt(giftContent, giftConvKey);
+        var sealJson = Nip44.Decrypt(giftContent, giftConvKey);
         _output.WriteLine("Decrypted gift wrap → seal");
 
         // Decrypt seal layer
@@ -123,9 +123,9 @@ public class NotificationRegistrationE2ETests : IAsyncLifetime
         var sealPubkey = sealDoc.RootElement.GetProperty("pubkey").GetString()!;
         var sealContent = sealDoc.RootElement.GetProperty("content").GetString()!;
 
-        var sealConvKey = Nip44Encryption.DeriveConversationKey(
+        var sealConvKey = Nip44.DeriveConversationKey(
             Convert.FromHexString(_serverPrivKeyHex), Convert.FromHexString(sealPubkey));
-        var rumorJson = Nip44Encryption.Decrypt(sealContent, sealConvKey);
+        var rumorJson = Nip44.Decrypt(sealContent, sealConvKey);
         _output.WriteLine("Decrypted seal → rumor");
 
         // 5. Verify the rumor contains the correct registration command
@@ -222,17 +222,17 @@ public class NotificationRegistrationE2ETests : IAsyncLifetime
         var giftContent = eventObj.GetProperty("content").GetString()!;
 
         // Decrypt gift wrap → seal
-        var giftKey = Nip44Encryption.DeriveConversationKey(
+        var giftKey = Nip44.DeriveConversationKey(
             Convert.FromHexString(recipientPrivKeyHex), Convert.FromHexString(ephPub));
-        var sealJson = Nip44Encryption.Decrypt(giftContent, giftKey);
+        var sealJson = Nip44.Decrypt(giftContent, giftKey);
 
         // Decrypt seal → rumor
         using var sealDoc = JsonDocument.Parse(sealJson);
         var sealPub = sealDoc.RootElement.GetProperty("pubkey").GetString()!;
         var sealContent = sealDoc.RootElement.GetProperty("content").GetString()!;
-        var sealKey = Nip44Encryption.DeriveConversationKey(
+        var sealKey = Nip44.DeriveConversationKey(
             Convert.FromHexString(recipientPrivKeyHex), Convert.FromHexString(sealPub));
-        var rumorJson = Nip44Encryption.Decrypt(sealContent, sealKey);
+        var rumorJson = Nip44.Decrypt(sealContent, sealKey);
 
         // Parse rumor content as JSON command
         using var rumorDoc = JsonDocument.Parse(rumorJson);

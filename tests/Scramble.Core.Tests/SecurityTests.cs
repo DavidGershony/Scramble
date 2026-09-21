@@ -297,17 +297,17 @@ public class SecurityTests
         var plaintext = "{\"id\":\"test123\",\"method\":\"connect\",\"params\":[\"abc\"]}";
 
         // Encrypt with A's private key + B's public key
-        var convKeyAB = MarmotCs.Protocol.Nip44.Nip44Encryption.DeriveConversationKey(
+        var convKeyAB = Scramble.Nostr.Crypto.Nip44.DeriveConversationKey(
             Convert.FromHexString(privA), Convert.FromHexString(pubB));
-        var encrypted = MarmotCs.Protocol.Nip44.Nip44Encryption.Encrypt(plaintext, convKeyAB);
+        var encrypted = Scramble.Nostr.Crypto.Nip44.Encrypt(plaintext, convKeyAB);
 
         // Encrypted should NOT contain ?iv= (that's NIP-04 format)
         Assert.DoesNotContain("?iv=", encrypted);
 
         // Decrypt with B's private key + A's public key
-        var convKeyBA = MarmotCs.Protocol.Nip44.Nip44Encryption.DeriveConversationKey(
+        var convKeyBA = Scramble.Nostr.Crypto.Nip44.DeriveConversationKey(
             Convert.FromHexString(privB), Convert.FromHexString(pubA));
-        var decrypted = MarmotCs.Protocol.Nip44.Nip44Encryption.Decrypt(encrypted, convKeyBA);
+        var decrypted = Scramble.Nostr.Crypto.Nip44.Decrypt(encrypted, convKeyBA);
 
         Assert.Equal(plaintext, decrypted);
     }

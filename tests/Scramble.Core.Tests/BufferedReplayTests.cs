@@ -207,18 +207,6 @@ public sealed class BufferedReplayTests : IDisposable
         Assert.Single(await alice.Service.ReplayBufferedMessagesAsync(groupId));
         Assert.Empty(await alice.Service.ReplayBufferedMessagesAsync(groupId));
     }
-
-    [Fact]
-    public async Task TheLegacyBackendAnswersEmptyRatherThanRefusing()
-    {
-        // ManagedMlsService is still constructed by tests until marmot-cs goes at
-        // step 5, and MessageService calls this after every commit regardless of
-        // which engine is underneath. A refusal here would break those paths for
-        // a capability the old engine simply does not have.
-        var legacy = new ManagedMlsService();
-
-        Assert.Empty(await legacy.ReplayBufferedMessagesAsync([0x01, 0x02, 0x03]));
-    }
 }
 
 /// <summary>
