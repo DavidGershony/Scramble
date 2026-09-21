@@ -3,7 +3,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
-using Scramble.Core.Marmot;
 using Scramble.Core.Models;
 using Scramble.Core.Services;
 using Xunit;

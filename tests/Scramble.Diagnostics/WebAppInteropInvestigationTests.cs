@@ -680,9 +680,9 @@ public class WebAppInteropInvestigationTests : IAsyncLifetime
             try
             {
                 var gwPubkeyHex = gwPubkey!;
-                var sealConvKey = MarmotCs.Protocol.Nip44.Nip44Encryption.DeriveConversationKey(
+                var sealConvKey = Scramble.Nostr.Crypto.Nip44.DeriveConversationKey(
                     Convert.FromHexString(bob.PrivKeyHex), Convert.FromHexString(gwPubkeyHex));
-                var sealJson = MarmotCs.Protocol.Nip44.Nip44Encryption.Decrypt(gwContent!, sealConvKey);
+                var sealJson = Scramble.Nostr.Crypto.Nip44.Decrypt(gwContent!, sealConvKey);
                 _output.WriteLine("  Seal JSON:");
                 LogPrettyJson(sealJson);
 
@@ -698,9 +698,9 @@ public class WebAppInteropInvestigationTests : IAsyncLifetime
                 Assert.Equal(13, sealKind);
                 Assert.Equal(alice.PubKeyHex, sealPubkey);
 
-                var rumorConvKey = MarmotCs.Protocol.Nip44.Nip44Encryption.DeriveConversationKey(
+                var rumorConvKey = Scramble.Nostr.Crypto.Nip44.DeriveConversationKey(
                     Convert.FromHexString(bob.PrivKeyHex), Convert.FromHexString(sealPubkey));
-                var rumorJson = MarmotCs.Protocol.Nip44.Nip44Encryption.Decrypt(sealContent, rumorConvKey);
+                var rumorJson = Scramble.Nostr.Crypto.Nip44.Decrypt(sealContent, rumorConvKey);
                 _output.WriteLine("\n  Rumor (kind 444 Welcome) JSON:");
                 LogPrettyJson(rumorJson);
 

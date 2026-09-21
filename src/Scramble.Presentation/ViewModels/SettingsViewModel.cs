@@ -138,7 +138,6 @@ public partial class SettingsViewModel : ViewModelBase
     public static Func<string[], Task<bool>>? PermissionRequestFunc { get; set; }
 
     // Library versions
-    public string MarmotCsVersion { get; } = GetPackageVersion("MarmotCs.Core");
     public string DotnetMlsVersion { get; } = GetPackageVersion("DotnetMls");
 
     // App version (read from assembly InformationalVersion set by Directory.Build.props)
