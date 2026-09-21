@@ -879,12 +879,32 @@ public sealed class MarmotSession
     /// Re-runs the messages that were held rather than delivered.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Owed after anything that changes what the group can read: a publish
     /// finishing, and a convergence pass adopting a branch. See
     /// <see cref="MessageIngest.ReplayAsync"/>.
+    /// </para>
+    /// <para>
+    /// <b>The live state is rewritten when the epoch moved, for the same reason
+    /// <see cref="IngestAsync"/> does it and one that is sharper here.</b> The
+    /// ingestibility gate sits before dispatch, so a <i>commit</i> is buffered
+    /// too — and replaying one applies it and marks the record processed, which
+    /// makes it ineligible for a later replay. An advance left only in memory is
+    /// therefore lost at the next open with nothing left to recover it from: the
+    /// device is silently behind, and no retry reaches it.
+    /// </para>
     /// </remarks>
-    public Task<ReplayResult> ReplayAsync(CancellationToken ct = default) =>
-        _ingest.ReplayAsync(_group, GroupId, ct);
+    public async Task<ReplayResult> ReplayAsync(CancellationToken ct = default)
+    {
+        ulong before = _group.Epoch;
+
+        ReplayResult result = await _ingest.ReplayAsync(_group, GroupId, ct);
+
+        if (_group.Epoch != before)
+            await _host.WriteLiveStateAsync(GroupId, _group, ct);
+
+        return result;
+    }
 
     /// <summary>
     /// Runs one convergence pass, adopting the winning branch if it is not ours.

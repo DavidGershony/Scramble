@@ -547,6 +547,55 @@ public class MarmotSessionTests : IDisposable
     }
 
     [Fact]
+    public async Task AReplayedCommitsEpochIsWrittenDownAndNotJustApplied()
+    {
+        // The sibling of the test above, and the one it does not cover. That one
+        // buffers an application message, which moves no epoch, so nothing about
+        // persistence is at stake. The ingestibility gate sits before dispatch, so
+        // a *commit* buffers too -- and a replay that applies one advances the
+        // group and marks the record Processed, which makes it ineligible for a
+        // future replay. If the advance is not written down it is lost at the next
+        // open, permanently and silently: the device is behind, with no record left
+        // to replay.
+        //
+        // IngestAsync writes live state whenever the epoch moves, for exactly this
+        // reason. ReplayAsync owes the same debt.
+        var relay = new FixedRelay(CommitPublishOutcome.Indeterminate);
+        Pair pair = await PairAsync(relay);
+
+        // Their commit, framed at the epoch we are both still at.
+        using StagedCommit theirs = MarmotSelfUpdate.Stage(pair.Them);
+        byte[] commit = Serialize(theirs.Commit);
+
+        // Ours goes out and is never acknowledged, so from here the group refuses
+        // input rather than risk applying it against a state that may roll back.
+        await RotateAsync(pair.Us);
+
+        IngestResult held = await pair.Us.IngestAsync(commit);
+        Assert.IsType<IngestOutcome.Buffered>(held.Outcome);
+
+        // The publish is abandoned, which returns the group to the epoch their
+        // commit was framed against. A failed publish is exactly when another
+        // member's commit has been waiting behind ours.
+        await _fixture.Provider.ClearStagedCommitAsync(pair.GroupId);
+        await _fixture.Provider.ClearCommitPublishAttemptAsync(pair.GroupId);
+        await _fixture.Provider.ClearEpochStateAsync(pair.GroupId);
+
+        MarmotSession revived = (await RestartAsync(pair.GroupId))!;
+        ulong before = revived.Group.Epoch;
+
+        await revived.ReplayAsync();
+
+        // The replay applied it: this group has moved.
+        Assert.Equal(before + 1, revived.Group.Epoch);
+
+        // The claim. A second open reads bytes, not memory, and the epoch the
+        // replay reached has to be among them.
+        MarmotSession again = (await RestartAsync(pair.GroupId))!;
+        Assert.Equal(before + 1, again.Group.Epoch);
+    }
+
+    [Fact]
     public async Task AConvergencePassOverAQuietGroupSettlesAndReplaysNothing()
     {
         Pair pair = await PairAsync(new FixedRelay(CommitPublishOutcome.Accepted));
