@@ -110,13 +110,15 @@ The submodule sits exactly on the tag; keep it that way. Two interop peers
 what is left, what blocks what, and the findings behind each. This file's
 §3a–§3ab are history in order; read backwards only as far as you need.
 
-**The one-line answer:** P0–P10 are done, P11's flip is in (§3af), step 3 is done
-(§3ah), §16's replay gap is fixed (§3ai), and so is the §17 it surfaced (§3aj).
-The gate has no skips left. **Next: P11 steps 4–5** — the `INostrService` audit,
-then deleting `marmot-cs`, Core's duplicate codecs and the last Marmot type in
-Presentation. Before any release: `remaining-work` §14, at-rest encryption. Before
-I5's freeze can honestly lift: a smoke test that *runs* the Android head, which
-does not exist. All of it under that freeze.
+**The one-line answer:** P0–P10 are done, P11's flip is in (§3af), steps 3 (§3ah)
+and 4 (§3ak) are done, §16's replay gap is fixed (§3ai) and so is the §17 it
+surfaced (§3aj). The gate has no skips left and interop is proved in both
+directions. **Next: P11 step 5** — delete `marmot-cs`, Core's duplicate codecs, the
+two legacy publish members, the dead `WelcomeMessages` observable, and the last
+Marmot type in Presentation (`SettingsViewModel.cs:141`). Before any release:
+`remaining-work` §14, at-rest encryption. Before I5's freeze can honestly lift: a
+smoke test that *runs* the Android head, which does not exist. All of it under that
+freeze.
 
 **Four things this migration keeps teaching, which are worth reading before
 starting anything here:**
@@ -2484,6 +2486,70 @@ app on hardware: what a real NIP-46 signer does with a `created_at` it did not
 choose, and with a kind granted only after pairing. Test doubles agree with our
 assumptions by construction. **The Android head was not compiled locally** — no
 Android SDK on this machine — so CI is the first build of it.
+
+### 3ak. P11 step 4 — the audit, and the interop half that never existed
+
+2026-09-21. The plan called step 4 "audit rather than port — most of it is transport
+that does not care which engine is underneath. Size: S, pending the audit." That was
+right, and the audit is short, because `INostrService` really is transport. Here is
+the whole of it.
+
+**Every `marmot-cs` dependency in the Nostr layer, and its disposition:**
+
+| Dependency | Uses | Disposition |
+|---|---|---|
+| `using MarmotCs.Protocol.Mip00` | **0** — `KeyPackageEventParser`/`Builder`/`SlotId` all unreferenced | removed |
+| `using MarmotCs.Protocol.Mip02` | **0** — only a comment names `WelcomeEventBuilder` | removed |
+| `using MarmotCs.Protocol.Nip44` | **12** — `Nip44Encryption`, the gift-wrap seal and wrap plus NIP-17 DMs | **swapped** to `Scramble.Nostr.Crypto.Nip44` |
+
+That is all of it. `INostrService`'s other 50 members are relays, subscriptions,
+filters, NIP-46 and event plumbing, none of which knows which engine is underneath —
+the plan's judgement, confirmed rather than assumed.
+
+**The NIP-44 swap was the only substantive change, and it is the kind that looks
+free.** The two APIs are drop-in compatible (`DeriveConversationKey`, `Encrypt`,
+`Decrypt`; `byte[]` converts to the span the new one takes), so the diff is a name.
+What makes it not free is that this is the crypto a *peer* has to be able to
+decrypt: it seals every Welcome the app sends and every NIP-17 DM. The engine's
+implementation is the vector-tested one (including the 2026-06-28 amendment the
+`nip44.vectors.json` file predates — §5); marmot-cs's may or may not be.
+
+**So the harness came first, and it is new coverage in its own right.**
+`DarkMatterInterop/OutboundWelcomeInteropTests` has the app invite the reference
+client: `MessageService` stages and publishes the commit, `NostrService` gift-wraps
+the Welcome with its own rumor, seal, NIP-44 and kind-1059 wrap, and the peer must
+list the invite, accept it, join, and then read a message we send.
+
+**Nothing had ever tested that direction through the app's own code.** The adapter
+suites publish Welcomes with the engine's `WelcomePublication.Wrap`, which the
+product does not use; `InboundWelcomeInteropTests` proves only that the app can
+*read* a peer's Welcome. So the app's outbound gift wrap had never been opened by
+anybody but us — and §15 already lists "the app's gift-wrap path has never faced a
+peer" as open. It is closed now, in both directions.
+
+**Run green before the swap, and green after.** Before matters as much: a harness
+that has not been shown to pass on the old implementation might be passing for some
+other reason. The assertions are deliberately all on the peer's side — it lists,
+accepts, joins, reads — because any assertion about our own bytes would be us
+agreeing with ourselves.
+
+**Two members documented rather than deleted.** `PublishCommitAsync` and
+`PublishGroupMessageAsync` have had no production caller since the flip, and both
+build a *fresh* kind-445 carrying `["encoding","base64"]` — the tag current peers
+reject before any MLS processing — so anything published through them is dropped
+silently by every conformant client. They survive only because tests still construct
+the legacy engines, whose ciphertext they are the correct wrapper for. Their XML docs
+now say all of that at the call site, and they go with `marmot-cs` at step 5.
+Deleting them now would mean rewriting a dozen legacy-engine tests that step 5
+deletes anyway.
+
+**Left for step 5, confirmed dead but not removed here:**
+`INostrService.WelcomeMessages` and `MarmotWelcomeEvent.RecipientPublicKey` have no
+production consumer (the live inbound path is `MessageService`'s `case 444` off the
+general `Events` stream). Removing the observable means touching every test that
+mocks it with `Observable.Empty`, which is step 5's sweep. Do not confuse it with
+`MlsWelcome.RecipientPublicKey`, which is live and asserted by
+`EndToEndChatIntegrationTests`.
 
 ### 3aj. §17 fixed, and the required gate has no permanent skips left
 

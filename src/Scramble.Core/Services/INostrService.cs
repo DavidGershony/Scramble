@@ -160,14 +160,38 @@ public interface INostrService
     Task<string> PublishWelcomeAsync(byte[] welcomeData, string recipientPublicKey, string? privateKeyHex, string keyPackageEventId);
 
     /// <summary>
-    /// Publish a commit/evolution message (kind 445).
-    /// Should be published before sending Welcome messages.
+    /// Publish MIP-03 ciphertext as a kind-445 (legacy engines only).
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>No production caller, and it cannot get one.</b> Every commit path moved
+    /// to <see cref="PublishCommitEventAsync"/> at P11's flip, because what the
+    /// Dark Matter engine hands back is already a finished, signed kind-445. This
+    /// builds a <i>fresh</i> event around the bytes it is given and attaches
+    /// <c>["encoding","base64"]</c> — a tag current peers reject before any MLS
+    /// processing, so anything published through here is dropped silently by every
+    /// conformant client.
+    /// </para>
+    /// <para>
+    /// It survives only because tests still construct the legacy engines, whose
+    /// ciphertext this is the correct wrapper for. **It goes with `marmot-cs` at
+    /// P11 step 5**, along with the ambiguous <c>byte[]</c> contract that lets a
+    /// caller confuse ciphertext with an event. Do not add a caller; if you are
+    /// holding commit bytes from the current engine, you want
+    /// <see cref="PublishCommitEventAsync"/>.
+    /// </para>
+    /// </remarks>
     Task<string> PublishCommitAsync(byte[] commitData, string groupId, string? privateKeyHex);
 
     /// <summary>
-    /// Publish a group message (kind 445).
+    /// Publish MIP-03 ciphertext as a kind-445 (legacy engines only).
     /// </summary>
+    /// <remarks>
+    /// The same wrapper as <see cref="PublishCommitAsync"/> reached by the other
+    /// door — removes and admin updates used this one — with the same
+    /// <c>["encoding","base64"]</c> tag, the same absence of production callers
+    /// since the flip, and the same removal at step 5.
+    /// </remarks>
     Task<string> PublishGroupMessageAsync(byte[] encryptedData, string groupId, string? privateKeyHex);
 
     /// <summary>

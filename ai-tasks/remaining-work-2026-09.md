@@ -858,7 +858,13 @@ old one cover that the new one enters beneath?**
   traits are additive and its class is `Integration` for the tests that do run, so
   it could not be retagged out, and its peer is archived upstream so it could never
   run again as written. Its dead `WhitenoiseDockerClient` fixture went with it.
-- **The app's gift-wrap path has still never faced a peer.** `NostrService` seals
+- ~~**The app's gift-wrap path has still never faced a peer.**~~ **✅ CLOSED
+  2026-09-21, both directions.** `OutboundWelcomeInteropTests` has the app invite the
+  reference client through `MessageService` and `NostrService` — its own rumor, seal,
+  NIP-44 and kind-1059 wrap — and the peer must list, accept, join and then read our
+  traffic. Written as the harness for step 4's NIP-44 swap and green both before and
+  after it. Original note below.
+- **(original)** **The app's gift-wrap path has still never faced a peer.** `NostrService` seals
   and unwraps with marmot-cs's `Nip44Encryption`; the interop suite uses the
   engine's `Nip59GiftWrap`. `InboundWelcomeInteropTests` is the first test to put
   the app's unwrap in front of a real peer's gift wrap, so it covers this too —

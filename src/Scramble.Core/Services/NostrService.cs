@@ -15,11 +15,9 @@ using Scramble.Core.Configuration;
 using Scramble.Core.Crypto;
 using Scramble.Core.Logging;
 using Scramble.Core.Models;
-using MarmotCs.Protocol.Mip00;
-using MarmotCs.Protocol.Mip02;
-using MarmotCs.Protocol.Nip44;
 using Scramble.Marmot;
 using Scramble.Marmot.Wire.Nostr;
+using Scramble.Nostr.Crypto;
 
 namespace Scramble.Core.Services;
 
@@ -1947,9 +1945,9 @@ public class NostrService : INostrService, IDisposable
         if (!string.IsNullOrEmpty(senderPrivateKeyHex))
         {
             // Local key path: encrypt and sign locally
-            var sealConvKey = Nip44Encryption.DeriveConversationKey(
+            var sealConvKey = Nip44.DeriveConversationKey(
                 Convert.FromHexString(senderPrivateKeyHex), Convert.FromHexString(recipientPublicKeyHex));
-            sealContent = Nip44Encryption.Encrypt(rumorJson, sealConvKey);
+            sealContent = Nip44.Encrypt(rumorJson, sealConvKey);
 
             var sealSerializedForId = SerializeForEventId(senderPublicKeyHex, sealCreatedAt, 13, sealTags, sealContent);
             var sealIdBytes = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(sealSerializedForId));
@@ -1984,9 +1982,9 @@ public class NostrService : INostrService, IDisposable
 
         // 3. Create Gift Wrap (kind 1059): encrypt seal with NIP-44 using ephemeral key (always local per NIP-59)
         var (ephemeralPrivHex, ephemeralPubHex, _, _) = GenerateKeyPair();
-        var giftConvKey = Nip44Encryption.DeriveConversationKey(
+        var giftConvKey = Nip44.DeriveConversationKey(
             Convert.FromHexString(ephemeralPrivHex), Convert.FromHexString(recipientPublicKeyHex));
-        var giftContent = Nip44Encryption.Encrypt(sealJson, giftConvKey);
+        var giftContent = Nip44.Encrypt(sealJson, giftConvKey);
         var giftCreatedAt = RandomizeTimestamp(rumorCreatedAt);
         var giftTags = new List<List<string>>
         {
@@ -2020,18 +2018,18 @@ public class NostrService : INostrService, IDisposable
             if (!string.IsNullOrEmpty(_subscribedUserPrivKey))
             {
                 // Local key path: decrypt both layers locally
-                var unwrapConvKey = Nip44Encryption.DeriveConversationKey(
+                var unwrapConvKey = Nip44.DeriveConversationKey(
                     Convert.FromHexString(_subscribedUserPrivKey), Convert.FromHexString(giftWrapEvent.PublicKey));
-                sealJson = Nip44Encryption.Decrypt(giftWrapEvent.Content, unwrapConvKey);
+                sealJson = Nip44.Decrypt(giftWrapEvent.Content, unwrapConvKey);
 
                 using var sealDoc = JsonDocument.Parse(sealJson);
                 var seal = sealDoc.RootElement;
                 var sealPubkey = seal.GetProperty("pubkey").GetString() ?? "";
                 var sealContent = seal.GetProperty("content").GetString() ?? "";
 
-                var sealConvKey2 = Nip44Encryption.DeriveConversationKey(
+                var sealConvKey2 = Nip44.DeriveConversationKey(
                     Convert.FromHexString(_subscribedUserPrivKey), Convert.FromHexString(sealPubkey));
-                rumorJson = Nip44Encryption.Decrypt(sealContent, sealConvKey2);
+                rumorJson = Nip44.Decrypt(sealContent, sealConvKey2);
             }
             else if (_externalSigner != null)
             {
@@ -3393,9 +3391,9 @@ public class NostrService : INostrService, IDisposable
 
         _logger.LogDebug("NIP-44 encrypting locally for recipient {Recipient}",
             recipientPubKey[..Math.Min(16, recipientPubKey.Length)]);
-        var convKey = Nip44Encryption.DeriveConversationKey(
+        var convKey = Nip44.DeriveConversationKey(
             Convert.FromHexString(_subscribedUserPrivKey), Convert.FromHexString(recipientPubKey));
-        return Nip44Encryption.Encrypt(plaintext, convKey);
+        return Nip44.Encrypt(plaintext, convKey);
     }
 
     public async Task<string> Nip44DecryptAsync(string ciphertext, string senderPubKey)
@@ -3415,9 +3413,9 @@ public class NostrService : INostrService, IDisposable
 
         _logger.LogDebug("NIP-44 decrypting locally for sender {Sender}",
             senderPubKey[..Math.Min(16, senderPubKey.Length)]);
-        var convKey = Nip44Encryption.DeriveConversationKey(
+        var convKey = Nip44.DeriveConversationKey(
             Convert.FromHexString(_subscribedUserPrivKey), Convert.FromHexString(senderPubKey));
-        return Nip44Encryption.Decrypt(ciphertext, convKey);
+        return Nip44.Decrypt(ciphertext, convKey);
     }
 
     /// <summary>
