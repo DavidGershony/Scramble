@@ -2747,6 +2747,22 @@ interop run is evidence about our own code, not a substitute for it.
 first.** Pinning back is `MDK_REF` in `tests/wn-agent-docker/Dockerfile` plus a
 rebuild.
 
+**The refresh procedure, verified 2026-09-21 rather than assumed.** A dirty peer is
+the single biggest drag on the gate — the same suite ran 7 minutes on a fresh volume
+and 28 on a three-day-old one — so this gets done routinely, and it must not move the
+pin:
+
+```powershell
+docker compose -f docker-compose.test.yml rm -sf mdk-cli   # container and volume ref
+docker volume rm scramble_mdk-cli-data
+./.claude/skills/run-tests/scripts/start-marmot-peers.ps1   # compose up -d, no build
+```
+
+Checked end to end: `wn 0.10.3` before, `wn 0.10.3` after, and the interop category
+back to **3m18s for 34 tests**. It is `build-marmot-peers.ps1` that re-resolves the
+newest upstream tag, not the restart — which is exactly how this session's pin moved
+when the container was rebuilt instead of just recreated.
+
 ### 3ae. Three process traps this stretch paid for
 
 - **`CLAUDE.md`'s "reproducing CI locally" command had drifted from
