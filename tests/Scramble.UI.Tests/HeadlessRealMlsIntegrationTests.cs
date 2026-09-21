@@ -91,9 +91,10 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
         await alice.MlsService.InitializeAsync(alice.User.PrivateKeyHex, alice.User.PublicKeyHex);
 
         var bobKp = await ctx.MlsService.GenerateKeyPackageAsync();
-        PrepareKeyPackageForAddMember(bobKp, ctx.User.PublicKeyHex);
+        await PrepareKeyPackageForAddMemberAsync(bobKp, ctx);
         var groupInfo = await alice.MlsService.CreateGroupAsync("Observable Test", new[] { "wss://relay.test" });
-        var realWelcome = await alice.MlsService.AddMemberAsync(groupInfo.GroupId, bobKp);
+        var realWelcome = await alice.MlsService.StageAddMemberAsync(groupInfo.GroupId, bobKp);
+        await alice.MlsService.MergeStagedAsync(groupInfo.GroupId);
 
         var chatListVm = new ChatListViewModel(ctx.MessageService, ctx.Storage, ctx.MlsService, ctx.MockNostr.Object);
         Dispatcher.UIThread.RunJobs();
@@ -449,9 +450,10 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
         await alice.MlsService.InitializeAsync(alice.User.PrivateKeyHex, alice.User.PublicKeyHex);
 
         var bobKp = await ctx.MlsService.GenerateKeyPackageAsync();
-        PrepareKeyPackageForAddMember(bobKp, ctx.User.PublicKeyHex);
+        await PrepareKeyPackageForAddMemberAsync(bobKp, ctx);
         var groupInfo = await alice.MlsService.CreateGroupAsync("Render Test", new[] { "wss://relay.test" });
-        var realWelcome = await alice.MlsService.AddMemberAsync(groupInfo.GroupId, bobKp);
+        var realWelcome = await alice.MlsService.StageAddMemberAsync(groupInfo.GroupId, bobKp);
+        await alice.MlsService.MergeStagedAsync(groupInfo.GroupId);
 
         var chatListVm = new ChatListViewModel(ctx.MessageService, ctx.Storage, ctx.MlsService, ctx.MockNostr.Object);
         var chatListView = new ChatListView { DataContext = chatListVm };

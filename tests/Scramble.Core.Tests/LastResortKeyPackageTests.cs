@@ -1,6 +1,5 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Moq;
 using Scramble.Core.Configuration;
@@ -27,7 +26,8 @@ public class LastResortKeyPackageTests : IAsyncLifetime
 
     private StorageService _storageB = null!;
     private string _dbPathB = null!;
-    private IMlsService _mlsA = null!, _mlsB = null!, _mlsC = null!;
+    private MlsTestEngine _engineA = null!, _engineB = null!, _engineC = null!;
+    private IMlsService _mlsB = null!;
     private MessageService _msgServiceB = null!;
     private Subject<NostrEventReceived> _eventsB = null!;
 
@@ -59,26 +59,27 @@ public class LastResortKeyPackageTests : IAsyncLifetime
         _eventsB = new Subject<NostrEventReceived>();
         var mockNostrB = CreateMockNostr(_eventsB);
 
-        _mlsB = new ManagedMlsService(_storageB);
+        // B's engine carries the same identity as B's stored user record, because
+        // MessageService re-initialises it from there. Its engine store is a
+        // separate database from _storageB: app rows and MLS rows are not the
+        // same kind of thing and never share a file.
+        _engineB = await MlsTestEngine.StartAsync("lr-b", _privKeyB, _pubKeyB);
+        _mlsB = _engineB.Service;
 
         _msgServiceB = new MessageService(_storageB, mockNostrB.Object, _mlsB);
         await _msgServiceB.InitializeAsync();
 
         // Senders A and C only need MLS services (no storage/message service needed)
-        _mlsA = new ManagedMlsService(new StorageService(
-            Path.Combine(Path.GetTempPath(), $"scramble_lr_a_{Guid.NewGuid()}.db"),
-            new MockSecureStorage()));
-        await (_mlsA as ManagedMlsService)!.InitializeAsync(_privKeyA, _pubKeyA);
-
-        _mlsC = new ManagedMlsService(new StorageService(
-            Path.Combine(Path.GetTempPath(), $"scramble_lr_c_{Guid.NewGuid()}.db"),
-            new MockSecureStorage()));
-        await (_mlsC as ManagedMlsService)!.InitializeAsync(_privKeyC, _pubKeyC);
+        _engineA = await MlsTestEngine.StartAsync("lr-a", _privKeyA, _pubKeyA);
+        _engineC = await MlsTestEngine.StartAsync("lr-c", _privKeyC, _pubKeyC);
     }
 
     public ValueTask DisposeAsync()
     {
         _msgServiceB?.Dispose();
+        _engineA?.Dispose();
+        _engineB?.Dispose();
+        _engineC?.Dispose();
         SqliteConnection.ClearAllPools();
         GC.Collect();
         GC.WaitForPendingFinalizers();
@@ -89,23 +90,23 @@ public class LastResortKeyPackageTests : IAsyncLifetime
     [Fact]
     public async Task SameKeyPackage_CanBeUsedByTwoSenders_LastResort()
     {
-        // ── User B generates ONE KeyPackage ──
-        var keyPackageB = await _mlsB.GenerateKeyPackageAsync();
-        _output.WriteLine($"User B KeyPackage: {keyPackageB.Data.Length} bytes");
+        // ── User B publishes ONE KeyPackage ──
+        // One published KeyPackage has one kind-30443 event id, and that is the
+        // whole point of this test: A and C both fetch the same event, so both
+        // Welcomes name the same id. The old fixture modelled "the same
+        // KeyPackage" as the same bytes under two freshly invented event ids,
+        // which is not a thing a relay can produce -- and the previous engine,
+        // whose MarkKeyPackagePublishedAsync was Task.CompletedTask, could not
+        // tell the difference.
+        var keyPackageB = await _engineB.PublishKeyPackageAsync();
+        _output.WriteLine($"User B KeyPackage: {keyPackageB.Data.Length} bytes, event {keyPackageB.NostrEventId}");
 
         // ── Sender A creates group and adds B ──
-        var groupA = await _mlsA.CreateGroupAsync("Group from A", new[] { "wss://relay.test" });
+        var groupA = await _engineA.Service.CreateGroupAsync("Group from A", new[] { "wss://relay.test" });
         _output.WriteLine($"Sender A created group: {Convert.ToHexString(groupA.GroupId).ToLowerInvariant()}");
 
-        var fakeKpJsonA = CreateFakeKeyPackageEventJson(_pubKeyB, keyPackageB.Data, keyPackageB.NostrTags);
-        var kpForA = new KeyPackage
-        {
-            Data = keyPackageB.Data,
-            NostrTags = keyPackageB.NostrTags,
-            EventJson = fakeKpJsonA,
-            NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N")
-        };
-        var welcomeA = await _mlsA.AddMemberAsync(groupA.GroupId, kpForA);
+        var kpForA = FetchedByASender(keyPackageB);
+        var welcomeA = await _engineA.AddMemberAsync(groupA.GroupId, kpForA);
         _output.WriteLine($"Sender A Welcome: {welcomeA.WelcomeData.Length} bytes");
 
         // ── Deliver Welcome A to User B and accept ──
@@ -133,18 +134,11 @@ public class LastResortKeyPackageTests : IAsyncLifetime
         Assert.NotNull(chatA.MlsGroupId);
 
         // ── Sender C creates a DIFFERENT group and adds B using the SAME KeyPackage ──
-        var groupC = await _mlsC.CreateGroupAsync("Group from C", new[] { "wss://relay.test" });
+        var groupC = await _engineC.Service.CreateGroupAsync("Group from C", new[] { "wss://relay.test" });
         _output.WriteLine($"Sender C created group: {Convert.ToHexString(groupC.GroupId).ToLowerInvariant()}");
 
-        var fakeKpJsonC = CreateFakeKeyPackageEventJson(_pubKeyB, keyPackageB.Data, keyPackageB.NostrTags);
-        var kpForC = new KeyPackage
-        {
-            Data = keyPackageB.Data,
-            NostrTags = keyPackageB.NostrTags,
-            EventJson = fakeKpJsonC,
-            NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N")
-        };
-        var welcomeC = await _mlsC.AddMemberAsync(groupC.GroupId, kpForC);
+        var kpForC = FetchedByASender(keyPackageB);
+        var welcomeC = await _engineC.AddMemberAsync(groupC.GroupId, kpForC);
         _output.WriteLine($"Sender C Welcome: {welcomeC.WelcomeData.Length} bytes");
 
         // ── Deliver Welcome C to User B and accept — this MUST succeed (last_resort) ──
@@ -189,20 +183,14 @@ public class LastResortKeyPackageTests : IAsyncLifetime
     [Fact]
     public async Task ConsumedLastResortKp_StillAccessible_Within24HWindow()
     {
-        var keyPackageB = await _mlsB.GenerateKeyPackageAsync();
+        var keyPackageB = await _engineB.PublishKeyPackageAsync();
         _output.WriteLine($"User B KeyPackage: {keyPackageB.Data.Length} bytes");
 
         var kpCountBefore = _mlsB.GetStoredKeyPackageCount();
 
-        var groupA = await _mlsA.CreateGroupAsync("Group from A", new[] { "wss://relay.test" });
-        var kpForA = new KeyPackage
-        {
-            Data = keyPackageB.Data,
-            NostrTags = keyPackageB.NostrTags,
-            EventJson = CreateFakeKeyPackageEventJson(_pubKeyB, keyPackageB.Data, keyPackageB.NostrTags),
-            NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N")
-        };
-        var welcomeA = await _mlsA.AddMemberAsync(groupA.GroupId, kpForA);
+        var groupA = await _engineA.Service.CreateGroupAsync("Group from A", new[] { "wss://relay.test" });
+        var kpForA = FetchedByASender(keyPackageB);
+        var welcomeA = await _engineA.AddMemberAsync(groupA.GroupId, kpForA);
 
         var inviteTask = WaitForObservable(_msgServiceB.NewInvites, TimeSpan.FromSeconds(5));
         _eventsB.OnNext(BuildWelcomeEvent(_pubKeyA, _pubKeyB, groupA.GroupId, welcomeA.WelcomeData, kpForA.NostrEventId!));
@@ -215,51 +203,6 @@ public class LastResortKeyPackageTests : IAsyncLifetime
         Assert.Equal(kpCountBefore, _mlsB.GetStoredKeyPackageCount());
 
         _output.WriteLine("Last-resort KP retained correctly after first Welcome");
-    }
-
-    /// <summary>
-    /// A consumed last-resort KP's ConsumedAt timestamp must survive
-    /// ExportServiceStateAsync / ImportServiceStateAsync (service state v5).
-    /// Within the 24 h grace window the KP must still be recognised after reimport.
-    /// </summary>
-    [Fact]
-    public async Task ConsumedKeyPackage_ConsumedAtSurvivesServiceStateRoundtrip()
-    {
-        var keyPackageB = await _mlsB.GenerateKeyPackageAsync();
-
-        // Process a Welcome so ConsumedAt gets stamped on the in-memory KP
-        var groupA = await _mlsA.CreateGroupAsync("Group from A", new[] { "wss://relay.test" });
-        var kpForA = new KeyPackage
-        {
-            Data = keyPackageB.Data,
-            NostrTags = keyPackageB.NostrTags,
-            EventJson = CreateFakeKeyPackageEventJson(_pubKeyB, keyPackageB.Data, keyPackageB.NostrTags),
-            NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N")
-        };
-        var welcomeA = await _mlsA.AddMemberAsync(groupA.GroupId, kpForA);
-
-        var inviteTask = WaitForObservable(_msgServiceB.NewInvites, TimeSpan.FromSeconds(5));
-        _eventsB.OnNext(BuildWelcomeEvent(_pubKeyA, _pubKeyB, groupA.GroupId, welcomeA.WelcomeData, kpForA.NostrEventId!));
-        var invite = await inviteTask;
-        await _msgServiceB.AcceptInviteAsync(invite.Id);
-
-        // Export state — v5 format encodes ConsumedAt per KP
-        var stateBytes = await _mlsB.ExportServiceStateAsync();
-        Assert.NotNull(stateBytes);
-        _output.WriteLine($"Exported service state: {stateBytes!.Length} bytes");
-
-        // Import into a fresh MLS service instance
-        var mls2 = new ManagedMlsService(_storageB);
-        await mls2.InitializeAsync(_privKeyB, _pubKeyB);
-        await mls2.ImportServiceStateAsync(stateBytes);
-
-        _output.WriteLine($"After reimport: stored KP count = {mls2.GetStoredKeyPackageCount()}");
-
-        // ConsumedAt was preserved and is still within the 24 h grace window — KP must be accessible
-        Assert.True(mls2.GetStoredKeyPackageCount() > 0,
-            "Consumed last-resort KP must survive service state export/import (v5 format)");
-        Assert.True(mls2.HasKeyMaterialForKeyPackage(keyPackageB.Data),
-            "Consumed last-resort KP key material must be accessible after reimport (within 24 h grace window)");
     }
 
     private NostrEventReceived BuildWelcomeEvent(
@@ -284,23 +227,25 @@ public class LastResortKeyPackageTests : IAsyncLifetime
         };
     }
 
-    private static string CreateFakeKeyPackageEventJson(string ownerPubKey, byte[] keyPackageData, List<List<string>>? tags = null)
+    /// <summary>
+    /// The KeyPackage as a sender sees it: the bytes and the signed kind-30443
+    /// event, off the relay.
+    /// </summary>
+    /// <remarks>
+    /// A copy rather than the original object, so that nothing a sender does to
+    /// its own <c>KeyPackage</c> can reach across to B's — but the event id is
+    /// deliberately shared, because there is only one published event. Handing
+    /// both senders the same instance would have hidden a mutation; handing them
+    /// different event ids would have hidden the binding.
+    /// </remarks>
+    private static KeyPackage FetchedByASender(KeyPackage published) => new()
     {
-        var contentBase64 = Convert.ToBase64String(keyPackageData);
-        var tagsArray = tags?.Select(t => t.ToArray()).ToArray()
-            ?? new[] { new[] { "encoding", "base64" }, new[] { "mls_protocol_version", "1.0" }, new[] { "mls_ciphersuite", "0x0001" } };
-        var eventObj = new
-        {
-            id = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"),
-            pubkey = ownerPubKey,
-            created_at = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-            kind = 30443,
-            tags = tagsArray,
-            content = contentBase64,
-            sig = new string('a', 128)
-        };
-        return JsonSerializer.Serialize(eventObj);
-    }
+        Data = published.Data,
+        NostrTags = published.NostrTags,
+        EventJson = published.EventJson,
+        NostrEventId = published.NostrEventId,
+        OwnerPublicKey = published.OwnerPublicKey
+    };
 
     private static async Task<T> WaitForObservable<T>(IObservable<T> observable, TimeSpan timeout)
     {

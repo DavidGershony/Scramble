@@ -134,7 +134,8 @@ public class RealRelayGroupChatTests : IAsyncLifetime
         _output.WriteLine($"User A fetched User B's KeyPackage: {fetchedKP.NostrEventId}");
 
         // Phase 4: User A adds User B to the group
-        var welcome = await _userA.Mls.AddMemberAsync(groupInfo.GroupId, fetchedKP);
+        var welcome = await _userA.Mls.StageAddMemberAsync(groupInfo.GroupId, fetchedKP);
+        await _userA.Mls.MergeStagedAsync(groupInfo.GroupId);
         Assert.NotNull(welcome.WelcomeData);
         Assert.True(welcome.WelcomeData.Length > 0);
         _output.WriteLine($"User A added User B: welcome={welcome.WelcomeData.Length} bytes");
@@ -250,7 +251,8 @@ public class RealRelayGroupChatTests : IAsyncLifetime
         // Fetch B's KeyPackage, add B to group
         var fetchedKPs = (await _userA.Nostr.FetchKeyPackagesAsync(_userB.PubKey)).ToList();
         Assert.NotEmpty(fetchedKPs);
-        var welcome = await _userA.Mls.AddMemberAsync(groupInfo.GroupId, fetchedKPs[0]);
+        var welcome = await _userA.Mls.StageAddMemberAsync(groupInfo.GroupId, fetchedKPs[0]);
+        await _userA.Mls.MergeStagedAsync(groupInfo.GroupId);
         chatA.ParticipantPublicKeys.Add(_userB.PubKey);
         await _userA.Storage.SaveChatAsync(chatA);
 
@@ -323,7 +325,8 @@ public class RealRelayGroupChatTests : IAsyncLifetime
 
         var fetchedKPs = (await _userA.Nostr.FetchKeyPackagesAsync(_userB.PubKey)).ToList();
         Assert.NotEmpty(fetchedKPs);
-        var welcome = await _userA.Mls.AddMemberAsync(groupInfo.GroupId, fetchedKPs[0]);
+        var welcome = await _userA.Mls.StageAddMemberAsync(groupInfo.GroupId, fetchedKPs[0]);
+        await _userA.Mls.MergeStagedAsync(groupInfo.GroupId);
         _output.WriteLine($"User A added User B, welcome={welcome.WelcomeData.Length} bytes");
 
         // Phase 3: User A publishes Welcome to relay
@@ -475,7 +478,8 @@ public class RealRelayGroupChatTests : IAsyncLifetime
         // ── Phase 3: A adds B (low-level for precise control) ──
         var fetchedKPsB = (await _userA.Nostr.FetchKeyPackagesAsync(_userB.PubKey)).ToList();
         Assert.NotEmpty(fetchedKPsB);
-        var welcomeB = await _userA.Mls.AddMemberAsync(groupInfo.GroupId, fetchedKPsB[0]);
+        var welcomeB = await _userA.Mls.StageAddMemberAsync(groupInfo.GroupId, fetchedKPsB[0]);
+        await _userA.Mls.MergeStagedAsync(groupInfo.GroupId);
         _output.WriteLine($"A added B: welcome={welcomeB.WelcomeData.Length} bytes");
 
         chatA.ParticipantPublicKeys.Add(_userB.PubKey);
@@ -642,7 +646,7 @@ public class RealRelayGroupChatTests : IAsyncLifetime
             CreatedAt = DateTime.UtcNow
         });
 
-        var mls = new ManagedMlsService(storage);
+        var mls = DarkMatterMlsServiceFactory.Create(storage);
         var messages = new MessageService(storage, nostr, mls);
         await messages.InitializeAsync();
 
@@ -688,7 +692,8 @@ public class RealRelayGroupChatTests : IAsyncLifetime
         // A fetches B's KP and adds B
         var fetchedKPs = (await _userA.Nostr.FetchKeyPackagesAsync(_userB.PubKey)).ToList();
         Assert.NotEmpty(fetchedKPs);
-        var welcome = await _userA.Mls.AddMemberAsync(groupInfo.GroupId, fetchedKPs[0]);
+        var welcome = await _userA.Mls.StageAddMemberAsync(groupInfo.GroupId, fetchedKPs[0]);
+        await _userA.Mls.MergeStagedAsync(groupInfo.GroupId);
         chatA.ParticipantPublicKeys.Add(_userB.PubKey);
         await _userA.Storage.SaveChatAsync(chatA);
 
@@ -805,7 +810,7 @@ public class RealRelayGroupChatTests : IAsyncLifetime
         string PrivKey,
         NostrService Nostr,
         StorageService Storage,
-        ManagedMlsService Mls,
+        IMlsService Mls,
         MessageService Messages,
         string DbPath);
 }

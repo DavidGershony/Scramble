@@ -271,7 +271,7 @@ public class HeadlessRealRelayTests : IAsyncLifetime
         _output.WriteLine("=== A REOPENING ===");
 
         // Create fresh MLS service and MessageService using the SAME storage (same DB)
-        var mlsA2 = new ManagedMlsService(userA.Storage);
+        var mlsA2 = DarkMatterMlsServiceFactory.Create(userA.Storage);
         var messagesA2 = new MessageService(userA.Storage, userA.Nostr, mlsA2);
         _disposables.Add(messagesA2);
 
@@ -319,7 +319,7 @@ public class HeadlessRealRelayTests : IAsyncLifetime
         User User,
         NostrService Nostr,
         StorageService Storage,
-        ManagedMlsService Mls,
+        IMlsService Mls,
         MessageService Messages,
         MainViewModel MainVm);
 
@@ -347,7 +347,7 @@ public class HeadlessRealRelayTests : IAsyncLifetime
         };
         await storage.SaveCurrentUserAsync(user);
 
-        var mls = new ManagedMlsService(storage);
+        var mls = DarkMatterMlsServiceFactory.Create(storage);
         var messages = new MessageService(storage, nostr, mls);
         _disposables.Add(messages);
 
@@ -362,7 +362,7 @@ public class HeadlessRealRelayTests : IAsyncLifetime
 
     private static MainViewModel CreateMainViewModel(
         User user, StorageService storage, NostrService nostr,
-        ManagedMlsService mls, MessageService messages)
+        IMlsService mls, MessageService messages)
     {
         var mockClipboard = new Moq.Mock<Presentation.Services.IPlatformClipboard>();
         var mockQr = new Moq.Mock<Presentation.Services.IQrCodeGenerator>();
@@ -403,7 +403,8 @@ public class HeadlessRealRelayTests : IAsyncLifetime
         // A fetches B's KP from relay
         var fetchedKPs = (await creator.Nostr.FetchKeyPackagesAsync(joiner.User.PublicKeyHex)).ToList();
         Assert.NotEmpty(fetchedKPs);
-        var welcome = await creator.Mls.AddMemberAsync(groupInfo.GroupId, fetchedKPs[0]);
+        var welcome = await creator.Mls.StageAddMemberAsync(groupInfo.GroupId, fetchedKPs[0]);
+        await creator.Mls.MergeStagedAsync(groupInfo.GroupId);
         chatA.ParticipantPublicKeys.Add(joiner.User.PublicKeyHex);
         await creator.Storage.SaveChatAsync(chatA);
 

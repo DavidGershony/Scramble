@@ -76,7 +76,7 @@ public class ShellViewModelLogoutTests : IDisposable
             mockLauncher.Object);
 
         // Set up MLS factory that returns managed service
-        shell.MlsServiceFactory = storage => new ManagedMlsService(storage);
+        shell.MlsServiceFactory = storage => DarkMatterMlsServiceFactory.Create(storage);
 
         // Simulate login: create a user and storage
         var nostrService = new NostrService();

@@ -8,6 +8,7 @@ using Scramble.Core.Services;
 using Scramble.Presentation.Services;
 using Scramble.Presentation.ViewModels;
 using Scramble.UI.Tests.TestHelpers;
+using Scramble.Nostr.Crypto;
 
 namespace Scramble.UI.Tests;
 
@@ -74,12 +75,17 @@ public abstract class HeadlessTestBase : IDisposable
         };
         if (saveUser) await storage.SaveCurrentUserAsync(user);
 
-        IMlsService mlsService = backend switch
-        {
-            "managed" => new ManagedMlsService(storage),
-            "rust" => new MlsService(storage),
-            _ => throw new ArgumentException($"Unknown backend '{backend}'.")
-        };
+        // One engine now: the backend parameter selected between two marmot-cs
+        // backends and there is nothing left to select. It stays on the test
+        // signatures for the moment because removing it touches every [InlineData]
+        // in the suite; the value is ignored.
+        //
+        // The explicit InitializeAsync is not optional here. ManagedMlsService
+        // initialised itself lazily on first use; this engine refuses every member
+        // until it has an identity, because a session host is built with one and
+        // never re-identified.
+        IMlsService mlsService = DarkMatterMlsServiceFactory.Create(storage);
+        await mlsService.InitializeAsync(privKey, pubKey);
 
         var eventsSubject = new Subject<NostrEventReceived>();
         var mockNostr = new Mock<INostrService>();
@@ -150,40 +156,72 @@ public abstract class HeadlessTestBase : IDisposable
     /// Builds a minimal kind-30443 Nostr event JSON for AddMemberAsync.
     /// Uses actual MDK-provided tags from the KeyPackage.
     /// </summary>
-    protected static string CreateFakeKeyPackageEventJson(string ownerPubKey, byte[] keyPackageData, List<List<string>>? tags = null)
+    /// <summary>
+    /// The kind-30443 event a KeyPackage was published under, signed for real.
+    /// </summary>
+    /// <remarks>
+    /// <b>It used to be a fake: a random id and 128 'a' characters for a
+    /// signature.</b> That passed against the legacy engine, which read the fields
+    /// without checking them. The Dark Matter engine verifies the event id and the
+    /// signature before reading a single field — deliberately, because an invitee's
+    /// account key is only trustworthy if the event carrying it verifies — so an
+    /// unsigned fixture now fails with "The event id does not match its content",
+    /// which is the engine being right and the fixture being wrong.
+    /// </remarks>
+    protected static string SignedKeyPackageEventJson(
+        User owner, byte[] keyPackageData, List<List<string>>? tags = null)
     {
-        var contentBase64 = Convert.ToBase64String(keyPackageData);
-        var tagsArray = tags?.Select(t => t.ToArray()).ToArray()
-            ?? new[]
-            {
-                new[] { "encoding", "base64" },
-                new[] { "mls_protocol_version", "1.0" },
-                new[] { "mls_ciphersuite", "0x0001" }
-            };
-        var eventObj = new
-        {
-            id = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"),
-            pubkey = ownerPubKey,
-            created_at = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-            kind = 30443,
-            tags = tagsArray,
-            content = contentBase64,
-            sig = new string('a', 128)
-        };
-        return JsonSerializer.Serialize(eventObj);
+        var template = new NostrEventTemplate(
+            owner.PublicKeyHex,
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            30443,
+            (tags ?? []).Select(t => (IReadOnlyList<string>)t).ToList(),
+            Convert.ToBase64String(keyPackageData));
+
+        byte[] id = template.ComputeId();
+        byte[] signature = Bip340.Sign(Convert.FromHexString(owner.PrivateKeyHex!), id);
+
+        return NostrEnvelope.Write(template, id, signature);
     }
 
     /// <summary>
     /// Prepares a KeyPackage for AddMemberAsync by setting EventJson and NostrEventId.
     /// </summary>
-    protected static void PrepareKeyPackageForAddMember(KeyPackage kp, string ownerPubKey)
+    /// <summary>
+    /// A KeyPackage ready to be invited with: signed, and bound to the event id it
+    /// went out under.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Publishing is two steps and the second one is not optional.</b> A Welcome
+    /// names the KeyPackage it consumed by its kind-30443 event id, and
+    /// <see cref="IMlsService.MarkKeyPackagePublishedAsync"/> binds that id to the
+    /// private material this device kept. Without the binding the join fails closed
+    /// — correctly: a Welcome naming a KeyPackage this device never published has not
+    /// been admitted by us. It reads as "the private key is no longer available",
+    /// because that is how <c>AcceptInviteAsync</c> reports any refusal naming a
+    /// KeyPackage.
+    /// </para>
+    /// <para>
+    /// <paramref name="signer"/> is separate from <paramref name="holder"/> for the
+    /// multi-device case: two devices of one account publish two leaves signed by the
+    /// same account key, and each binds only its own.
+    /// </para>
+    /// </remarks>
+    protected static async Task PrepareKeyPackageForAddMemberAsync(
+        KeyPackage kp, RealTestContext holder, User? signer = null)
     {
-        kp.EventJson = CreateFakeKeyPackageEventJson(ownerPubKey, kp.Data, kp.NostrTags);
-        // 32 bytes of hex, because that is what a kind-30443 event id is and what
-        // the Welcome's e tag must carry -- the engine's kind-444 reader refuses
-        // anything else, so an id shaped like "fake443_<guid>" makes a fixture no
-        // relay could have delivered.
-        kp.NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
+        User owner = signer ?? holder.User;
+
+        kp.EventJson = SignedKeyPackageEventJson(owner, kp.Data, kp.NostrTags);
+        kp.OwnerPublicKey = owner.PublicKeyHex;
+
+        // The id the envelope above actually carries, not a fresh guid: the engine
+        // reads it back out of the event it verified.
+        using var doc = JsonDocument.Parse(kp.EventJson!);
+        kp.NostrEventId = doc.RootElement.GetProperty("id").GetString();
+
+        await holder.MlsService.MarkKeyPackagePublishedAsync(kp, kp.NostrEventId!);
     }
 
     protected static void TryDeleteFile(string path)

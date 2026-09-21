@@ -1,5 +1,6 @@
 using Moq;
 using Scramble.Core.Services;
+using Scramble.Core.Tests.TestHelpers;
 using Xunit;
 namespace Scramble.Core.Tests;
 
@@ -180,51 +181,41 @@ public class KeyPackagePublishSignerTests
     [Fact]
     public async Task MobilePublishFlow_NoSigner_FailsAtPublish()
     {
-        // Set up real MLS service with in-memory storage
-        var dbPath = Path.Combine(Path.GetTempPath(), $"scramble_signer_test_{Guid.NewGuid()}.db");
-        try
-        {
-            var storage = new StorageService(dbPath, new TestHelpers.MockSecureStorage());
-            await storage.InitializeAsync();
-            var mls = new ManagedMlsService(storage);
+        // A real keypair, because the engine builds an account-proof signer out of
+        // what it is handed and refuses a public key that is not a curve point.
+        // The old "e9b03d7d" + 56 zeroes stood in for "mobile has no local key",
+        // but the signer seam is not what this test is about: the assertion below
+        // is that NostrService refuses to publish with neither a key nor a signer,
+        // and that is reached with any identity at all. What a mobile user really
+        // lacks is a private key at the *publish* call, which is still null here.
+        using var engine = await MlsTestEngine.StartAsync("signer");
+        var mls = engine.Service;
 
-            var pubKeyHex = "e9b03d7d" + new string('0', 56);
-            var placeholderPrivKey = new string('0', 64);
+        // Step 1: Generate KeyPackage (like SettingsViewModel line 929)
+        var kp = await mls.GenerateKeyPackageAsync();
+        _output.WriteLine($"Generated KP: {kp.Data.Length} bytes, {kp.NostrTags.Count} MDK tags");
 
-            // Step 1: Initialize MLS (like SettingsViewModel line 925)
-            await mls.InitializeAsync(placeholderPrivKey, pubKeyHex);
+        Assert.True(kp.Data.Length > 0, "KeyPackage should have data");
+        Assert.True(mls.HasKeyMaterialForKeyPackage(kp.Data),
+            "MLS should recognize the KP we just generated");
 
-            // Step 2: Generate KeyPackage (like line 929)
-            var kp = await mls.GenerateKeyPackageAsync();
-            _output.WriteLine($"Generated KP: {kp.Data.Length} bytes, {kp.NostrTags.Count} MDK tags");
+        // Step 2: Try to publish — this is where it fails on mobile
+        var nostrService = new NostrService();
+        // PrivateKeyHex is null on mobile (signer user)
+        // No signer has been set
 
-            Assert.True(kp.Data.Length > 0, "KeyPackage should have data");
-            Assert.True(mls.HasKeyMaterialForKeyPackage(kp.Data),
-                "MLS should recognize the KP we just generated");
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => nostrService.PublishKeyPackageAsync(kp.Data, null, kp.NostrTags));
 
-            // Step 3: Try to publish — this is where it fails on mobile
-            var nostrService = new NostrService();
-            // PrivateKeyHex is null on mobile (signer user)
-            // No signer has been set
+        _output.WriteLine($"Publish failed as expected: {ex.Message}");
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-                () => nostrService.PublishKeyPackageAsync(kp.Data, null, kp.NostrTags));
+        // The KP was generated successfully — only the publish failed
+        // This proves the MLS layer is fine, the problem is signing
+        Assert.Contains("no private key", ex.Message);
 
-            _output.WriteLine($"Publish failed as expected: {ex.Message}");
-
-            // The KP was generated successfully — only the publish failed
-            // This proves the MLS layer is fine, the problem is signing
-            Assert.Contains("no private key", ex.Message);
-
-            // Verify KP is still intact after failed publish
-            Assert.True(mls.HasKeyMaterialForKeyPackage(kp.Data),
-                "KP material should still be intact after failed publish");
-        }
-        finally
-        {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            try { File.Delete(dbPath); } catch { }
-        }
+        // Verify KP is still intact after failed publish
+        Assert.True(mls.HasKeyMaterialForKeyPackage(kp.Data),
+            "KP material should still be intact after failed publish");
     }
 
     // ──────────────────────────────────────────────────────────────

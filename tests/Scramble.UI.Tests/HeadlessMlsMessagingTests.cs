@@ -71,10 +71,11 @@ public class HeadlessMlsMessagingTests : HeadlessTestBase
 
         // Bob generates KeyPackage
         var bobKp = await bob.MlsService.GenerateKeyPackageAsync();
-        PrepareKeyPackageForAddMember(bobKp, bob.User.PublicKeyHex);
+        await PrepareKeyPackageForAddMemberAsync(bobKp, bob);
 
         // Alice adds Bob
-        var welcome = await alice.MlsService.AddMemberAsync(groupInfo.GroupId, bobKp);
+        var welcome = await alice.MlsService.StageAddMemberAsync(groupInfo.GroupId, bobKp);
+        await alice.MlsService.MergeStagedAsync(groupInfo.GroupId);
 
         // Bob processes Welcome
         var fakeWelcomeEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");

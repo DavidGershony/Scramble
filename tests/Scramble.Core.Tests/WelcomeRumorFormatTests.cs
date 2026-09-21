@@ -25,8 +25,8 @@ public class WelcomeRumorFormatTests : IAsyncLifetime
     private string _pubKeyA = null!;
     private string _privKeyB = null!;
     private string _pubKeyB = null!;
-    private ManagedMlsService _mlsServiceA = null!;
-    private ManagedMlsService _mlsServiceB = null!;
+    private IMlsService _mlsServiceA = null!;
+    private IMlsService _mlsServiceB = null!;
     private StorageService _storageA = null!;
     private StorageService _storageB = null!;
     private readonly List<string> _dbPaths = new();
@@ -62,8 +62,8 @@ public class WelcomeRumorFormatTests : IAsyncLifetime
         await _storageA.InitializeAsync();
         await _storageB.InitializeAsync();
 
-        _mlsServiceA = new ManagedMlsService(_storageA);
-        _mlsServiceB = new ManagedMlsService(_storageB);
+        _mlsServiceA = DarkMatterMlsServiceFactory.Create(_storageA);
+        _mlsServiceB = DarkMatterMlsServiceFactory.Create(_storageB);
         await _mlsServiceA.InitializeAsync(_privKeyA, _pubKeyA);
         await _mlsServiceB.InitializeAsync(_privKeyB, _pubKeyB);
 
@@ -109,7 +109,8 @@ public class WelcomeRumorFormatTests : IAsyncLifetime
 
         // User A creates a group and adds User B
         var group = await _mlsServiceA.CreateGroupAsync("Test Group", new[] { "wss://relay.test" });
-        var welcome = await _mlsServiceA.AddMemberAsync(group.GroupId, fetchedKps[0]);
+        var welcome = await _mlsServiceA.StageAddMemberAsync(group.GroupId, fetchedKps[0]);
+        await _mlsServiceA.MergeStagedAsync(group.GroupId);
 
         // User B subscribes to welcomes
         await _nostrServiceB.SubscribeToWelcomesAsync(_pubKeyB, _privKeyB);

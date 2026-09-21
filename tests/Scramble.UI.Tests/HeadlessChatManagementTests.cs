@@ -136,8 +136,9 @@ public class HeadlessChatManagementTests : HeadlessTestBase
         var groupInfo = await alice.MlsService.CreateGroupAsync("Unread Test", new[] { "wss://relay.test" });
         var groupIdHex = Convert.ToHexString(groupInfo.GroupId).ToLowerInvariant();
         var bobKp = await bob.MlsService.GenerateKeyPackageAsync();
-        PrepareKeyPackageForAddMember(bobKp, bob.User.PublicKeyHex);
-        var welcome = await alice.MlsService.AddMemberAsync(groupInfo.GroupId, bobKp);
+        await PrepareKeyPackageForAddMemberAsync(bobKp, bob);
+        var welcome = await alice.MlsService.StageAddMemberAsync(groupInfo.GroupId, bobKp);
+        await alice.MlsService.MergeStagedAsync(groupInfo.GroupId);
         var fakeEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
         await bob.MlsService.ProcessWelcomeAsync(welcome.WelcomeData, fakeEventId);
 

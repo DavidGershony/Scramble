@@ -26,109 +26,95 @@ public class MediaMessageImetaTests
     {
         ProfileConfiguration.SetAllowLocalRelays(true);
 
-        var dbPath = Path.Combine(Path.GetTempPath(), $"imeta_test_{Guid.NewGuid():N}.db");
-        try
+        // Two engines, two stores: a store is a device, and a Welcome only means
+        // anything if the side opening it kept its own KeyPackage material.
+        using var a = await MlsTestEngine.StartAsync("imeta-a");
+        using var b = await MlsTestEngine.StartAsync("imeta-b");
+
+        var mlsA = a.Service;
+        var mlsB = b.Service;
+
+        // Create group and add member
+        var group = await mlsA.CreateGroupAsync("Test", new[] { "wss://relay.test" });
+
+        // Signed for real and bound on B. The old fixture handed the service an
+        // event with the id "fake" and "fake" for a signature, which the previous
+        // engine accepted; this one verifies the envelope before it will read the
+        // invitee's account key out of it.
+        var kp = await b.PublishKeyPackageAsync();
+
+        var welcome = await a.AddMemberAsync(group.GroupId, kp);
+        await mlsB.ProcessWelcomeAsync(
+            welcome.WelcomeData, new string('0', 64), kp.NostrEventId);
+
+        // Build imeta tags for a media message
+        var mediaUrl = "https://blossom.primal.net/abc123def456";
+        var sha256 = "a0528807e6b22980";
+        var nonce = "deadbeef12345678abcd";
+        var mimeType = "image/jpeg";
+        var filename = "photo.jpg";
+
+        var tags = new List<List<string>>
         {
-            var storage = new StorageService(dbPath, new MockSecureStorage());
-            await storage.InitializeAsync();
+            new() { "imeta",
+                $"url {mediaUrl}",
+                $"m {mimeType}",
+                $"x {sha256}",
+                $"n {nonce}",
+                $"v mip04-v2",
+                $"filename {filename}" }
+        };
 
-            var mlsA = new ManagedMlsService(storage);
-            var mlsB = new ManagedMlsService(storage);
+        // Content is empty per MIP-04 — metadata is in imeta tags
+        var eventJson = await mlsA.EncryptMessageAsync(
+            group.GroupId, "", tags);
 
-            var nostr = new NostrService();
-            var keysA = nostr.GenerateKeyPair();
-            var keysB = nostr.GenerateKeyPair();
+        // Decrypt on the other side, and hand over the whole kind-445 event
+        // rather than the ciphertext inside it. The peeler is the only thing that
+        // verifies an id and a signature, so an envelope stripped down to its
+        // content is attacker-chosen routing with the check removed -- this
+        // engine refuses it (ignored/InvalidEncoding) instead of guessing.
+        var decrypted = await mlsB.DecryptMessageAsync(group.GroupId, eventJson);
+        _output.WriteLine($"Decrypted content: {decrypted.Plaintext}");
 
-            await mlsA.InitializeAsync(keysA.privateKeyHex, keysA.publicKeyHex);
-            await mlsB.InitializeAsync(keysB.privateKeyHex, keysB.publicKeyHex);
+        // Parse the decrypted rumor to check tags
+        Assert.NotNull(decrypted.RumorJson);
+        using var rumorDoc = JsonDocument.Parse(decrypted.RumorJson!);
+        var rumor = rumorDoc.RootElement;
 
-            // Create group and add member
-            var group = await mlsA.CreateGroupAsync("Test", new[] { "wss://relay.test" });
-            var kpB = await mlsB.GenerateKeyPackageAsync();
-            var fakeEvent = $"{{\"id\":\"fake\",\"pubkey\":\"{keysB.publicKeyHex}\",\"created_at\":0,\"kind\":30443,\"tags\":[],\"content\":\"{Convert.ToBase64String(kpB.Data)}\",\"sig\":\"fake\"}}";
-            var kp = new Scramble.Core.Models.KeyPackage
+        var rumorTags = rumor.GetProperty("tags");
+        _output.WriteLine($"Rumor tags count: {rumorTags.GetArrayLength()}");
+
+        Assert.True(rumorTags.GetArrayLength() > 0,
+            "Rumor must have tags — the imeta tag with media metadata is missing. " +
+            "The web client needs imeta tags to download and decrypt the media file.");
+
+        // Find the imeta tag
+        bool foundImeta = false;
+        for (int i = 0; i < rumorTags.GetArrayLength(); i++)
+        {
+            var tag = rumorTags[i];
+            if (tag.GetArrayLength() > 0 && tag[0].GetString() == "imeta")
             {
-                Id = Guid.NewGuid().ToString(), Data = kpB.Data,
-                NostrEventId = "fake", OwnerPublicKey = keysB.publicKeyHex,
-                EventJson = fakeEvent, CreatedAt = DateTime.UtcNow
-            };
-            var welcome = await mlsA.AddMemberAsync(group.GroupId, kp);
-            await mlsB.ProcessWelcomeAsync(welcome.WelcomeData, new string('0', 64));
+                foundImeta = true;
+                _output.WriteLine($"Found imeta tag with {tag.GetArrayLength()} entries");
 
-            // Build imeta tags for a media message
-            var mediaUrl = "https://blossom.primal.net/abc123def456";
-            var sha256 = "a0528807e6b22980";
-            var nonce = "deadbeef12345678abcd";
-            var mimeType = "image/jpeg";
-            var filename = "photo.jpg";
+                // Verify it contains the expected fields
+                var tagValues = new List<string>();
+                for (int j = 0; j < tag.GetArrayLength(); j++)
+                    tagValues.Add(tag[j].GetString() ?? "");
 
-            var tags = new List<List<string>>
-            {
-                new() { "imeta",
-                    $"url {mediaUrl}",
-                    $"m {mimeType}",
-                    $"x {sha256}",
-                    $"n {nonce}",
-                    $"v mip04-v2",
-                    $"filename {filename}" }
-            };
-
-            // Content is empty per MIP-04 — metadata is in imeta tags
-            var eventJson = await mlsA.EncryptMessageAsync(
-                group.GroupId, "", tags);
-
-            // Decrypt on other side
-            using var doc = JsonDocument.Parse(eventJson);
-            var content = doc.RootElement.GetProperty("content").GetString()!;
-            var ctBytes = Convert.FromBase64String(content);
-
-            var decrypted = await mlsB.DecryptMessageAsync(group.GroupId, ctBytes);
-            _output.WriteLine($"Decrypted content: {decrypted.Plaintext}");
-
-            // Parse the decrypted rumor to check tags
-            Assert.NotNull(decrypted.RumorJson);
-            using var rumorDoc = JsonDocument.Parse(decrypted.RumorJson!);
-            var rumor = rumorDoc.RootElement;
-
-            var rumorTags = rumor.GetProperty("tags");
-            _output.WriteLine($"Rumor tags count: {rumorTags.GetArrayLength()}");
-
-            Assert.True(rumorTags.GetArrayLength() > 0,
-                "Rumor must have tags — the imeta tag with media metadata is missing. " +
-                "The web client needs imeta tags to download and decrypt the media file.");
-
-            // Find the imeta tag
-            bool foundImeta = false;
-            for (int i = 0; i < rumorTags.GetArrayLength(); i++)
-            {
-                var tag = rumorTags[i];
-                if (tag.GetArrayLength() > 0 && tag[0].GetString() == "imeta")
-                {
-                    foundImeta = true;
-                    _output.WriteLine($"Found imeta tag with {tag.GetArrayLength()} entries");
-
-                    // Verify it contains the expected fields
-                    var tagValues = new List<string>();
-                    for (int j = 0; j < tag.GetArrayLength(); j++)
-                        tagValues.Add(tag[j].GetString() ?? "");
-
-                    Assert.Contains(tagValues, v => v.StartsWith("url "));
-                    Assert.Contains(tagValues, v => v.StartsWith("m "));
-                    Assert.Contains(tagValues, v => v.StartsWith("x "));
-                    Assert.Contains(tagValues, v => v.StartsWith("n ") && !v.StartsWith("n ") == false); // nonce
-                    Assert.Contains(tagValues, v => v.StartsWith("v ")); // version
-                    Assert.Contains(tagValues, v => v.StartsWith("filename ")); // filename
-                    break;
-                }
+                Assert.Contains(tagValues, v => v.StartsWith("url "));
+                Assert.Contains(tagValues, v => v.StartsWith("m "));
+                Assert.Contains(tagValues, v => v.StartsWith("x "));
+                Assert.Contains(tagValues, v => v.StartsWith("n ") && !v.StartsWith("n ") == false); // nonce
+                Assert.Contains(tagValues, v => v.StartsWith("v ")); // version
+                Assert.Contains(tagValues, v => v.StartsWith("filename ")); // filename
+                break;
             }
+        }
 
-            Assert.True(foundImeta, "imeta tag not found in decrypted rumor");
-            _output.WriteLine("PASS: imeta tag present in encrypted rumor");
-        }
-        finally
-        {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            try { File.Delete(dbPath); } catch { }
-        }
+        Assert.True(foundImeta, "imeta tag not found in decrypted rumor");
+        _output.WriteLine("PASS: imeta tag present in encrypted rumor");
     }
 }

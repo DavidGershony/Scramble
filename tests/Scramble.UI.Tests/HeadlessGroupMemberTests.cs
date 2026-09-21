@@ -38,7 +38,7 @@ public class HeadlessGroupMemberTests : HeadlessTestBase
 
         // Generate joiner's KeyPackage
         var joinerKp = await joiner.MlsService.GenerateKeyPackageAsync();
-        PrepareKeyPackageForAddMember(joinerKp, joiner.User.PublicKeyHex);
+        await PrepareKeyPackageForAddMemberAsync(joinerKp, joiner);
 
         // Mock fetching joiner's KeyPackage from relays
         creator.MockNostr.Setup(n => n.FetchKeyPackagesAsync(joiner.User.PublicKeyHex))
@@ -153,11 +153,11 @@ public class HeadlessGroupMemberTests : HeadlessTestBase
 
         // Generate KPs from each device (different MLS leaves)
         var kp1 = await joinerDevice1.MlsService.GenerateKeyPackageAsync();
-        PrepareKeyPackageForAddMember(kp1, joinerPubKey);
+        await PrepareKeyPackageForAddMemberAsync(kp1, joinerDevice1);
         kp1.SlotId = "device1-slot-" + Guid.NewGuid().ToString("N");
 
         var kp2 = await joinerDevice2.MlsService.GenerateKeyPackageAsync();
-        PrepareKeyPackageForAddMember(kp2, joinerPubKey);
+        await PrepareKeyPackageForAddMemberAsync(kp2, joinerDevice2, joinerDevice1.User);
         kp2.SlotId = "device2-slot-" + Guid.NewGuid().ToString("N");
 
         // Mock relay to return both KPs for the same pubkey
@@ -204,12 +204,12 @@ public class HeadlessGroupMemberTests : HeadlessTestBase
 
         // Two KPs with SAME SlotId but different timestamps (rotation scenario)
         var kpOld = await joiner.MlsService.GenerateKeyPackageAsync();
-        PrepareKeyPackageForAddMember(kpOld, joiner.User.PublicKeyHex);
+        await PrepareKeyPackageForAddMemberAsync(kpOld, joiner);
         kpOld.SlotId = "same-slot";
         kpOld.CreatedAt = DateTime.UtcNow.AddHours(-1); // older
 
         var kpNew = await joiner.MlsService.GenerateKeyPackageAsync();
-        PrepareKeyPackageForAddMember(kpNew, joiner.User.PublicKeyHex);
+        await PrepareKeyPackageForAddMemberAsync(kpNew, joiner);
         kpNew.SlotId = "same-slot";
         kpNew.CreatedAt = DateTime.UtcNow; // newer
 

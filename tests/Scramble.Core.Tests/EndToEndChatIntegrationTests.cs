@@ -23,7 +23,10 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
         string PubKey, string PrivKey,
         StorageService Storage, string DbPath,
         Subject<NostrEventReceived> Events, Mock<INostrService> MockNostr,
-        IMlsService MlsService, MessageService MessageService);
+        MlsTestEngine Engine, MessageService MessageService)
+    {
+        public IMlsService MlsService => Engine.Service;
+    }
 
     private UserContext _userA = null!;
     private UserContext _userB = null!;
@@ -35,6 +38,7 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
     private string _dbPathA => _userA.DbPath;
     private Subject<NostrEventReceived> _eventsA => _userA.Events;
     private Mock<INostrService> _mockNostrA => _userA.MockNostr;
+    private MlsTestEngine _engineA => _userA.Engine;
     private IMlsService _mlsServiceA => _userA.MlsService;
     private MessageService _messageServiceA => _userA.MessageService;
 
@@ -44,6 +48,7 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
     private string _dbPathB => _userB.DbPath;
     private Subject<NostrEventReceived> _eventsB => _userB.Events;
     private Mock<INostrService> _mockNostrB => _userB.MockNostr;
+    private MlsTestEngine _engineB => _userB.Engine;
     private IMlsService _mlsServiceB => _userB.MlsService;
     private MessageService _messageServiceB => _userB.MessageService;
 
@@ -53,16 +58,18 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
         return ValueTask.CompletedTask;
     }
 
-    private async Task SetupUsers(string backend)
+    private async Task SetupUsers()
     {
-        _userA = await SetupUser("A", backend);
-        _userB = await SetupUser("B", backend);
+        _userA = await SetupUser("A");
+        _userB = await SetupUser("B");
     }
 
     public ValueTask DisposeAsync()
     {
         _userA?.MessageService?.Dispose();
         _userB?.MessageService?.Dispose();
+        _userA?.Engine?.Dispose();
+        _userB?.Engine?.Dispose();
 
         SqliteConnection.ClearAllPools();
         GC.Collect();
@@ -77,12 +84,10 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
     // Test 1: Full lifecycle
     // ═══════════════════════════════════════════════════════════════════
 
-    [Theory]
-    [InlineData("rust")]
-    [InlineData("managed")]
-    public async Task TwoUsers_CanEstablishGroupChat_AndExchangeMessages(string backend)
+    [Fact]
+    public async Task TwoUsers_CanEstablishGroupChat_AndExchangeMessages()
     {
-        await SetupUsers(backend);
+        await SetupUsers();
 
         // ── Phase 1: Key Validation ──
         Assert.Equal(64, _pubKeyA.Length);
@@ -92,13 +97,20 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
         Assert.NotEqual(_pubKeyA, _pubKeyB);
 
         // ── Phase 2: KeyPackage Generation (User B) ──
-        var keyPackageB = await _mlsServiceB.GenerateKeyPackageAsync();
+        var keyPackageB = await _engineB.Service.GenerateKeyPackageAsync();
         Assert.NotNull(keyPackageB.Data);
         Assert.True(keyPackageB.Data.Length > 0, "KeyPackage data should be non-empty");
         Assert.True(keyPackageB.Data.Length >= 64, $"KeyPackage should be >= 64 bytes, got {keyPackageB.Data.Length}");
         // Should have MIP-00 tags
-        Assert.Contains(keyPackageB.NostrTags, t => t.Count >= 2 && t[0] == "encoding" && t[1] == "base64");
         Assert.Contains(keyPackageB.NostrTags, t => t.Count >= 2 && t[0] == "mls_ciphersuite");
+
+        // And must NOT carry ["encoding","base64"]. This assertion used to require
+        // it, which pinned the defect rather than the rule: a sender MUST NOT emit
+        // the tag and a receiver MUST NOT switch decoders on it, so a current peer
+        // rejects the event at the envelope. The old engine emitted it on
+        // 30443/444/445 alike, which is why app-to-app tests passed -- both sides
+        // were wrong the same way.
+        Assert.DoesNotContain(keyPackageB.NostrTags, t => t.Count >= 1 && t[0] == "encoding");
 
         // ── Phase 3: Group Creation (User A) ──
         var groupInfo = await _mlsServiceA.CreateGroupAsync("Test Group", new[] { "wss://relay.test" });
@@ -123,12 +135,13 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
         await _storageA.SaveChatAsync(chatA);
 
         // ── Phase 4: Add Member (MLS level) ──
-        // Build a fake kind-30443 event JSON using the real MDK-provided tags
-        var fakeKeyPackageEventJson = CreateFakeKeyPackageEventJson(_pubKeyB, keyPackageB.Data, keyPackageB.NostrTags);
-        keyPackageB.EventJson = fakeKeyPackageEventJson;
-        keyPackageB.NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
+        // Publish B's KeyPackage properly: a signed kind-30443 event, and the id it
+        // went out under bound on B's engine. The "e" tag below names that id, so
+        // overwriting NostrEventId after this point is what breaks the join.
+        _engineB.SignKeyPackageEvent(keyPackageB);
+        await _engineB.BindAsync(keyPackageB);
 
-        var welcome = await _mlsServiceA.AddMemberAsync(groupInfo.GroupId, keyPackageB);
+        var welcome = await _engineA.AddMemberAsync(groupInfo.GroupId, keyPackageB);
         Assert.NotNull(welcome.WelcomeData);
         Assert.True(welcome.WelcomeData.Length > 0, "Welcome data should be non-empty");
         Assert.NotNull(welcome.CommitData);
@@ -201,19 +214,7 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
         // ── Phase 8: Verify "h" tag message delivery works (User B → User A) ──
         var groupIdHexA = Convert.ToHexString(groupInfo.GroupId).ToLowerInvariant();
         var hTagCiphertext = await _mlsServiceB.EncryptMessageAsync(chatB.MlsGroupId!, "h-tag delivery test");
-        var hTagEvent = new NostrEventReceived
-        {
-            Kind = 445,
-            EventId = "htag_" + Guid.NewGuid().ToString("N"),
-            PublicKey = _pubKeyB,
-            Content = Convert.ToBase64String(hTagCiphertext),
-            CreatedAt = DateTime.UtcNow,
-            Tags = new List<List<string>>
-            {
-                new() { "h", groupIdHexA }
-            },
-            RelayUrl = "wss://test.relay"
-        };
+        var hTagEvent = Delivered(hTagCiphertext, "h", groupIdHexA);
 
         var hTagTask = WaitForObservable(_messageServiceA.NewMessages, TimeSpan.FromSeconds(5));
         _eventsA.OnNext(hTagEvent);
@@ -244,19 +245,15 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
     // Test 2: Welcome deduplication
     // ═══════════════════════════════════════════════════════════════════
 
-    [Theory]
-    [InlineData("rust")]
-    [InlineData("managed")]
-    public async Task WelcomeEvent_ReceivedTwice_OnlyCreatesOneInvite(string backend)
+    [Fact]
+    public async Task WelcomeEvent_ReceivedTwice_OnlyCreatesOneInvite()
     {
-        await SetupUsers(backend);
+        await SetupUsers();
 
         // Build a real MLS welcome so CanProcessWelcomeAsync accepts the first delivery
-        var kpB = await _mlsServiceB.GenerateKeyPackageAsync();
-        kpB.EventJson = CreateFakeKeyPackageEventJson(_pubKeyB, kpB.Data, kpB.NostrTags);
-        kpB.NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
+        var kpB = await _engineB.PublishKeyPackageAsync();
         var groupInfo = await _mlsServiceA.CreateGroupAsync("Dedup Test", new[] { "wss://relay.test" });
-        var realWelcome = await _mlsServiceA.AddMemberAsync(groupInfo.GroupId, kpB);
+        var realWelcome = await _engineA.AddMemberAsync(groupInfo.GroupId, kpB);
 
         var welcomeEventId = "dedup_" + Guid.NewGuid().ToString("N");
         var welcomeEvent = new NostrEventReceived
@@ -297,15 +294,13 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
     // Test 3: h/g tag bug proof
     // ═══════════════════════════════════════════════════════════════════
 
-    [Theory]
-    [InlineData("rust")]
-    [InlineData("managed")]
-    public async Task HandleGroupMessage_AcceptsBothHAndGTags(string backend)
+    [Fact]
+    public async Task HandleGroupMessage_AcceptsBothHAndGTags()
     {
-        await SetupUsers(backend);
+        await SetupUsers();
 
         // Setup: create a group with both users so cross-user decrypt works
-        var keyPackageB = await _mlsServiceB.GenerateKeyPackageAsync();
+        var keyPackageB = await _engineB.PublishKeyPackageAsync();
         var groupInfo = await _mlsServiceA.CreateGroupAsync("Tag Test", new[] { "wss://relay.test" });
         var chat = new Chat
         {
@@ -321,10 +316,7 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
         await _storageA.SaveChatAsync(chat);
 
         // Add User B to the group
-        var fakeKpJson = CreateFakeKeyPackageEventJson(_pubKeyB, keyPackageB.Data, keyPackageB.NostrTags);
-        keyPackageB.EventJson = fakeKpJson;
-        keyPackageB.NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
-        var welcome = await _mlsServiceA.AddMemberAsync(groupInfo.GroupId, keyPackageB);
+        var welcome = await _engineA.AddMemberAsync(groupInfo.GroupId, keyPackageB);
 
         // User B processes welcome
         var fakeWelcomeEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
@@ -354,16 +346,7 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
         // ── Part 1: "h" tag (MIP-03 spec, used by PublishGroupMessageAsync) → PROCESSED ──
         // User B encrypts, delivered to User A's handler (cross-user decrypt)
         var hCiphertext = await _mlsServiceB.EncryptMessageAsync(chatB.MlsGroupId!, "h-tag message");
-        var hTagEvent = new NostrEventReceived
-        {
-            Kind = 445,
-            EventId = "htag_" + Guid.NewGuid().ToString("N"),
-            PublicKey = _pubKeyB,
-            Content = Convert.ToBase64String(hCiphertext),
-            CreatedAt = DateTime.UtcNow,
-            Tags = new List<List<string>> { new() { "h", groupIdHex } },
-            RelayUrl = "wss://test.relay"
-        };
+        var hTagEvent = Delivered(hCiphertext, "h", groupIdHex);
 
         var hTagTask = WaitForObservable(_messageServiceA.NewMessages, TimeSpan.FromSeconds(5));
         _eventsA.OnNext(hTagEvent);
@@ -375,16 +358,7 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
 
         // ── Part 2: "g" tag (legacy) → also PROCESSED ──
         var gCiphertext = await _mlsServiceB.EncryptMessageAsync(chatB.MlsGroupId!, "g-tag message");
-        var gTagEvent = new NostrEventReceived
-        {
-            Kind = 445,
-            EventId = "gtag_" + Guid.NewGuid().ToString("N"),
-            PublicKey = _pubKeyB,
-            Content = Convert.ToBase64String(gCiphertext),
-            CreatedAt = DateTime.UtcNow,
-            Tags = new List<List<string>> { new() { "g", groupIdHex } },
-            RelayUrl = "wss://test.relay"
-        };
+        var gTagEvent = Delivered(gCiphertext, "g", groupIdHex);
 
         var gTagTask = WaitForObservable(_messageServiceA.NewMessages, TimeSpan.FromSeconds(5));
         _eventsA.OnNext(gTagEvent);
@@ -399,20 +373,18 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
     // Test 4: Full lifecycle with restart — MLS state survives close/reopen
     // ═══════════════════════════════════════════════════════════════════
 
-    [Theory]
-    [InlineData("rust")]
-    [InlineData("managed")]
-    public async Task TwoUsers_ExchangeMessages_CloseReopen_ContinueExchanging(string backend)
+    [Fact]
+    public async Task TwoUsers_ExchangeMessages_CloseReopen_ContinueExchanging()
     {
-        await SetupUsers(backend);
+        await SetupUsers();
 
         // ── Phase 1: Key Validation ──
         Assert.Equal(64, _pubKeyA.Length);
         Assert.Equal(64, _pubKeyB.Length);
         Assert.NotEqual(_pubKeyA, _pubKeyB);
 
-        // ── Phase 2: User B generates a KeyPackage ──
-        var keyPackageB = await _mlsServiceB.GenerateKeyPackageAsync();
+        // ── Phase 2: User B generates and publishes a KeyPackage ──
+        var keyPackageB = await _engineB.PublishKeyPackageAsync();
         Assert.True(keyPackageB.Data.Length >= 64);
 
         // ── Phase 3: User A creates group ──
@@ -439,11 +411,7 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
         await _storageA.SaveMlsStateAsync(groupIdHex, stateA1);
 
         // ── Phase 4: Add User B to group ──
-        var fakeKpJson = CreateFakeKeyPackageEventJson(_pubKeyB, keyPackageB.Data, keyPackageB.NostrTags);
-        keyPackageB.EventJson = fakeKpJson;
-        keyPackageB.NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
-
-        var welcome = await _mlsServiceA.AddMemberAsync(groupInfo.GroupId, keyPackageB);
+        var welcome = await _engineA.AddMemberAsync(groupInfo.GroupId, keyPackageB);
         Assert.NotNull(welcome.WelcomeData);
         Assert.True(welcome.WelcomeData.Length > 0);
 
@@ -632,16 +600,7 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
             Assert.NotNull(capturedCiphertext4);
 
             // Simulate the relay delivering the encrypted message to User B
-            var groupMsgEvent = new NostrEventReceived
-            {
-                Kind = 445,
-                EventId = "delivered_" + Guid.NewGuid().ToString("N"),
-                PublicKey = _pubKeyA,
-                Content = Convert.ToBase64String(capturedCiphertext4!),
-                CreatedAt = DateTime.UtcNow,
-                Tags = new List<List<string>> { new() { "h", groupIdHexB } },
-                RelayUrl = "wss://test.relay"
-            };
+            var groupMsgEvent = Delivered(capturedCiphertext4!, "h", groupIdHexB);
 
             var receivedTask = WaitForObservable(messageServiceB2.NewMessages, TimeSpan.FromSeconds(5));
             eventsB2.OnNext(groupMsgEvent);
@@ -662,28 +621,24 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
     // Test 5: MIP-03 Protocol Compliance — event structure and group ID
     // ═══════════════════════════════════════════════════════════════════
 
-    [Theory]
-    [InlineData("managed")]
-    public async Task EncryptedEvent_HasCorrectNostrGroupId_NotMlsGroupId(string backend)
+    [Fact]
+    public async Task EncryptedEvent_HasCorrectNostrGroupId_NotMlsGroupId()
     {
-        await SetupUsers(backend);
+        await SetupUsers();
 
         // ── Setup: Create group and add member ──
-        var keyPackageB = await _mlsServiceB.GenerateKeyPackageAsync();
+        var keyPackageB = await _engineB.PublishKeyPackageAsync();
         var groupInfo = await _mlsServiceA.CreateGroupAsync("Protocol Test", new[] { "wss://relay.test" });
         var groupIdHex = Convert.ToHexString(groupInfo.GroupId).ToLowerInvariant();
 
-        var fakeKpJson = CreateFakeKeyPackageEventJson(_pubKeyB, keyPackageB.Data, keyPackageB.NostrTags);
-        keyPackageB.EventJson = fakeKpJson;
-        keyPackageB.NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
-
-        var welcome = await _mlsServiceA.AddMemberAsync(groupInfo.GroupId, keyPackageB);
+        var welcome = await _engineA.AddMemberAsync(groupInfo.GroupId, keyPackageB);
         var fakeWelcomeEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
-        await _mlsServiceB.ProcessWelcomeAsync(welcome.WelcomeData, fakeWelcomeEventId);
+        await _mlsServiceB.ProcessWelcomeAsync(
+            welcome.WelcomeData, fakeWelcomeEventId, keyPackageB.NostrEventId);
 
         // ── Get the NostrGroupId (0xF2EE extension value) ──
         var nostrGroupIdBytes = _mlsServiceA.GetNostrGroupId(groupInfo.GroupId);
-        Assert.NotNull(nostrGroupIdBytes); // managed backend must set the 0xF2EE extension
+        Assert.NotNull(nostrGroupIdBytes); // the engine must set the 0xF2EE extension
         var nostrGroupIdHex = Convert.ToHexString(nostrGroupIdBytes).ToLowerInvariant();
 
         // Verify NostrGroupId differs from MLS group ID
@@ -748,14 +703,13 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
     //         Reproduces the "Group chat with Dan" bug.
     // ═══════════════════════════════════════════════════════════════════
 
-    [Theory]
-    [InlineData("managed")]
-    public async Task DesktopCreatesGroup_Closes_PhoneAcceptsAndSends_DesktopReopens_MessagesFlow(string backend)
+    [Fact]
+    public async Task DesktopCreatesGroup_Closes_PhoneAcceptsAndSends_DesktopReopens_MessagesFlow()
     {
-        await SetupUsers(backend);
+        await SetupUsers();
 
         // ── Phase 1: Desktop (A) creates group ──
-        var keyPackageB = await _mlsServiceB.GenerateKeyPackageAsync();
+        var keyPackageB = await _engineB.PublishKeyPackageAsync();
         var groupInfo = await _mlsServiceA.CreateGroupAsync("Dan Group Test", new[] { "wss://relay.test" });
         var groupIdHex = Convert.ToHexString(groupInfo.GroupId).ToLowerInvariant();
         var nostrGroupIdA = _mlsServiceA.GetNostrGroupId(groupInfo.GroupId);
@@ -775,11 +729,7 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
         await _storageA.SaveChatAsync(chatA);
 
         // ── Phase 2: Desktop adds Phone to group ──
-        var fakeKpJson = CreateFakeKeyPackageEventJson(_pubKeyB, keyPackageB.Data, keyPackageB.NostrTags);
-        keyPackageB.EventJson = fakeKpJson;
-        keyPackageB.NostrEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
-
-        var welcome = await _mlsServiceA.AddMemberAsync(groupInfo.GroupId, keyPackageB);
+        var welcome = await _engineA.AddMemberAsync(groupInfo.GroupId, keyPackageB);
         Assert.NotNull(welcome.WelcomeData);
         Assert.NotNull(welcome.CommitData);
 
@@ -803,7 +753,8 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
 
         // ── Phase 4: Phone (B) accepts Welcome (MLS level, then create chat) ──
         var fakeWelcomeEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
-        var groupInfoB = await _mlsServiceB.ProcessWelcomeAsync(welcome.WelcomeData, fakeWelcomeEventId);
+        var groupInfoB = await _mlsServiceB.ProcessWelcomeAsync(
+            welcome.WelcomeData, fakeWelcomeEventId, keyPackageB.NostrEventId);
         Assert.NotNull(groupInfoB.GroupId);
 
         var groupIdHexB = Convert.ToHexString(groupInfoB.GroupId).ToLowerInvariant();
@@ -897,16 +848,7 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
 
             // ── Phase 8: Desktop receives Phone's message (relay catch-up) ──
             // Simulate the relay delivering the Phone's kind 445 message to Desktop
-            var phoneMsgEvent = new NostrEventReceived
-            {
-                Kind = 445,
-                EventId = "phonemsg_" + Guid.NewGuid().ToString("N"),
-                PublicKey = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"), // MIP-03 ephemeral pubkey
-                Content = Convert.ToBase64String(capturedPhoneMsg!),
-                CreatedAt = DateTime.UtcNow,
-                Tags = new List<List<string>> { new() { "h", commitGroupIdHex } },
-                RelayUrl = "wss://test.relay"
-            };
+            var phoneMsgEvent = Delivered(capturedPhoneMsg!, "h", commitGroupIdHex);
 
             var receivedTask = WaitForObservable(messageServiceA2.NewMessages, TimeSpan.FromSeconds(5));
             eventsA2.OnNext(phoneMsgEvent);
@@ -926,16 +868,7 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
             Assert.NotNull(capturedDesktopReply);
 
             // ── Phase 10: Phone receives Desktop's reply ──
-            var desktopReplyEvent = new NostrEventReceived
-            {
-                Kind = 445,
-                EventId = "desktopreply_" + Guid.NewGuid().ToString("N"),
-                PublicKey = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"),
-                Content = Convert.ToBase64String(capturedDesktopReply!),
-                CreatedAt = DateTime.UtcNow,
-                Tags = new List<List<string>> { new() { "h", commitGroupIdHex } },
-                RelayUrl = "wss://test.relay"
-            };
+            var desktopReplyEvent = Delivered(capturedDesktopReply!, "h", commitGroupIdHex);
 
             var phoneReceivedTask = WaitForObservable(_messageServiceB.NewMessages, TimeSpan.FromSeconds(5));
             _eventsB.OnNext(desktopReplyEvent);
@@ -954,7 +887,7 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
     // Helpers
     // ═══════════════════════════════════════════════════════════════════
 
-    private static async Task<UserContext> SetupUser(string label, string backend)
+    private static async Task<UserContext> SetupUser(string label)
     {
         // 1. Generate real secp256k1 keys (required for native MLS DLL)
         var nostrService = new NostrService();
@@ -1014,21 +947,19 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
         mockNostr.Setup(n => n.SubscribeAsync(It.IsAny<string>(), It.IsAny<NostrFilter>())).Returns(Task.CompletedTask);
         mockNostr.Setup(n => n.UnsubscribeAsync(It.IsAny<string>())).Returns(Task.CompletedTask);
 
-        // 5. MLS service — backend selected by parameter
-        IMlsService mlsService = backend switch
-        {
-            "managed" => new ManagedMlsService(storage),
-            "rust" => new MlsService(storage),
-            _ => throw new ArgumentException($"Unknown backend '{backend}'. Use 'rust' or 'managed'.")
-        };
+        // 5. MLS engine. The identity is the one in the user record above, because
+        //    MessageService.InitializeAsync re-initialises the engine from it; the
+        //    engine's own store is a second database, holding epochs and KeyPackage
+        //    material rather than chats and invites.
+        var engine = await MlsTestEngine.StartAsync(label, privKey, pubKey);
 
         // 6. MessageService
-        var messageService = new MessageService(storage, mockNostr.Object, mlsService);
+        var messageService = new MessageService(storage, mockNostr.Object, engine.Service);
 
         // 7. Initialize (loads user, inits MLS, subscribes to events)
         await messageService.InitializeAsync();
 
-        return new UserContext(pubKey, privKey, storage, dbPath, events, mockNostr, mlsService, messageService);
+        return new UserContext(pubKey, privKey, storage, dbPath, events, mockNostr, engine, messageService);
     }
 
     private static Mock<INostrService> CreateMockNostr(Subject<NostrEventReceived> events)
@@ -1071,32 +1002,44 @@ public class EndToEndChatIntegrationTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Builds a minimal kind-30443 Nostr event JSON that passes
-    /// MlsService.AddMemberAsync pre-validation and native MDK add_member.
-    /// Uses the actual MDK-provided tags from the KeyPackage to ensure all
-    /// required tags (encoding, mls_protocol_version, mls_ciphersuite, mls_extensions) are present.
+    /// A relay handing over a kind-445 event the engine produced.
     /// </summary>
-    private static string CreateFakeKeyPackageEventJson(string ownerPubKey, byte[] keyPackageData, List<List<string>>? tags = null)
+    /// <remarks>
+    /// <para>
+    /// <b>The envelope travels whole.</b> <c>EncryptMessageAsync</c> and the
+    /// bytes captured from <c>PublishRawEventJsonAsync</c> are a complete signed
+    /// event, not the ciphertext inside one, and
+    /// <c>NostrEventReceived.RawJson</c> is what every real relay parse path
+    /// fills in. Leaving it null sends the app down the arm meant for events that
+    /// never had an envelope, and the engine then refuses the bare ciphertext --
+    /// its peeler is the only thing that verifies an id and a signature, so
+    /// accepting a stripped event would mean routing on unchecked fields.
+    /// </para>
+    /// <para>
+    /// The id and pubkey are read out of the envelope rather than invented. A
+    /// MIP-03 event is signed by a per-message ephemeral key, so the sender's
+    /// account key was never the right answer, and an id that is not the hash of
+    /// the event it arrives on is exactly what the peeler exists to reject.
+    /// </para>
+    /// </remarks>
+    private static NostrEventReceived Delivered(
+        byte[] envelope, string groupTag, string groupIdHex)
     {
-        var contentBase64 = Convert.ToBase64String(keyPackageData);
-        var tagsArray = tags?.Select(t => t.ToArray()).ToArray()
-            ?? new[]
-            {
-                new[] { "encoding", "base64" },
-                new[] { "mls_protocol_version", "1.0" },
-                new[] { "mls_ciphersuite", "0x0001" }
-            };
-        var eventObj = new
+        var json = Encoding.UTF8.GetString(envelope);
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        return new NostrEventReceived
         {
-            id = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"),
-            pubkey = ownerPubKey,
-            created_at = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
-            kind = 30443,
-            tags = tagsArray,
-            content = contentBase64,
-            sig = new string('a', 128) // fake 64-byte hex signature
+            Kind = 445,
+            EventId = root.GetProperty("id").GetString()!,
+            PublicKey = root.GetProperty("pubkey").GetString()!,
+            Content = root.GetProperty("content").GetString()!,
+            CreatedAt = DateTime.UtcNow,
+            Tags = new List<List<string>> { new() { groupTag, groupIdHex } },
+            RelayUrl = "wss://test.relay",
+            RawJson = json
         };
-        return JsonSerializer.Serialize(eventObj);
     }
 
     /// <summary>

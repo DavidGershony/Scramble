@@ -121,12 +121,9 @@ public class FullStackRelayIntegrationTests : IAsyncLifetime
         await Task.Delay(1000); // Let connections stabilize
     }
 
-    private static IMlsService CreateMlsService(string backend, IStorageService storage) => backend switch
-    {
-        "managed" => new ManagedMlsService(storage),
-        "rust" => new MlsService(storage),
-        _ => throw new ArgumentException($"Unknown backend '{backend}'. Use 'rust' or 'managed'.")
-    };
+    private static IMlsService CreateMlsService(string backend, IStorageService storage) => DarkMatterMlsServiceFactory.Create(storage);
+        // One engine now: the backend parameter selected between two
+        // marmot-cs backends and there is nothing left to select.
 
     public async ValueTask DisposeAsync()
     {
@@ -185,7 +182,8 @@ public class FullStackRelayIntegrationTests : IAsyncLifetime
         // Step 4: User A creates a group and adds B via B's real KeyPackage, producing a real welcome
         var groupInfoA = await _mlsServiceA.CreateGroupAsync("Arrive Test Group", new[] { RelayUrl });
         var fetchedKP = (await _nostrServiceA.FetchKeyPackagesAsync(_pubKeyB)).First();
-        var add = await _mlsServiceA.AddMemberAsync(groupInfoA.GroupId, fetchedKP);
+        var add = await _mlsServiceA.StageAddMemberAsync(groupInfoA.GroupId, fetchedKP);
+        await _mlsServiceA.MergeStagedAsync(groupInfoA.GroupId);
         _output.WriteLine($"User A produced real welcome: {add.WelcomeData.Length} bytes");
 
         var eventId = await _nostrServiceA.PublishWelcomeAsync(add.WelcomeData, _pubKeyB, _privKeyA, fetchedKP.NostrEventId ?? "unknown");
@@ -231,7 +229,8 @@ public class FullStackRelayIntegrationTests : IAsyncLifetime
         // Step 1: A creates a group and publishes a real welcome for B BEFORE B subscribes.
         var groupInfoA = await _mlsServiceA.CreateGroupAsync("Rescan Test Group", new[] { RelayUrl });
         var fetchedKP = (await _nostrServiceA.FetchKeyPackagesAsync(_pubKeyB)).First();
-        var add = await _mlsServiceA.AddMemberAsync(groupInfoA.GroupId, fetchedKP);
+        var add = await _mlsServiceA.StageAddMemberAsync(groupInfoA.GroupId, fetchedKP);
+        await _mlsServiceA.MergeStagedAsync(groupInfoA.GroupId);
 
         var kpEventIdRescan = fetchedKP.NostrEventId ?? "unknown";
         var eventId = await _nostrServiceA.PublishWelcomeAsync(add.WelcomeData, _pubKeyB, _privKeyA, kpEventIdRescan);
@@ -345,7 +344,8 @@ public class FullStackRelayIntegrationTests : IAsyncLifetime
         _output.WriteLine($"User A fetched KeyPackage from relay: {fetchedKPs[0].NostrEventId}");
 
         // Step 4: User A adds User B to the group (real MLS operation)
-        var welcome = await _mlsServiceA.AddMemberAsync(groupInfo.GroupId, fetchedKPs[0]);
+        var welcome = await _mlsServiceA.StageAddMemberAsync(groupInfo.GroupId, fetchedKPs[0]);
+        await _mlsServiceA.MergeStagedAsync(groupInfo.GroupId);
         Assert.NotNull(welcome.WelcomeData);
         Assert.True(welcome.WelcomeData.Length > 0);
         _output.WriteLine($"User A added User B: welcome={welcome.WelcomeData.Length} bytes");
