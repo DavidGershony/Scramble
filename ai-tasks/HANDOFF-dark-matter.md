@@ -2517,6 +2517,22 @@ populates every sensitive column, closes the store, reopens the *file* and
 asserts the known plaintexts appear in no column of any table. Eleven mutations,
 no survivors.
 
+**Three of those eleven were re-run on the merged tree**, per the standing rule
+that a subagent's mutation results prove nothing until they are reproduced where
+the code actually landed — the three whose survival would have made the rest
+decorative:
+
+| Mutation | Reproduced result |
+|---|---|
+| stop protecting `GroupRecord.LiveState` (`g with { LiveState = g.LiveState }`) | **3 fail** — the raw-bytes sweep, the on-disk prefix check, and the legacy-row report |
+| add an unclassified `BLOB` column to `messages` | **1 fails** — `EveryColumnInTheSchemaHasARecordedDisposition`, nothing else |
+| add an unclassified `byte[]` member to `MessageRecord` | **1 fails** — `EveryByteCarryingRecordMemberHasARecordedDisposition`, nothing else |
+
+The last two are the ones that matter: each census is caught by exactly one test
+and by nothing else, which is precisely the claim those two mechanisms exist to
+make. A census that also tripped some other assertion would be redundant with it;
+one that tripped nothing would be decoration.
+
 **Two things the columns taught that §14's list did not have.** First,
 `epoch_states.staged_commit`, `commit_publish_attempts.commit_id` and both
 `tip_commit` columns **cannot** be encrypted, and not for a lookup reason you
