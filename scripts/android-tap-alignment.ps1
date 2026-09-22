@@ -38,19 +38,30 @@
     No reference screenshot, no hardcoded coordinates, no assumption about which
     control gives visible feedback.
 
-.PARAMETER MaxOffsetPx
-    How far the two centroids may sit apart. Chosen from measurement, not taste:
-    on the same emulator and the same screen, the fixed build reports 38px and
-    the v0.7.0 build 180px. 90 sits with better than a 2x margin either side.
+.PARAMETER MaxOffsetDp
+    How far the two centroids may sit apart, in density-independent pixels.
 
-    The two sets are not expected to coincide exactly even when healthy -- a
-    redraw covers slightly different ground than the set of nodes that changed --
-    which is why the healthy figure is 38 and not 0.
+    **In dp because the defect scales with density and a pixel threshold does
+    not.** The offset this catches is one status-bar height, so it shrinks on a
+    coarser screen. Measured on the same broken APK:
+
+      420dpi (1080x2424)   healthy 38px / 14dp     broken 180px / 69dp
+      160dpi (320x640)     healthy  6px /  6dp     broken  58px / 58dp
+
+    A 90px threshold -- chosen on the 420dpi device and perfectly sound there --
+    passes the broken build at 160dpi, which is the resolution CI runs. The test
+    would have been decorative on the only machine that runs it automatically.
+
+    30dp separates healthy from broken by better than 2x at both densities.
+
+    The healthy figure is not 0 because a redraw covers slightly different
+    ground than the set of nodes that changed.
 #>
 [CmdletBinding()]
 param(
     [string]$PackageId = 'app.scramble.chat',
-    [int]$MaxOffsetPx = 90,
+    [int]$MaxOffsetDp = 30,
+    [int]$ReactionTimeoutSeconds = 30,
     [string]$ArtifactDir = '.'
 )
 $ErrorActionPreference = 'Stop'
@@ -80,6 +91,19 @@ function Get-Adb {
     throw 'adb not found. Put it on PATH or set ANDROID_SDK_ROOT.'
 }
 $adb = Get-Adb
+
+<#
+.SYNOPSIS
+    Dots per inch actually in effect, honouring any override.
+#>
+function Get-DeviceDensity {
+    $out = (& $adb shell wm density 2>$null | Out-String)
+    $override = [regex]::Match($out, 'Override density:\s*(\d+)')
+    if ($override.Success) { return [int]$override.Groups[1].Value }
+    $physical = [regex]::Match($out, 'Physical density:\s*(\d+)')
+    if ($physical.Success) { return [int]$physical.Groups[1].Value }
+    throw "could not read the display density from: $out"
+}
 
 # A PNG for humans to look at when this fails.
 function Get-Screenshot([string]$path) {
@@ -162,10 +186,51 @@ Get-Screenshot $before
 $fbA = Get-Framebuffer (Join-Path $ArtifactDir 'fb-before.raw')
 Write-Host "[tap] tapping ($cx,$cy)"
 & $adb shell input tap $cx $cy | Out-Null
-Start-Sleep -Seconds 3
+
+# Wait for the app to react rather than assuming it has.
+#
+# This was a flat 3-second sleep, which passed on a desktop-class emulator and
+# failed on CI's: the run came back with the before and after dumps -- and the
+# before and after screenshots -- byte for byte identical, because a Release
+# Mono build on a loaded runner had simply not repainted yet. A fixed sleep
+# turns "slower than I guessed" into "the control did not react", which is a
+# different and much more alarming claim.
+#
+# Polling the visual tree instead makes the check as fast as the device allows
+# and as patient as it needs to be. Only a genuinely unresponsive control now
+# reaches the timeout.
+$beforeKeysEarly = @{}; foreach ($n in $nodesBefore) { $beforeKeysEarly[$n.Key] = $true }
+#
+# The tap is also sent a second time half way through, because the CI failure
+# this replaced showed the before and after states byte-identical -- not one
+# pixel moved -- on an app that had been idle for thirty seconds. That is as
+# consistent with a dropped input event as with a slow repaint, and there was no
+# evidence to choose between them. A single retry covers the first without
+# weakening anything: a control that genuinely never reacts still fails, it just
+# gets asked twice.
+$deadline = (Get-Date).AddSeconds($ReactionTimeoutSeconds)
+$retryAt = (Get-Date).AddSeconds($ReactionTimeoutSeconds / 2)
+$retried = $false
+$nodesAfter = $null
+do {
+    Start-Sleep -Milliseconds 1500
+    $candidate = Get-Nodes (Get-UiTree 'ui-after')
+    $changed = @($candidate | Where-Object { -not $beforeKeysEarly.ContainsKey($_.Key) }).Count
+    if ($changed -gt 0) { $nodesAfter = $candidate; break }
+    if (-not $retried -and (Get-Date) -gt $retryAt) {
+        Write-Host '[tap] no reaction yet -- sending the tap once more'
+        & $adb shell input tap $cx $cy | Out-Null
+        $retried = $true
+    }
+} while ((Get-Date) -lt $deadline)
+
+if ($null -eq $nodesAfter) {
+    $nodesAfter = Get-Nodes (Get-UiTree 'ui-after')
+    Write-Host "[tap] nothing changed within ${ReactionTimeoutSeconds}s" -ForegroundColor Yellow
+}
+
 Get-Screenshot $after
 $fbB = Get-Framebuffer (Join-Path $ArtifactDir 'fb-after.raw')
-$nodesAfter = Get-Nodes (Get-UiTree 'ui-after')
 
 # --- hit-test space: which nodes appeared or vanished, and where ------------
 $beforeKeys = @{}; foreach ($n in $nodesBefore) { $beforeKeys[$n.Key] = $true }
@@ -175,8 +240,11 @@ $changedNodes += $nodesAfter  | Where-Object { -not $beforeKeys.ContainsKey($_.K
 $changedNodes += $nodesBefore | Where-Object { -not $afterKeys.ContainsKey($_.Key) }
 
 if ($changedNodes.Count -eq 0) {
-    Write-Host '[tap] FAILED: the tap changed nothing in the visual tree at all.' -ForegroundColor Red
-    Write-Host '      The control did not react, so alignment could not be measured.' -ForegroundColor Red
+    Write-Host "[tap] FAILED: the tap changed nothing in ${ReactionTimeoutSeconds}s." -ForegroundColor Red
+    Write-Host '      The control did not react at all, so alignment could not be measured.' -ForegroundColor Red
+    Write-Host '      Either the app is wedged, or the tap landed on something inert --' -ForegroundColor Red
+    Write-Host "      it was aimed at [$($target.L),$($target.T)][$($target.R),$($target.B)]." -ForegroundColor Red
+    Write-Host "      Compare $before against the ui-before.xml bounds to see which." -ForegroundColor Red
     exit 1
 }
 $nodeCentroid = ($changedNodes | ForEach-Object { ($_.T + $_.B) / 2 } | Measure-Object -Average).Average
@@ -211,11 +279,13 @@ if ($count -eq 0) {
 $pixelCentroid = $sumY / $count
 
 $offset = [Math]::Abs($pixelCentroid - $nodeCentroid)
-Write-Host ("[tap] hit-test centroid y={0:N0}   render centroid y={1:N0}   offset={2:N0}px" -f $nodeCentroid, $pixelCentroid, $offset)
+$dpi = Get-DeviceDensity
+$offsetDp = $offset * 160.0 / $dpi
+Write-Host ("[tap] hit-test centroid y={0:N0}   render centroid y={1:N0}   offset={2:N0}px = {3:N0}dp at {4}dpi" -f $nodeCentroid, $pixelCentroid, $offset, $offsetDp, $dpi)
 
-if ($offset -gt $MaxOffsetPx) {
+if ($offsetDp -gt $MaxOffsetDp) {
     Write-Host ''
-    Write-Host ("[tap] FAILED: the app draws {0:N0}px away from where it is touched." -f $offset) -ForegroundColor Red
+    Write-Host ("[tap] FAILED: the app draws {0:N0}px ({1:N0}dp) away from where it is touched." -f $offset, $offsetDp) -ForegroundColor Red
     Write-Host '      The tap reached the control -- the visual tree changed -- but the' -ForegroundColor Red
     Write-Host '      redraw landed somewhere else, so a user has to press that far off' -ForegroundColor Red
     Write-Host '      the target to hit anything. This is the v0.7.0 defect: a top or' -ForegroundColor Red
