@@ -2,7 +2,9 @@
 
 A snapshot of everything left, in dependency order. **Provenance lives
 elsewhere**: `scramble-marmot-phased-plan-2026-08.md` is the authoritative plan
-and `HANDOFF-dark-matter.md` is the running record. This file exists to answer
+and the per-session running record was the (removed) Dark Matter handoff, removed when the
+Dark Matter branch merged (its content is in the git history of that merge).
+This file exists to answer
 one question the other two cannot — *what is actually left, and what blocks
 what* — and it should be deleted or rewritten rather than allowed to drift.
 
@@ -171,7 +173,8 @@ and `src/Scramble.Native` plus its CI steps are now dead weight.
 Every head registers `DarkMatterMlsService`; the desktop head is bugfix-only
 until Android has an equivalent smoke test green in CI plus one week. What the
 flip actually needed, including four changes this plan did not have and one that
-would have made every account uninvitable, is `HANDOFF-dark-matter.md` §3af.
+would have made every account uninvitable, is in the merge history
+(`git log --grep "encoding"`); it was handoff §3af.
 Steps 3–5 remain.
 
 **Planned and decided in `p11-cutover-plan-2026-09.md`** (2026-09-15): existing
@@ -899,7 +902,7 @@ far because of *where* it hid rather than what it was.
 with marmot-cs's `WelcomeEventParser`, which requires an `["encoding","base64"]`
 tag that no conformant peer emits, and returned silently when it threw. The app
 could not accept an invite from anybody but itself. Fixed by reading through the
-engine's `WelcomeEvent.Read`; see `HANDOFF-dark-matter.md` §3af.
+engine's `WelcomeEvent.Read`; see handoff §3af.
 
 **Why every gate was green.** Two suites each covered half the seam:
 
