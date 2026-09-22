@@ -225,17 +225,22 @@ estimating:
 - ~~**Two storage gaps found while reviewing**~~ — the intent queue got a caller
   (§8), and the snapshot omission was investigated and is a **choice**, now
   written into the file rather than left to look like an oversight. See §10.
-- **`IRoutingIndexStorage` has no production caller either**, and unlike the
-  intent queue nothing is scheduled to give it one. It is the rotation-aware
-  routing-id → group map, which is the first lookup a real receive path makes;
-  `MarmotSession.ReceiveAsync` sidesteps it because a session already knows
-  which group it is. Whoever writes the fan-in above the session (P11) is its
-  caller. `HasTransportSeenAsync` is in the same position: it exists, its doc
-  says it is the pre-filter that avoids re-peeling a duplicate envelope, and
-  nothing reads it.
-- **The branch is ~125 commits ahead of `master` with no PR.** Recorded because
-  I4 names exactly this shape as the risk; the decision not to open one is the
-  user's and is not being re-litigated.
+- ~~**`IRoutingIndexStorage` has no production caller either**~~ — **resolved by
+  P11, verified 2026-09-22.** This said the fan-in above the session would be
+  its caller, and that is what happened: `PutRoutingAsync` has two callers,
+  `ResolveAsync` and `CurrentRoutingAsync` one each, and `HasTransportSeenAsync`
+  — the pre-filter that avoids re-peeling a duplicate envelope — is read by
+  `InboundFanIn.cs:168`.
+  - **Still uncalled, and much smaller:** `ListRoutingAsync` and
+    `PruneRoutingAsync`. The second is the one with a consequence — nothing
+    prunes the routing index, so its rows accumulate for the life of a profile.
+    Rotation makes that grow per epoch rather than per group. Not urgent at any
+    realistic group count, but it is a table with no upper bound and no reaper.
+- **The branch is 219 commits ahead of `master` with no PR** (2026-09-22).
+  Recorded because I4 names exactly this shape as the risk; the decision not to
+  open one is the user's and is not being re-litigated. Worth stating plainly
+  once: every gate in this repo has been run locally and is green, and the one
+  gate that has never run on this branch at all is GitHub's own.
 
 ---
 
