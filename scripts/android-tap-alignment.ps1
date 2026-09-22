@@ -56,12 +56,28 @@ param(
 $ErrorActionPreference = 'Stop'
 
 function Get-Adb {
-    foreach ($c in @($env:ANDROID_SDK_ROOT, $env:ANDROID_HOME, "$env:LOCALAPPDATA\Android\Sdk", 'C:\work\android-sdk')) {
-        if ($c -and (Test-Path (Join-Path $c 'platform-tools/adb.exe'))) { return (Join-Path $c 'platform-tools/adb.exe') }
+    # PATH first: that is how CI has it, and it avoids guessing at roots entirely.
+    $onPath = Get-Command adb -ErrorAction SilentlyContinue
+    if ($onPath) { return $onPath.Source }
+
+    # Then the usual SDK roots. Both binary names, because the executable is
+    # `adb` on Linux and `adb.exe` on Windows -- checking only one sends the loop
+    # past a perfectly good SDK.
+    #
+    # Join-Path is wrapped because it THROWS on a foreign absolute path: on Linux,
+    # Join-Path 'C:\work\android-sdk' ... raises "Cannot find drive. A drive with
+    # the name 'C' does not exist", which under ErrorActionPreference=Stop kills
+    # the script before it prints anything. That is exactly how this failed on the
+    # Ubuntu runner.
+    $roots = @($env:ANDROID_SDK_ROOT, $env:ANDROID_HOME, "$env:LOCALAPPDATA\Android\Sdk", 'C:\work\android-sdk') |
+        Where-Object { $_ }
+    foreach ($root in $roots) {
+        foreach ($exe in @('platform-tools/adb', 'platform-tools/adb.exe')) {
+            try { $candidate = Join-Path $root $exe } catch { continue }
+            if (Test-Path $candidate) { return $candidate }
+        }
     }
-    $p = Get-Command adb -ErrorAction SilentlyContinue
-    if ($p) { return $p.Source }
-    throw 'adb not found.'
+    throw 'adb not found. Put it on PATH or set ANDROID_SDK_ROOT.'
 }
 $adb = Get-Adb
 
