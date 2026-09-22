@@ -13,11 +13,19 @@ name: Android head (required)
 # Android" is very nearly "all of them", and a filter would mostly serve to hide
 # the breakage it was meant to catch.
 #
-# What this does NOT do, and it matters for I5: it proves the head *compiles*, not
-# that it runs. I5's freeze-exit condition is "an equivalent smoke test green in
-# CI", and a build is not a smoke test. A real one needs an emulator plus a
-# scripted create-group / send-message pass, which is its own piece of work.
-# Do not read a green tick here as the freeze having lifted.
+# Two jobs, and the difference between them is the whole point. `android` proves
+# the head compiles. `smoke` boots an emulator, installs it and checks it is still
+# running with its own UI on screen -- because Avalonia-on-Android fails at
+# startup, not at compile time, and until 2026-09-22 nothing had ever started it.
+#
+# What `smoke` covers, precisely: the app launches, survives 30 seconds, owns the
+# resumed activity, logs no FATAL EXCEPTION, and is not killed by the
+# lowmemorykiller. That is "does it run at all", which was the open question.
+#
+# What it still does NOT cover, and I5's exit condition names it: a scripted
+# create-group / send-message pass. Startup exercises storage, the Keystore and
+# engine construction; it does not exercise the protocol. Read a green tick here
+# as "the head runs", not as the freeze having lifted on its own.
 
 # ReactiveUI / Splat NuGet packages have a revoked author signing certificate.
 # Linux .NET SDK does full OCSP/CRL checking via OpenSSL, which nuget.config's
@@ -72,3 +80,65 @@ jobs:
         run: >
           dotnet build src/Scramble.Mobile.Android/Scramble.Mobile.Android.csproj
           --no-restore --configuration Debug
+
+  smoke:
+
+    name: Android smoke (emulator)
+    runs-on: ubuntu-latest
+    needs: android
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install Android workload
+        run: dotnet workload install android --version 10.0.203.1
+
+      - name: Build the APK
+        run: >
+          dotnet build src/Scramble.Mobile.Android/Scramble.Mobile.Android.csproj
+          --configuration Debug
+
+      # Without this the emulator falls back to software virtualisation and a
+      # cold boot does not finish inside any sane timeout.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Start emulator and run the smoke test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          # -memory is not a tuning knob here. At the Pixel_9 AVD's default of
+          # 2048 MB the app reached a visible window and was then killed by the
+          # lowmemorykiller ("min watermark is breached and swap is low"), which
+          # presents as a dead process with no exception and no failing command.
+          # The script detects that case by name and says so, but the run still
+          # fails -- so give it the memory instead.
+          emulator-options: >-
+            -no-window -no-audio -no-boot-anim -no-snapshot
+            -gpu swiftshader_indirect -memory 6144
+          disable-animations: true
+          script: pwsh -NoProfile -File ./scripts/android-smoke.ps1 -ScreenshotPath android-smoke.png
+
+      # On failure this is the fastest way to see what was on screen instead.
+      - name: Upload the screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-smoke-screenshot
+          path: android-smoke.png
+          if-no-files-found: warn
