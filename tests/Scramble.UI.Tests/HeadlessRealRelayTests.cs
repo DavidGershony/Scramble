@@ -25,7 +25,25 @@ namespace Scramble.UI.Tests;
 [Trait("Category", "Integration")]
 public class HeadlessRealRelayTests : IAsyncLifetime
 {
-    private const string RelayUrl = "wss://relay2.angor.io";
+    /// <summary>
+    /// The relay these tests talk to.
+    /// </summary>
+    /// <remarks>
+    /// <b>This was a const naming a public internet relay, in a class traited
+    /// Category=Integration — which is the required merge gate.</b> Depending on a
+    /// third-party service is exactly the property that got CrossMdkRelayIntegrationTests
+    /// and RelayIntegrationTests excluded from that gate and moved to the nightly;
+    /// this class had it too and slipped in under a different category. The result
+    /// was a required gate that failed non-deterministically — two of three, then
+    /// one of three, on identical code.
+    ///
+    /// integration.yml already exports SCRAMBLE_TEST_RELAY=ws://localhost:7777 for
+    /// the docker relay it starts, and its own comment lists the hardcoders as the
+    /// exception. Honouring that variable is all this needed. The default is
+    /// unchanged, so running locally with nothing set behaves as before.
+    /// </remarks>
+    private static readonly string RelayUrl =
+        Environment.GetEnvironmentVariable("SCRAMBLE_TEST_RELAY") ?? "wss://relay2.angor.io";
 
     private readonly ITestOutputHelper _output;
     private readonly ILogger _logger;
@@ -136,6 +154,8 @@ public class HeadlessRealRelayTests : IAsyncLifetime
         var kpB = await userB.Mls.GenerateKeyPackageAsync();
         await userB.Nostr.PublishKeyPackageAsync(kpB.Data, userB.User.PrivateKeyHex!, kpB.NostrTags);
         var kpC = await userC.Mls.GenerateKeyPackageAsync();
+        // C is added through MessageService.AddMemberAsync, the production path,
+        // which selects the KeyPackage itself -- so there is no id to thread here.
         await userC.Nostr.PublishKeyPackageAsync(kpC.Data, userC.User.PrivateKeyHex!, kpC.NostrTags);
         await Task.Delay(1000);
 
@@ -403,15 +423,30 @@ public class HeadlessRealRelayTests : IAsyncLifetime
         // A fetches B's KP from relay
         var fetchedKPs = (await creator.Nostr.FetchKeyPackagesAsync(joiner.User.PublicKeyHex)).ToList();
         Assert.NotEmpty(fetchedKPs);
+
+        // NOTE (2026-09-22): selecting by the event id this test published was
+        // tried here and made the suite fail 5/5 with "the relay returned 1
+        // KeyPackage(s) ... none with event id <ours>". The relay holds exactly
+        // one, under a DIFFERENT id than our publish returned -- kind 30443 is
+        // addressable, InitializeAfterLoginAsync above has already published one
+        // for this user, and when two land in the same second NIP-01 keeps the
+        // LOWER id, not the later event. So the id our publish returns is not
+        // necessarily the id the relay serves. Left as [0] deliberately; the
+        // residual flakiness is tracked in remaining-work S13 with this finding.
         var welcome = await creator.Mls.StageAddMemberAsync(groupInfo.GroupId, fetchedKPs[0]);
         await creator.Mls.MergeStagedAsync(groupInfo.GroupId);
         chatA.ParticipantPublicKeys.Add(joiner.User.PublicKeyHex);
         await creator.Storage.SaveChatAsync(chatA);
 
-        // Publish commit
+        // Publish the commit. CommitData is a FINISHED, signed kind-445 event --
+        // the Dark Matter engine builds and signs it -- so it goes out verbatim.
+        // PublishCommitAsync is the legacy member: it takes raw MLS bytes and
+        // base64s them into the content of a second event, which a peer rejects
+        // before any MLS processing. It now refuses a finished event rather than
+        // wrapping one, which is how this fixture was caught.
         if (welcome.CommitData != null && welcome.CommitData.Length > 0)
         {
-            await creator.Nostr.PublishCommitAsync(welcome.CommitData, nostrGroupIdHex, creator.User.PrivateKeyHex!);
+            await creator.Nostr.PublishCommitEventAsync(welcome.CommitData);
             _output.WriteLine("Published commit");
         }
 

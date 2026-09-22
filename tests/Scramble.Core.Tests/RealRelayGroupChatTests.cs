@@ -485,10 +485,14 @@ public class RealRelayGroupChatTests : IAsyncLifetime
         chatA.ParticipantPublicKeys.Add(_userB.PubKey);
         await _userA.Storage.SaveChatAsync(chatA);
 
-        // Publish commit for B's addition (existing members need to process it)
+        // Publish commit for B's addition (existing members need to process it).
+        // CommitData is a FINISHED, signed kind-445 event from the Dark Matter
+        // engine, so it goes out verbatim. PublishCommitAsync is the legacy
+        // member that base64s raw MLS bytes into a second event's content, and
+        // it now refuses a finished one rather than double-wrapping it.
         if (welcomeB.CommitData != null && welcomeB.CommitData.Length > 0)
         {
-            await _userA.Nostr.PublishCommitAsync(welcomeB.CommitData, nostrGroupIdHex, _userA.PrivKey);
+            await _userA.Nostr.PublishCommitEventAsync(welcomeB.CommitData);
             _output.WriteLine("A published commit for B's addition");
         }
 
