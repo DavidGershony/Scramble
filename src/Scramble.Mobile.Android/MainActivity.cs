@@ -224,9 +224,38 @@ public class MainActivity : AvaloniaMainActivity
 
     /// <summary>
     /// Reads the IME bottom inset off the incoming WindowInsetsCompat and applies it as
-    /// bottom padding on the receiving view. System bar insets (status / navigation) are
-    /// preserved on the other edges so we don't trample whatever the system chrome needs.
+    /// bottom padding on the receiving view.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Bottom only, and the top inset in particular must stay at zero.</b> This
+    /// previously applied <c>systemBars.Top</c> as top padding, "so we don't trample
+    /// whatever the system chrome needs". Padding an Android view moves its content
+    /// box, and Avalonia renders into that box while continuing to map incoming
+    /// MotionEvent coordinates against the view's own origin. The two disagree by
+    /// exactly the padding, so every control in the app drew in one place and
+    /// answered taps in another.
+    /// </para>
+    /// <para>
+    /// Measured, not inferred: on a 420dpi device the status-bar inset is 142px, and
+    /// a tap at a text field's visible centre did nothing while the identical tap
+    /// 142px higher opened the keyboard. 142px at 420dpi is 8.6mm, which is what a
+    /// user reports as "I have to press about three quarters of a centimetre above
+    /// the button".
+    /// </para>
+    /// <para>
+    /// A bottom inset is safe because it only shortens the content box; the origin
+    /// does not move, so touch coordinates still line up. Top and left are the
+    /// dangerous ones.
+    /// </para>
+    /// <para>
+    /// <b>Why this appeared without any change to this file.</b> The window is
+    /// edge-to-edge (Android enforces it for apps targeting SDK 35+), so
+    /// <c>systemBars.Top</c> is now non-zero where it used to be 0 and the padding
+    /// was a no-op. Keeping content clear of the status bar is a job for the shared
+    /// UI's safe-area padding, not for a view padding that input does not know about.
+    /// </para>
+    /// </remarks>
     private sealed class ImeInsetListener : Java.Lang.Object, IOnApplyWindowInsetsListener
     {
         public WindowInsetsCompat? OnApplyWindowInsets(global::Android.Views.View? v, WindowInsetsCompat? insets)
@@ -236,7 +265,11 @@ public class MainActivity : AvaloniaMainActivity
             var ime = insets.GetInsets(WindowInsetsCompat.Type.Ime());
             var systemBars = insets.GetInsets(WindowInsetsCompat.Type.SystemBars());
             var bottom = System.Math.Max(ime.Bottom, systemBars.Bottom);
-            v.SetPadding(systemBars.Left, systemBars.Top, systemBars.Right, bottom);
+
+            // BOTTOM ONLY. See the remarks on ImeInsetListener: a top or left
+            // padding here moves what Avalonia draws without moving where it
+            // hit-tests, so every control answers taps offset by that many pixels.
+            v.SetPadding(0, 0, 0, bottom);
             return insets;
         }
     }
@@ -263,7 +296,11 @@ public class MainActivity : AvaloniaMainActivity
             var ime = insets.GetInsets(WindowInsetsCompat.Type.Ime());
             var systemBars = insets.GetInsets(WindowInsetsCompat.Type.SystemBars());
             var bottom = System.Math.Max(ime.Bottom, systemBars.Bottom);
-            _target.SetPadding(systemBars.Left, systemBars.Top, systemBars.Right, bottom);
+
+            // Bottom only, for the same reason as ImeInsetListener -- and it has
+            // to match, or the offset would reappear for the duration of every
+            // keyboard animation.
+            _target.SetPadding(0, 0, 0, bottom);
             return insets;
         }
     }
