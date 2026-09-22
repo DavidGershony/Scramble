@@ -85,7 +85,6 @@ public class HeadlessResyncTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task RequestResyncAsync_EmitsChatUpdateWithIsResyncPending(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, syncChat, targetChat) = await CreateContextWithSyncGroup(backend);
 
         // Subscribe to ChatUpdates before calling RequestResync
@@ -111,7 +110,6 @@ public class HeadlessResyncTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task RequestResyncAsync_PublishesMessageToSyncGroup(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, syncChat, targetChat) = await CreateContextWithSyncGroup(backend);
 
         // Act
@@ -126,7 +124,6 @@ public class HeadlessResyncTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task AnnounceDeviceToSyncGroupAsync_PublishesMessage(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, syncChat, _) = await CreateContextWithSyncGroup(backend);
 
         // Act
@@ -141,7 +138,6 @@ public class HeadlessResyncTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task AnnounceDeviceToSyncGroupAsync_NoSyncGroup_DoesNotThrow(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -160,7 +156,6 @@ public class HeadlessResyncTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ChatViewModel_LoadChat_SetsOutOfSyncFlags(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -204,7 +199,6 @@ public class HeadlessResyncTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ChatViewModel_LoadChat_ClearFlags_WhenNotOutOfSync(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -240,7 +234,6 @@ public class HeadlessResyncTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ChatViewModel_ChatUpdates_UpdatesResyncPending(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, _, targetChat) = await CreateContextWithSyncGroup(backend);
 
         var chatVm = new ChatViewModel(
@@ -268,7 +261,6 @@ public class HeadlessResyncTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ChatViewModel_ResyncCommand_SetsIsResyncPending(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, syncChat, targetChat) = await CreateContextWithSyncGroup(backend);
 
         var chatVm = new ChatViewModel(

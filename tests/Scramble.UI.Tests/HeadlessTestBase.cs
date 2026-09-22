@@ -32,15 +32,6 @@ public abstract class HeadlessTestBase : IDisposable
         foreach (var path in DbPaths) TryDeleteFile(path);
     }
 
-    protected static bool NativeDllAvailable()
-    {
-        var dllPath = Path.Combine(AppContext.BaseDirectory, "scramble_native.dll");
-        return File.Exists(dllPath);
-    }
-
-    protected static bool ShouldSkip(string backend)
-        => backend == "rust" && !NativeDllAvailable();
-
     protected record RealTestContext(
         User User,
         StorageService Storage,

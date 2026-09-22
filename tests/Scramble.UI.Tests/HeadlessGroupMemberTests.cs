@@ -53,7 +53,6 @@ public class HeadlessGroupMemberTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task AddMember_UpdatesParticipantList(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (creator, joiner, chat) = await CreateGroupWithTwoUsers(backend);
 
         Assert.Single(chat.ParticipantPublicKeys);
@@ -69,7 +68,6 @@ public class HeadlessGroupMemberTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task AddMember_PublishesWelcomeToRelay(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (creator, joiner, chat) = await CreateGroupWithTwoUsers(backend);
 
         await creator.MessageService.AddMemberAsync(chat.Id, joiner.User.PublicKeyHex);
@@ -85,7 +83,6 @@ public class HeadlessGroupMemberTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task RemoveMember_UpdatesParticipantList(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (creator, joiner, chat) = await CreateGroupWithTwoUsers(backend);
 
         // First add the member
@@ -104,7 +101,6 @@ public class HeadlessGroupMemberTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task RemoveMember_PublishesCommit(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (creator, joiner, chat) = await CreateGroupWithTwoUsers(backend);
 
         await creator.MessageService.AddMemberAsync(chat.Id, joiner.User.PublicKeyHex);
@@ -122,7 +118,6 @@ public class HeadlessGroupMemberTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task AddMember_MultipleDevices_PublishesWelcomePerDevice(string backend)
     {
-        if (ShouldSkip(backend)) return;
 
         var creator = await CreateRealContext(backend);
         await creator.MessageService.InitializeAsync();
@@ -180,7 +175,6 @@ public class HeadlessGroupMemberTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task AddMember_SameSlotMultipleKPs_TakesLatestOnly(string backend)
     {
-        if (ShouldSkip(backend)) return;
 
         var creator = await CreateRealContext(backend);
         await creator.MessageService.InitializeAsync();
@@ -232,7 +226,6 @@ public class HeadlessGroupMemberTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task LeaveGroup_DeletesLocalState(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var creator = await CreateRealContext(backend);
         await creator.MessageService.InitializeAsync();
 

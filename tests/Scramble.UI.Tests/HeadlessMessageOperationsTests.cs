@@ -47,7 +47,6 @@ public class HeadlessMessageOperationsTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task MarkAsRead_ClearsUnreadCount(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat) = await CreateGroupWithMessages(backend);
 
         // Simulate unread count
@@ -70,7 +69,6 @@ public class HeadlessMessageOperationsTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task SetMuted_TogglesCorrectly(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat) = await CreateGroupWithMessages(backend, 0);
 
         Assert.False(chat.IsMuted);
@@ -91,7 +89,6 @@ public class HeadlessMessageOperationsTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ArchiveChat_SetsArchivedFlag(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat) = await CreateGroupWithMessages(backend, 0);
 
         await ctx.MessageService.ArchiveChatAsync(chat.Id);
@@ -107,7 +104,6 @@ public class HeadlessMessageOperationsTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task DeleteMessage_RemovesFromStorage(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat) = await CreateGroupWithMessages(backend, 1);
 
         var messages = await ctx.Storage.GetMessagesForChatAsync(chat.Id);
@@ -127,7 +123,6 @@ public class HeadlessMessageOperationsTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task SendReply_LinksToOriginalMessage(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat) = await CreateGroupWithMessages(backend, 1);
 
         var messages = await ctx.Storage.GetMessagesForChatAsync(chat.Id);
@@ -152,7 +147,6 @@ public class HeadlessMessageOperationsTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task AddReaction_StoresReaction(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat) = await CreateGroupWithMessages(backend, 1);
 
         var messages = await ctx.Storage.GetMessagesForChatAsync(chat.Id);
@@ -171,7 +165,6 @@ public class HeadlessMessageOperationsTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task RemoveReaction_DeletesReaction(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat) = await CreateGroupWithMessages(backend, 1);
 
         var messages = await ctx.Storage.GetMessagesForChatAsync(chat.Id);

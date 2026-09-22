@@ -20,7 +20,6 @@ public class HeadlessSettingsTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task PublishKeyPackage_UpdatesStatusInSettings(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -67,7 +66,6 @@ public class HeadlessSettingsTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task AuditKeyPackages_ShowsResults(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -96,7 +94,6 @@ public class HeadlessSettingsTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task SaveProfile_PersistsAndReloads(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -132,7 +129,6 @@ public class HeadlessSettingsTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task RelayList_AddRemoveCycleUsage_PersistsToStorage(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -201,7 +197,6 @@ public class HeadlessSettingsTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task PublishRelayList_SendsNip65Event(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -241,7 +236,6 @@ public class HeadlessSettingsTests : HeadlessTestBase
     [AvaloniaTheory]
     public async Task Login_WithSavedRelays_UsesThemInsteadOfDefaults(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 

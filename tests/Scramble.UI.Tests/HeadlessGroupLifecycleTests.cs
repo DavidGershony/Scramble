@@ -20,7 +20,6 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task AcceptInvite_ProcessesWelcome_CreatesChat(string backend)
     {
-        if (ShouldSkip(backend)) return;
 
         // Alice creates group and generates a Welcome for Bob
         var alice = await CreateRealContext(backend);
@@ -88,7 +87,6 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task DeclineInvite_RemovesFromPendingList(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -147,7 +145,6 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task CreateGroup_WithInvite_PublishesWelcome(string backend)
     {
-        if (ShouldSkip(backend)) return;
 
         // Alice creates a group and invites Bob
         var alice = await CreateRealContext(backend);
@@ -197,7 +194,6 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task RescanInvites_FindsMissedWelcomes(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 

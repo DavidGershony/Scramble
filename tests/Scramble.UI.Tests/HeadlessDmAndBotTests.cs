@@ -19,7 +19,6 @@ public class HeadlessDmAndBotTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task CreateDirectMessage_CreatesNewDmChat(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -42,7 +41,6 @@ public class HeadlessDmAndBotTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task CreateDirectMessage_ReturnsSameForExistingRecipient(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -58,7 +56,6 @@ public class HeadlessDmAndBotTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task CreateBotChat_CreatesBotTypeChat(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -81,7 +78,6 @@ public class HeadlessDmAndBotTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task CreateBotChat_ReturnsSameForExistingBot(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -97,7 +93,6 @@ public class HeadlessDmAndBotTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task BotChat_AppearsInChatListWithCorrectType(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -118,7 +113,6 @@ public class HeadlessDmAndBotTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task LinkDevice_ViaViewModel_CreatesBotChat(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -153,7 +147,6 @@ public class HeadlessDmAndBotTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task BotResponse_FromDifferentKey_CreatesNewChat(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -209,7 +202,6 @@ public class HeadlessDmAndBotTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task JoinGroup_OpensDialog(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -230,7 +222,6 @@ public class HeadlessDmAndBotTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task JoinGroup_CreatesPlaceholderChat(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -258,7 +249,6 @@ public class HeadlessDmAndBotTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task JoinGroup_CancelClosesDialog(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -284,7 +274,6 @@ public class HeadlessDmAndBotTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task LookupKeyPackage_FindsPackage(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -324,7 +313,6 @@ public class HeadlessDmAndBotTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task LookupKeyPackage_NoPackageFound(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 

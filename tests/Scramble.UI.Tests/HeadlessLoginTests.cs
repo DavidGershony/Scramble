@@ -17,7 +17,6 @@ public class HeadlessLoginTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ImportPrivateKey_LogsInAndShowsMainUI(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend, saveUser: false);
 
         var mainVm = CreateMainViewModel(ctx);
@@ -46,7 +45,6 @@ public class HeadlessLoginTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task Logout_ClearsStateAndShowsLogin(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 

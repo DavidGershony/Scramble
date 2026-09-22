@@ -32,7 +32,6 @@ public class HeadlessDebugTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ViewLogs_OpensLogViewer(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, settingsVm) = await CreateSettingsViewModel(backend);
 
         Assert.False(settingsVm.ShowLogViewer);
@@ -52,7 +51,6 @@ public class HeadlessDebugTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task CloseLogViewer_ClosesPanel(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, settingsVm) = await CreateSettingsViewModel(backend);
 
         // Open first
@@ -74,7 +72,6 @@ public class HeadlessDebugTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task RefreshLogs_UpdatesLogContent(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, settingsVm) = await CreateSettingsViewModel(backend);
 
         // Open log viewer
@@ -98,7 +95,6 @@ public class HeadlessDebugTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task OpenLogFolder_CallsLauncher(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, settingsVm) = await CreateSettingsViewModel(backend);
 
         ctx.MockLauncher.Setup(l => l.OpenFolder(It.IsAny<string>()));

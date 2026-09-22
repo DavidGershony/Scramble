@@ -19,7 +19,6 @@ public class HeadlessChatManagementTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task DeleteChat_RemovesFromList(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -70,7 +69,6 @@ public class HeadlessChatManagementTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ChatSearch_FiltersChats(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -123,7 +121,6 @@ public class HeadlessChatManagementTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task UnreadCount_IncrementsOnNewMessage(string backend)
     {
-        if (ShouldSkip(backend)) return;
 
         // Two users: Alice and Bob in a group, Bob sends, Alice's unread increments
         var alice = await CreateRealContext(backend);
@@ -186,7 +183,6 @@ public class HeadlessChatManagementTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task LoadMoreMessages_PaginatesCorrectly(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -234,7 +230,6 @@ public class HeadlessChatManagementTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ContactMetadataPanel_OpensAndShowsInfo(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -288,7 +283,6 @@ public class HeadlessChatManagementTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task LoadChats_UppercaseParticipantKeys_NotMarkedOrphan(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 

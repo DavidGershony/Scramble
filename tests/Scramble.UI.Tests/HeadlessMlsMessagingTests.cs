@@ -20,7 +20,6 @@ public class HeadlessMlsMessagingTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task SendMessage_InGroup_EncryptsViaRealMls(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -56,7 +55,6 @@ public class HeadlessMlsMessagingTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ReceiveGroupMessage_DecryptsAndAppearsInChat(string backend)
     {
-        if (ShouldSkip(backend)) return;
 
         // Two users: Alice creates group, adds Bob, Bob sends message, Alice decrypts
         var alice = await CreateRealContext(backend);
@@ -132,7 +130,6 @@ public class HeadlessMlsMessagingTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task MultipleGroups_SwitchBetween_LoadsCorrectMessages(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
