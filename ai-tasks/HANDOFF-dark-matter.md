@@ -110,14 +110,30 @@ The submodule sits exactly on the tag; keep it that way. Two interop peers
 what is left, what blocks what, and the findings behind each. This file's
 §3a–§3ab are history in order; read backwards only as far as you need.
 
-**The one-line answer: P11 is complete.** P0–P10 done, the flip in (§3af), steps 3
-(§3ah), 4 (§3ak) and 5 (§3al) done, §16's replay gap fixed (§3ai) and the §17 it
-surfaced too (§3aj). One MLS engine, proved against the reference client in both
-directions, with no skips in the required gate. **What is left is no longer P11:**
-§14 (at-rest encryption) is closed (§3am), so **no release blocker is
-outstanding**; a smoke test that *runs* the Android head is what lets I5's freeze
-lift on evidence rather than by fiat; and `src/Scramble.Native` plus its CI steps
-are dead weight awaiting their own commit. P12 has not started.
+**The one-line answer: P11 is complete and its follow-ups are done.** P0–P10 done,
+the flip in (§3af), steps 3 (§3ah), 4 (§3ak) and 5 (§3al) done, §16's replay gap
+fixed (§3ai) and the §17 it surfaced too (§3aj). One MLS engine, proved against the
+reference client in both directions, with no skips in the required gate. §14
+(at-rest encryption) is closed and its mutations re-verified on the merged tree
+(§3an, §3ao), so **no release blocker is outstanding**. §3ao also cleared the
+sweep: `src/Scramble.Native` is gone, the peer is on `wn-agent-v0.10.4`, and three
+gate steps that were passing *without running anything* are fixed.
+
+**What is left, none of it P11:**
+
+- **A smoke test that runs the Android head.** Still the only thing that lets I5's
+  freeze lift on evidence rather than by fiat. The head builds and CI builds it
+  (`dotnet-android.yml`); nothing has ever *started* it.
+- **`remaining-work` §19** — `src/Scramble.Apple` is compiled by no gate at all.
+  Either give it a `macos-latest` compile job or delete it as `Scramble.Native`
+  was; it has now taken two edits that nothing verified.
+- **`remaining-work` §20** — Android device-to-device transfer still copies the
+  profile on API 31+. Wants a real device, so it pairs with the smoke test.
+- **`remaining-work` §18** — does the MLS proposal cache survive
+  `MlsGroup.Export()`? Needs `lib/dotnet-mls` permission.
+
+**No PR is open.** The branch is 216 commits ahead of `master`, and the only gate
+that has never run on it is GitHub's own. P12 has not started.
 
 **Four things this migration keeps teaching, which are worth reading before
 starting anything here:**
@@ -2487,6 +2503,137 @@ choose, and with a kind granted only after pairing. Test doubles agree with our
 assumptions by construction. **The Android head was not compiled locally** — no
 Android SDK on this machine — so CI is the first build of it.
 
+### 3ao. The follow-up sweep — and three gates that were passing without running
+
+2026-09-22. §14's tail, plus every loose end the at-rest work left. Seven commits.
+The theme is the one this branch keeps rediscovering: **a green result that was
+never evidence of anything.**
+
+| Commit | What |
+|---|---|
+| `bc80c4b` | §14's three load-bearing mutations re-run on the merged tree |
+| `abf28bc` | 96 skip guards removed — 81 theory cases that were about to go silent |
+| `1313607` | `src/Scramble.Native` deleted, with four workflows and four project files |
+| `5da59c7` | `DarkMatterMlsService.Dispose` left the profile database open |
+| `83eb4ae` | the shipped Android head was letting the OS back up the profile database |
+| `463dc52` | `PassThroughSecureStorage` deleted |
+| `8c596ae` | one definition of the `ISecureStorage` magic prefix |
+
+#### The three that were passing vacuously
+
+**1. A required gate step that ran zero tests.** `integration.yml`'s "Execute
+Core.Tests integration suite" filtered `Category=Native`, and P11 step 5 removed
+the last test carrying that trait. `dotnet test` **exits 0** when a filter matches
+nothing — checked, not assumed — so the step installed a Rust toolchain, ran a cold
+release `cargo build` (its own comment calls that the slowest step in the workflow
+by a wide margin), and then ran no tests. It would have stayed green forever.
+
+**2. A skip guard about to swallow 81 cases.** `HeadlessTestBase.ShouldSkip(backend)`
+returned true for `backend=="rust"` whenever `scramble_native.dll` was absent from
+the test output, and 96 call sites returned early on it. **A test that returns early
+reports as passed.** Today the Windows fast gate builds that DLL, so the 81
+`[InlineData("rust")]` cases genuinely run — but deleting the crate deletes the
+cargo step that produces it, so *the deletion alone would have turned 81 passing
+cases into 81 no-op passes with no change to any number anyone reads.* Hence the
+commit order: guards first, crate second. Verified both ways — 252 with the DLL
+present, 252 with it moved away and every copy in the test output deleted. Nothing
+loads it, so the guard had been refusing to run those cases for no reason at all.
+
+**3. A nightly header claiming coverage no filter could select.**
+`integration-windows-nightly.yml` listed "DPAPI-backed SecureStorage" under what it
+covers. Those four facts are unit-tier `Assert.SkipUnless(OSPlatform.Windows)` facts
+with **no `Category` trait**, so no `Category=` filter could ever have selected
+them. They need no step there either: `dotnet-desktop.yml` runs on `windows-latest`
+and already runs them. Header corrected rather than a redundant step added.
+
+`CLAUDE.md`'s I2 was wrong in the same family: it described the gate as one union
+including `Relay` and `FullE2E`, which `integration.yml` excludes **by name**. It is
+two steps. I2's list is a claim about the gate's contents, so it now holds them.
+
+#### The peer is on 0.10.4, and getting there found a bug in our own script
+
+The bump §3am recommended is done, and both images carry
+`mdk.commit=fcc85edd8dbd07c8293c899ee52230f72c54c897` — the 0.10.4 peeled commit,
+the same one iOS, Android and Mac ship.
+
+The first attempt failed with *"the tag moved mid-build. Re-run."* The tag had not
+moved. `build-marmot-peers.ps1`'s `-Ref` path resolved `wn-agent-v0.10.4` to
+`c052a8a5…`, the **annotated tag object**, and the Dockerfile compared that against
+`git rev-parse HEAD` after checkout, which is the peeled commit. They differ by
+definition for an annotated tag.
+
+The cause is worth keeping, because the code looked correct: it filtered for the
+peeled entry and preferred it. **`git ls-remote <url> <pattern>` matches the full
+ref name, and the peeled entry is named `refs/tags/<tag>^{}`** — so an exact tag
+name does not match it, git returns only the tag object, and the filter had nothing
+to prefer. Asking for `<ref>^{}` as a second pattern is what makes it reachable. The
+auto-resolve path never hit this only because its glob (`wn-agent-v*`) happens to
+match the `^{}` refs too. A guard that cannot fire, next to a glob that works by
+accident.
+
+The compose default was separately stale — `wn-agent-v0.9.20` while the running peer
+was `0.10.3`. `build-marmot-peers.ps1` always passes an explicit `--build-arg`, so
+that default is reached only by a bare `docker compose build`, which is exactly why
+it matters: that path would have silently downgraded the peer 14 releases. Both
+occurrences now say `v0.10.4`, with a note saying why the default is load-bearing.
+
+#### Two real defects, one of them security-relevant
+
+**`DarkMatterMlsService.Dispose` released the gate and nothing else.**
+`SqliteMarmotStorageProvider` holds one long-lived `SqliteConnection` on the
+profile's database, and the factory constructs it, hands it over and keeps no
+reference — so the service is its only owner and nothing else could close it. On
+Windows that is what makes deleting or replacing a profile database fail. Asserted
+through `IDisposable` on a mock rather than by deleting a file, because a file-lock
+assertion would also be measuring `Microsoft.Data.Sqlite`'s connection pooling.
+**Test-first, and it failed against the real defect** rather than a mutation.
+
+**The shipped Android head had no `android:allowBackup`.** The platform default is
+**true**, so the OS was backing up the app's private data directory — and therefore
+the profile SQLite file with its MLS ratchet state and leaf private keys — to the
+user's cloud account. The abandoned `src/Scramble.Android` head sets it to false.
+This head was created without it during the 2026-05-11 Avalonia pivot, so **the
+hardening was lost along with the head that had it**: precisely the drift I1 exists
+to catch, in a file type I1 does not look at. Verified through the build, not the
+source: the generated `obj/.../android/AndroidManifest.xml` now carries
+`allowBackup="false"` where it previously carried `true`.
+
+It was found by checking one stale line in
+`ai-tasks/android-google-play-readiness.md`, which listed `allowBackup="false"`
+under **"What's Already Production-Ready"**. It was true of the head that was
+abandoned. Four more claims in that section were the same kind of stale —
+`EncryptedSqliteStorageProvider` (deleted in step 5), a release keystore that is not
+in the repo at all, `com.openchat.app`, `net9.0-android`. A readiness section is
+read by whoever is deciding to ship; all five are corrected, with which head each
+was true of.
+
+#### The prefix, and a deliberate refusal to share it
+
+Five `ISecureStorage` implementations each carried
+`{ 0xEE, 0xCC, 0x01, 0x00 }`, equal by coincidence. It is not an implementation
+detail: it is how `Unprotect` decides whether a value was ever protected, and since
+§14 it is what separates an encrypted ratchet-state column from a plaintext one. A
+drifted copy would read that platform's own protected values as legacy plaintext and
+hand ciphertext back as data — silently. The four live heads now read it from
+`SecureStorageFormat`.
+
+**Every test copy was deliberately left alone**, and this is the interesting half.
+Sharing stops the implementations drifting from *each other*; those copies catch what
+sharing cannot, which is a change to the shared value itself. A test that imported
+the constant would follow it and stay green while every profile database ever
+written became unreadable. They are independent pins, not duplication to tidy away —
+and `SecureMarmotStorageProviderTests` now says so, having previously justified its
+copy with "each platform head keeps its own copy", which this made untrue.
+
+#### One gap this opened rather than closed
+
+`src/Scramble.Apple` — the macOS/iOS head — **is compiled by nothing.** Not the
+solution, not any `.slnf`, not any workflow; `publish.yml`'s `macos-arm64` job
+publishes `Scramble.Desktop`, not that head. Its one-line change here is edited
+unverified and labelled as such. That is the same trap that let two dead `using`
+lines in `Scramble.Diagnostics` survive four green fast gates, and it is now the
+second head in that position. Recorded in `remaining-work` §19.
+
 ### 3an. §14 closed — the engine's store is encrypted at rest again
 
 2026-09-22. The last release blocker. `remaining-work` §14 has the column-by-column
@@ -3196,6 +3343,10 @@ without the interop suite running).
 | Killing an interop run mid-flight | Corrupts the peer container's SQLite. Every later run fails `backend failure: file is not a database`, naming whichever command ran first — so it reads as a fault in an unrelated test | Recreate the `scramble_mdk-cli-data` volume. A clean peer also runs the category in ~2m30 against ~8m40 dirty. |
 | Publishing a KeyPackage in a test without `MarkKeyPackagePublishedAsync` | The join is fail-closed on the event id the Welcome names, so the invite is refused — and `AcceptInviteAsync` reports it as "the private key is no longer available", which sounds like consumed material rather than a missing binding | `KeyPackagePublishing.PublishAndBindAsync`. Publishing is two steps; the app's own auto-publish path does both |
 | Believing a green fast gate covers the integration suite | `Scramble.Desktop.slnf` does not include `Scramble.Diagnostics`, so `dotnet build Scramble.Desktop.slnf` never compiles it. Step 5 left two dead `using` lines there and the fast gate reported green over them four times; the integration gate then failed to *build*, which prints no summary line at all — so `grep "^Passed!"` finds nothing and the silence reads as success | After any `src/` change, `dotnet build tests/Scramble.Diagnostics` explicitly. And on a gate run, check a summary line exists before believing there were no failures |
+| Reading a green CI step as "these tests passed" | `integration.yml`'s required Core.Tests step filtered `Category=Native` after the last such test was deleted. **`dotnet test` exits 0 when a filter matches nothing** — so the step built Rust and ran zero tests, green, indefinitely | A gate step must name what it expects to run. When removing the last test in a category, remove the step; when adding a filter, run it once and read the *count*, not the exit code |
+| A test guard keyed to a build artifact | `ShouldSkip(backend)` returned early when `scramble_native.dll` was missing, and **an early return reports as passed**. Deleting the crate would have converted 81 running cases into 81 no-op passes with no number changing | Never gate execution on a file's presence. If a test genuinely cannot run, `Assert.Skip` so it is *counted* as skipped — a skip is visible, an early return is not |
+| Believing a "prefer the peeled tag" filter works | `git ls-remote <url> <exact-tag>` never returns the `^{}` entry: patterns match the full ref name and the peeled ref is `refs/tags/<tag>^{}`. The filter had nothing to prefer and handed back the annotated **tag object's** SHA, which is not a commit | Pass `<ref>^{}` as a second pattern. A glob (`<tag>*`) also works, which is why the auto-resolve path never hit this — by accident, not design |
+| A doc section titled "already done" | `android-google-play-readiness.md` credited the shipped head with five things true only of the head the pivot abandoned — including `allowBackup="false"`, whose absence meant the OS was cloud-backing up MLS ratchet state | Re-check "production ready" claims against the head that ships, by file, before trusting one. A stale readiness list is read by whoever decides to release |
 | Trusting a subagent's test counts or mutation results | One worktree was branched **182 commits stale**, so its mutations proved nothing on the tip; another reported "UI unchanged" where the tip showed 29 failures | Re-run its mutations on the real tree and compare its reported baselines against yours before committing. |
 | Testing the adapter only against itself | `DarkMatterMlsService` persists the sender ratchet by hand, outside the engine's send path. Two of our own instances stay in perfect agreement with a ratchet one generation out; a real peer decrypts nothing | `AdapterInteropTests` drives `IMlsService` against the reference client, and only the restart test catches it. Do not let a new adapter path land without a seat in that suite. |
 | Judging a commit's authority on an epoch **number** match | A number is not a state: after a fork two branches sit at the same epoch with different trees and admin lists, so a peer's commit gets judged under our policy against the wrong member | Refuse, but file `Retryable` — convergence re-judges at the true fork epoch. `Failed` hides the branch for good, because a pass lists only `Retryable`. See `remaining-work` §12. |

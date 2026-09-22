@@ -25,8 +25,15 @@
 
     Note what is NOT used: upstream's `wn-agent-latest` tag. It reads like the
     thing to track and is not -- on 2026-09-10 it pointed at the same commit as
-    `wn-agent-v0.9.12`, eight releases behind `v0.9.20`. Following it silently
-    downgraded the peer. The newest semver tag is resolved instead.
+    `wn-agent-v0.9.12`, eight releases behind the then-current `v0.9.20`.
+    Following it silently downgraded the peer. The newest semver tag is
+    resolved instead.
+
+    Current peer: `wn-agent-v0.10.4`, peeling to fcc85edd -- the same commit
+    the iOS, Android and Mac clients ship. The 0.10.3 -> 0.10.4 range was
+    compared blob-by-blob before the bump: crates/traits is byte-identical and
+    the openmls pin did not move, so nothing we encode, refuse or advertise
+    changed across it. See HANDOFF-dark-matter.md §3am.
 
 .PARAMETER Force
     Rebuild even when the resolved commit matches what the images hold.
@@ -86,12 +93,26 @@ if (-not $Ref) {
 }
 else {
     Write-Host "[peers] resolving $Ref ..."
-    $output = @(git ls-remote $repoUrl $Ref 2>&1)
+
+    # Both patterns, and the second is the load-bearing one. `ls-remote <url>
+    # <pattern>` matches against the full ref name, and an annotated tag's
+    # peeled entry is named `refs/tags/<tag>^{}` -- so an exact tag name does
+    # NOT match it and git returns only the tag object. The "prefer the peeled
+    # entry" filter below then had nothing to prefer and silently handed back
+    # the tag object's SHA, which is not a commit: the Dockerfile compares it
+    # to `git rev-parse HEAD` after checkout and reports "the tag moved
+    # mid-build", which is not what happened. Asking for `<ref>^{}` explicitly
+    # is what makes the peeled entry reachable.
+    #
+    # The auto-resolve path above never hit this only because its glob
+    # (`wn-agent-v*`) happens to match the `^{}` refs as well.
+    $output = @(git ls-remote $repoUrl $Ref "$Ref^{}" 2>&1)
     if ($LASTEXITCODE -ne 0 -or $output.Count -eq 0) {
         throw "Could not resolve '$Ref' at $repoUrl. Offline, or the ref does not exist."
     }
 
-    # Prefer the peeled entry when the ref is an annotated tag.
+    # Prefer the peeled entry when the ref is an annotated tag. A lightweight
+    # tag or a branch has no peeled entry and the single line is the commit.
     $peeled = @($output | Where-Object { $_ -match '\^\{\}$' })
     $line = if ($peeled.Count -gt 0) { $peeled[0] } else { $output[0] }
     $commit = ($line -split '\s+')[0]

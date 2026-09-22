@@ -29,12 +29,18 @@ services:
   # The Dark Matter reference peer. Separate from the `whitenoise` service
   # above, which is the pre-Dark-Matter daemon; both exist while the migration
   # is in flight. Pinned to a tag, not a branch — see the Dockerfile.
+  #
+  # Keep this default in step with the peer you actually run.
+  # build-marmot-peers.ps1 always passes an explicit --build-arg MDK_REF, so
+  # this value is only reached by a bare `docker compose build` — which is
+  # exactly why it matters: it sat at v0.9.20 while the running peer was
+  # v0.10.3, so that path would have silently downgraded the peer 14 releases.
   wn-agent:
     build:
       context: ./tests/wn-agent-docker
       dockerfile: Dockerfile
       args:
-        MDK_REF: ${MDK_REF:-wn-agent-v0.9.20}
+        MDK_REF: ${MDK_REF:-wn-agent-v0.10.4}
     container_name: wn-agent-interop
     # Host networking is required, not a shortcut. The agent accepts plaintext
     # ws:// relays only for a literal loopback host and rejects private ranges,
@@ -69,7 +75,7 @@ services:
       context: ./tests/mdk-cli-docker
       dockerfile: Dockerfile
       args:
-        MDK_REF: ${MDK_REF:-wn-agent-v0.9.20}
+        MDK_REF: ${MDK_REF:-wn-agent-v0.10.4}
     image: scramble-mdk-cli:latest
     container_name: mdk-cli-interop
     # Host networking for the same reason as wn-agent: the stack accepts a

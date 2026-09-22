@@ -1073,3 +1073,58 @@ commit's inline proposals cannot tell the orderings apart.
 Low urgency: it needs a proposal to arrive separately from its commit, which our own
 paths do not currently produce — every commit we build carries its proposals inline.
 A peer that sends them separately would find it.
+
+---
+
+## 19. Two UI heads are compiled by no gate (2026-09-22)
+
+Not a defect yet. It is the condition that let two dead `using` lines in
+`Scramble.Diagnostics` survive four consecutive green fast gates, and it now
+applies to whole projects.
+
+**`src/Scramble.Apple`** (macOS/iOS, `net10.0-macos`) is referenced by nothing:
+not `Scramble.sln`, not any `.slnf`, not any workflow. `publish.yml`'s
+`macos-arm64` job publishes `Scramble.Desktop`, which is the cross-platform
+head — not this one. It cannot be built on Windows either (`NETSDK1147`: the
+`macos` workload). So `AppleSecureStorage.cs` was edited in `8c596ae` and by
+P11 step 5 wave 3 before it, in both cases without anything compiling the
+result.
+
+**`src/Scramble.Android`** is the abandoned legacy head, deliberately
+uncompiled (I1-L, `OBSOLETE.md`). That one is fine as it stands — but it is
+the reason a grep for "who else is unbuilt" returns two answers and only one
+of them is intentional.
+
+**What to do, in order of cost:**
+
+1. Add `src/Scramble.Apple` to a solution filter and a `macos-latest` CI job
+   that builds (not publishes) it. A compile-only job is minutes and closes
+   the gap completely.
+2. If nobody intends to ship a macOS/iOS head this cycle, delete the project
+   the way `src/Scramble.Native` was deleted in `1313607` — an unbuilt head is
+   a liability that accrues edits, and reviving it from git is cheap.
+
+Either answer is fine. What is not fine is the current state, where the
+project looks maintained (it was touched twice in September) and is verified
+by nothing.
+
+---
+
+## 20. Android device-to-device transfer still copies the profile (2026-09-22)
+
+`83eb4ae` set `android:allowBackup="false"` on the shipped head, which stops
+cloud backup of the app's private data directory — the profile SQLite file with
+its MLS ratchet state and leaf private keys.
+
+**That is only half of it on API 31+.** Since Android 12, `allowBackup="false"`
+no longer covers device-to-device transfer; suppressing that needs an
+`android:dataExtractionRules` resource with an explicit `<device-transfer>`
+section, declared on `<application>`.
+
+**Why it is not done here:** it adds a `res/xml` resource whose effect is
+observable only on a real device pair, and neither the emulator-less CI nor
+this machine can demonstrate it working. Writing the file blind would produce
+exactly the kind of claim §3ao spent a commit correcting.
+
+Pairs naturally with the Android smoke test that I5's freeze is waiting on:
+once a device or emulator is in the loop, both become checkable at once.
