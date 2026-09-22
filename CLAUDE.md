@@ -65,10 +65,15 @@ Any change under these paths triggers the required integration suite:
 - `tests/Scramble.Diagnostics/**`
 - `tests/Scramble.Core.Tests/**`
 
-- **Gate:** `.github/workflows/integration.yml` runs the whitelist union of
-  `Category=Integration|Relay|MIP-Compliance|ProtocolCompliance|FullE2E|
-  EpochSync|DeviceSync|OutboxModel|Notifications|RelayHarness|
-  ExporterSecret|Native` on Ubuntu with `docker-compose.test.yml` up.
+- **Gate:** `.github/workflows/integration.yml`, on Ubuntu with
+  `docker-compose.test.yml` up, runs two steps: `Category=Integration` on
+  `tests/Scramble.UI.Tests`, and on `tests/Scramble.Diagnostics` the union
+  `Category=Integration|MIP-Compliance|ProtocolCompliance|EpochSync|DeviceSync|
+  OutboxModel|Notifications|RelayHarness|ExporterSecret|DarkMatterInterop`.
+  `Relay` and `FullE2E` are **not** in the gate — they hardcode a relay URL or
+  need a Whitenoise container, and run in `integration-windows-nightly.yml`.
+  This list is the gate's contents, so correct it here when the workflow
+  changes; it has been wrong in both directions before.
 - **Escape hatch:** none. If a new subsystem needs a new category, add it
   to both `integration.yml` and `docs/ci-setup.md`.
 - **Why:** ANALYSIS.md STEP 6 — pre-existing `dotnet-desktop.yml` explicitly
