@@ -57,8 +57,8 @@ before this branch. Read §3af before touching any of
 it.
 
 **What is left, in order:** P11 steps 3–5 (`IMessageService`, the `INostrService`
-audit, deleting `marmot-cs` and Core's duplicate codecs); **at-rest encryption
-for the engine's store, which is a release blocker** (`remaining-work` §14); the
+audit, deleting `marmot-cs` and Core's duplicate codecs); ~~at-rest encryption
+for the engine's store~~ (`remaining-work` §14 — **closed 2026-09-22**, see §3am); the
 three flaky lifecycle tests (`remaining-work` §13 — now more urgent, not less:
 the gate has to mean something during the freeze);
 `validate_invitee_capabilities` (§11); and P12.
@@ -114,10 +114,10 @@ what is left, what blocks what, and the findings behind each. This file's
 (§3ah), 4 (§3ak) and 5 (§3al) done, §16's replay gap fixed (§3ai) and the §17 it
 surfaced too (§3aj). One MLS engine, proved against the reference client in both
 directions, with no skips in the required gate. **What is left is no longer P11:**
-`remaining-work` §14 (at-rest encryption) blocks a release; a smoke test that *runs*
-the Android head is what lets I5's freeze lift on evidence rather than by fiat; and
-`src/Scramble.Native` plus its CI steps are dead weight awaiting their own commit.
-P12 has not started.
+§14 (at-rest encryption) is closed (§3am), so **no release blocker is
+outstanding**; a smoke test that *runs* the Android head is what lets I5's freeze
+lift on evidence rather than by fiat; and `src/Scramble.Native` plus its CI steps
+are dead weight awaiting their own commit. P12 has not started.
 
 **Four things this migration keeps teaching, which are worth reading before
 starting anything here:**
@@ -2438,10 +2438,11 @@ need.
   `messages.wire` as plain BLOBs. The plan's §2 table says at-rest encryption
   "survives, engine-agnostic" — true of the mechanism, false of the MLS store,
   and it was written from the mechanism rather than from the call sites, which is
-  the same shape as the five step-2b blockers. **This is a release blocker**, in
+  the same shape as the five step-2b blockers. **This was a release blocker**, in
   `remaining-work` §14. Twelve sub-interfaces where a missed field is a silent
   leak is not something to bolt onto a pivot commit; nothing ships from this
-  branch, which is the only reason that ordering is acceptable.
+  branch, which is the only reason that ordering is acceptable. **Closed
+  2026-09-22 — see §3am.**
 - **`--mdk managed|rust` is refused rather than ignored.** It selected between
   two marmot-cs backends and there is nothing left to select. Accepting it
   silently would tell a reader their choice took effect. The flag goes with
@@ -2485,6 +2486,67 @@ app on hardware: what a real NIP-46 signer does with a `created_at` it did not
 choose, and with a kind granted only after pairing. Test doubles agree with our
 assumptions by construction. **The Android head was not compiled locally** — no
 Android SDK on this machine — so CI is the first build of it.
+
+### 3am. §14 closed — the engine's store is encrypted at rest again
+
+2026-09-22. The last release blocker. `remaining-work` §14 has the column-by-column
+disposition; what is worth carrying here is the four judgements behind it.
+
+**The decorator, not SQLCipher.** §14 called the encrypted database file "the
+cheaper one, probably better" — one seam instead of eleven, no column-by-column
+judgement to get wrong. It is also a native-dependency bet on .NET Android ARM,
+and **this branch already abandoned an engine for exactly that**: `MlsService`,
+the Rust uniffi backend, went because Android could not load
+ARM-cross-compiled natives. Betting the release blocker on the same mechanism
+that caused the pivot is the wrong risk to take for tidiness.
+`SecureMarmotStorageProvider` is pure managed C# in `Scramble.Core` — it has to
+live there, because `ISecureStorage` does and `Scramble.Marmot.*` must not
+depend on Core. `DarkMatterMlsServiceFactory.Create` composes it, which is what
+keeps that dependency direction intact.
+
+**A census, not a suite.** §14 asked for "a test that enumerates the sensitive
+columns rather than a test per method", and the reason is worth restating: the
+failure mode is a field nobody thought about, and a per-method suite is by
+construction unaware of the field it is missing. So the test reads the real
+schema with `PRAGMA table_info` and requires *every* column — any type, not only
+BLOB — to carry a written-down disposition, and walks `IMarmotStorageProvider`'s
+signatures by reflection to require the same of every byte-carrying record
+member. Both were mutation-checked by adding an unclassified column and an
+unclassified `byte[]`; each failed the census and nothing else. Then it
+populates every sensitive column, closes the store, reopens the *file* and
+asserts the known plaintexts appear in no column of any table. Eleven mutations,
+no survivors.
+
+**Two things the columns taught that §14's list did not have.** First,
+`epoch_states.staged_commit`, `commit_publish_attempts.commit_id` and both
+`tip_commit` columns **cannot** be encrypted, and not for a lookup reason you
+would guess from the schema: `Protect` is not deterministic, and
+`StagedCommitHandle` is compared *by bytes* to recognise our own staged commit
+while `CommitTip.BranchId` is derived from `tip_commit` — so encrypting either
+would make the engine fail to recognise its own work, silently. Second,
+`snapshots.data` needs nothing done to it and that is not luck: the provider
+builds that JSON *below* the decorator out of rows it reads for itself, so it
+serialises already-protected bytes and writes them back still protected. Moving
+snapshot capture above the decorator would undo it invisibly, which is why the
+plaintext sweep searches Base64 forms — with `groups.live_state` deliberately
+unprotected the sweep reports the leak in `snapshots.data` too, so that property
+is checked rather than asserted.
+
+**The legacy read is legible, not fatal.** `Unprotect` returns a prefix-less
+value unchanged — so a row from before this change reads back correctly and
+invisibly, which for security code is the wrong kind of success. The decorator
+notices (unprotecting changed nothing), logs once per field and counts it in
+`FieldsFoundUnprotected`; it does not throw, because pre-cutover MLS state is
+abandoned by decision and refusing to open would only brick a developer's
+profile over state already written off. The store heals forward: every rewrite
+protects. The factory *does* throw when `IStorageService.SecureStorage` is null,
+which is the one case where falling through would create a fresh unprotected
+store — nullable "in tests" cost the MLS store nothing under the legacy engine,
+and now decides whether leaf private keys land on disk in the clear.
+
+**The Android head was not compiled** — no Android SDK on this machine — but the
+change adds no platform API and no conditional compilation, so `dotnet-android.yml`
+is the first build of it.
 
 ### 3al. P11 step 5 — marmot-cs is gone, and the fast gate does not compile Diagnostics
 
