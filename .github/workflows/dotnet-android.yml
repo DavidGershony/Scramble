@@ -102,10 +102,22 @@ jobs:
       - name: Install Android workload
         run: dotnet workload install android --version 10.0.203.1
 
-      - name: Build the APK
+      # Release, and this is not a preference. A Debug build uses FastDev, which
+      # loads managed assemblies one at a time from the filesystem; on a
+      # software-rendered emulator that took ~10s on the main thread, Android
+      # declared an ANR and SIGKILLed the process. The app was fine -- the
+      # startup path was just too slow to survive the 5s rule in that
+      # configuration. Reproduced locally: Debug ANRs, Release passes 3/3.
+      #
+      # Release is also the honest thing to smoke-test: it is what ships, and
+      # startup cost is exactly the property being measured. No keystore is
+      # needed -- the csproj only activates AndroidKeyStore when
+      # AndroidSigningKeyStore is supplied, so this falls back to debug signing,
+      # which installs fine on an emulator.
+      - name: Build the APK (Release)
         run: >
           dotnet build src/Scramble.Mobile.Android/Scramble.Mobile.Android.csproj
-          --configuration Debug
+          --configuration Release
 
       # Without this the emulator falls back to software virtualisation and a
       # cold boot does not finish inside any sane timeout.
@@ -132,7 +144,7 @@ jobs:
             -no-window -no-audio -no-boot-anim -no-snapshot
             -gpu swiftshader_indirect -memory 6144
           disable-animations: true
-          script: pwsh -NoProfile -File ./scripts/android-smoke.ps1 -ScreenshotPath android-smoke.png
+          script: pwsh -NoProfile -File ./scripts/android-smoke.ps1 -Apk src/Scramble.Mobile.Android/bin/Release/net10.0-android/app.scramble.chat-Signed.apk -ScreenshotPath android-smoke.png
 
       # On failure this is the fastest way to see what was on screen instead.
       - name: Upload the screenshot

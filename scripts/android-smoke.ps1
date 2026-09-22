@@ -154,6 +154,23 @@ if ($logcat -match 'FATAL EXCEPTION') {
     $failures += "a FATAL EXCEPTION was logged:`n$frames"
 } else { Write-Host "[smoke] OK   no FATAL EXCEPTION" }
 
+# 3b. no NATIVE crash. A managed-only check is a blind spot: a Mono runtime or
+# JNI fault kills the process with a signal and never writes "FATAL EXCEPTION",
+# so the app simply vanishes and every other assertion reports a dead process
+# with no cause. This is not hypothetical -- it is the shape the CI emulator
+# produced on 2026-09-22, where the app died with no managed exception at all.
+$nativeCrash = $logcat -split "`r?`n" |
+    Select-String -Pattern 'Fatal signal|SIGSEGV|SIGABRT|libc.*Fatal|DEBUG.*backtrace|tombstone'
+if ($nativeCrash) {
+    $failures += ("the process died on a native signal, not a managed exception:`n  " +
+                  (($nativeCrash | Select-Object -First 10) -join "`n  "))
+} else { Write-Host "[smoke] OK   no native signal" }
+
+# 3c. no ANR
+if ($logcat -match 'ANR in ' + [regex]::Escape($PackageId)) {
+    $failures += "the app was declared not responding (ANR)"
+} else { Write-Host "[smoke] OK   no ANR" }
+
 # 4. not killed for memory -- the one that looks like nothing at all
 if ($logcat -match "lowmemorykiller.*Kill '$([regex]::Escape($PackageId))'") {
     $line = ($logcat -split "`r?`n" | Select-String 'lowmemorykiller' | Select-Object -First 1)
@@ -170,6 +187,26 @@ if ($failures.Count -gt 0) {
     Write-Host ''
     Write-Host "[smoke] FAILED:" -ForegroundColor Red
     foreach ($f in $failures) { Write-Host "  - $f" -ForegroundColor Red }
+
+    # Without this the script can say the app is dead and nothing about why,
+    # which is what happened on the first CI run: four assertions, no cause,
+    # and no way to tell a crash from a kill from a clean exit. Everything the
+    # app's own process said, plus how it ended.
+    Write-Host ''
+    Write-Host "[smoke] --- logcat for $PackageId (last 60 lines) ---" -ForegroundColor Yellow
+    $ours = $logcat -split "`r?`n" |
+        Select-String -Pattern ([regex]::Escape($PackageId) + '|monodroid|mono-rt|DOTNET|AndroidRuntime') |
+        Select-Object -Last 60
+    foreach ($line in $ours) { Write-Host "    $line" }
+
+    Write-Host ''
+    Write-Host "[smoke] --- how the process ended ---" -ForegroundColor Yellow
+    $ended = $logcat -split "`r?`n" |
+        Select-String -Pattern 'has died|Force finishing|killed|lowmemorykiller|Process .* exited|WIN DEATH' |
+        Select-Object -Last 15
+    if ($ended) { foreach ($line in $ended) { Write-Host "    $line" } }
+    else { Write-Host "    (nothing -- the process left no death record at all)" }
+
     exit 1
 }
 
