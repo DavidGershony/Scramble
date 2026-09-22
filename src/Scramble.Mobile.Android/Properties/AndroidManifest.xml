@@ -6,7 +6,19 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <application android:label="Scramble" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round">
+    <!-- allowBackup="false" is not a default: Android's default is true, and
+         without this attribute the OS backs the app's private data directory up
+         to the user's cloud account. That directory holds the profile SQLite
+         file, which carries MLS ratchet state and leaf private keys. The
+         abandoned src/Scramble.Android head set this; this head was created
+         without it during the 2026-05-11 Avalonia pivot, so the hardening was
+         lost with the head that had it.
+
+         Still open, and not fixable by an attribute: on API 31+ a false here
+         stops cloud backup but not device-to-device transfer, which needs an
+         android:dataExtractionRules resource. See
+         ai-tasks/android-google-play-readiness.md. -->
+    <application android:label="Scramble" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="false">
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="app.scramble.chat.fileprovider"

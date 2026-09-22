@@ -20,7 +20,6 @@ public class HeadlessSettingsTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task PublishKeyPackage_UpdatesStatusInSettings(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -49,7 +48,11 @@ public class HeadlessSettingsTests : HeadlessTestBase
 
         Assert.True(settingsVm.KeyPackageSuccess);
         Assert.NotNull(settingsVm.KeyPackageStatus);
-        Assert.Contains("fakekp_", settingsVm.KeyPackageStatus);
+        // The status carries the event id the publish returned. It used to be
+        // matched by the mock's "fakekp_" prefix; the mock now returns an id of
+        // the shape a relay really gives back (32 bytes of hex), because that id
+        // travels into a Welcome's e tag where nothing else is accepted.
+        Assert.Contains("Event ID:", settingsVm.KeyPackageStatus);
 
         // Verify the KeyPackage was published via NostrService
         ctx.MockNostr.Verify(n => n.PublishKeyPackageAsync(
@@ -63,7 +66,6 @@ public class HeadlessSettingsTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task AuditKeyPackages_ShowsResults(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -92,7 +94,6 @@ public class HeadlessSettingsTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task SaveProfile_PersistsAndReloads(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -128,7 +129,6 @@ public class HeadlessSettingsTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task RelayList_AddRemoveCycleUsage_PersistsToStorage(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -197,7 +197,6 @@ public class HeadlessSettingsTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task PublishRelayList_SendsNip65Event(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -237,7 +236,6 @@ public class HeadlessSettingsTests : HeadlessTestBase
     [AvaloniaTheory]
     public async Task Login_WithSavedRelays_UsesThemInsteadOfDefaults(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 

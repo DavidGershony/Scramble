@@ -5,7 +5,6 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Scramble.Core.Configuration;
-using Scramble.Core.Marmot;
 using Scramble.Core.Models;
 using Scramble.Core.Services;
 using Scramble.Diagnostics.TestHelpers;
@@ -74,7 +73,7 @@ public class WebAppInteropInvestigationTests : IAsyncLifetime
         MessageService MessageService,
         string DbPath);
 
-    private async Task<UserContext> CreateUser(string name, string backend = "managed")
+    private async Task<UserContext> CreateUser(string name)
     {
         var nostrService = new NostrService();
         _nostrServices.Add(nostrService);
@@ -97,12 +96,12 @@ public class WebAppInteropInvestigationTests : IAsyncLifetime
             CreatedAt = DateTime.UtcNow
         });
 
-        IMlsService mlsService = backend switch
-        {
-            "managed" => new ManagedMlsService(storage),
-            "rust" => new MlsService(storage),
-            _ => throw new ArgumentException($"Unknown backend '{backend}'")
-        };
+        // The engine the app registers. This suite drives MessageService and
+        // NostrService, both of which are written against the Dark Matter engine
+        // since P11's flip -- a commit reaches the publish as a finished kind-445,
+        // and a KeyPackage comes back through the engine's own codec.
+        IMlsService mlsService = DarkMatterMlsServiceFactory.Create(storage);
+        await mlsService.InitializeAsync(keys.privateKeyHex, keys.publicKeyHex);
 
         var messageService = new MessageService(storage, nostrService, mlsService);
         _messageServices.Add(messageService);
@@ -146,15 +145,15 @@ public class WebAppInteropInvestigationTests : IAsyncLifetime
         _output.WriteLine("\n--- Publishing KeyPackages ---");
 
         var kpBob = await bob.MlsService.GenerateKeyPackageAsync();
-        var kpBobEventId = await bob.NostrService.PublishKeyPackageAsync(
-            kpBob.Data, bob.PrivKeyHex, kpBob.NostrTags);
+        var kpBobEventId = await KeyPackagePublishing.PublishAndBindAsync(
+            bob.NostrService, bob.MlsService, kpBob, bob.PrivKeyHex);
         _output.WriteLine($"Bob KeyPackage published: eventId={kpBobEventId}");
         _output.WriteLine($"  Data length: {kpBob.Data.Length} bytes");
         _output.WriteLine($"  Tags: {FormatTags(kpBob.NostrTags)}");
 
         var kpCharlie = await charlie.MlsService.GenerateKeyPackageAsync();
-        var kpCharlieEventId = await charlie.NostrService.PublishKeyPackageAsync(
-            kpCharlie.Data, charlie.PrivKeyHex, kpCharlie.NostrTags);
+        var kpCharlieEventId = await KeyPackagePublishing.PublishAndBindAsync(
+            charlie.NostrService, charlie.MlsService, kpCharlie, charlie.PrivKeyHex);
         _output.WriteLine($"Charlie KeyPackage published: eventId={kpCharlieEventId}");
 
         await Task.Delay(2000); // let relay store them
@@ -212,7 +211,12 @@ public class WebAppInteropInvestigationTests : IAsyncLifetime
 
         // ── Step 7: Alice adds Bob to group (produces Welcome + Commit) ──
         _output.WriteLine("\n--- Alice adds Bob to group ---");
-        var welcome = await alice.MlsService.AddMemberAsync(groupInfo.GroupId, fetchedKPs[0]);
+        // Staged, because that is the only order the engine offers and the only
+        // safe one: AddMemberAsync applied the commit before anybody published
+        // it, which forks the committer permanently if the publish then fails.
+        // What comes back is a finished kind-445, so step 7a publishes it as-is
+        // and the merge waits for the relay.
+        var welcome = await alice.MlsService.StageAddMemberAsync(groupInfo.GroupId, fetchedKPs[0]);
         _output.WriteLine($"AddMember result:");
         _output.WriteLine($"  WelcomeData: {welcome.WelcomeData.Length} bytes");
         _output.WriteLine($"  WelcomeData first 32 hex: {Convert.ToHexString(welcome.WelcomeData[..Math.Min(32, welcome.WelcomeData.Length)])}");
@@ -224,9 +228,11 @@ public class WebAppInteropInvestigationTests : IAsyncLifetime
         if (welcome.CommitData != null && welcome.CommitData.Length > 0)
         {
             _output.WriteLine("\n--- Publishing commit event (kind 445) for group members ---");
-            var commitEventId = await alice.NostrService.PublishCommitAsync(
-                welcome.CommitData, nostrGroupIdHex, alice.PrivKeyHex);
+            var commitEventId = await alice.NostrService.PublishCommitEventAsync(welcome.CommitData);
             _output.WriteLine($"Commit published: eventId={commitEventId}");
+
+            // Only now is the epoch ours to advance -- the relay has the commit.
+            await alice.MlsService.MergeStagedAsync(groupInfo.GroupId);
 
             await Task.Delay(1000);
 
@@ -362,15 +368,18 @@ public class WebAppInteropInvestigationTests : IAsyncLifetime
         Assert.NotEmpty(fetchedCharlieKPs);
         _output.WriteLine($"Fetched {fetchedCharlieKPs.Count} KeyPackage(s) for Charlie");
 
-        var welcomeCharlie = await alice.MlsService.AddMemberAsync(groupInfo.GroupId, fetchedCharlieKPs[0]);
+        var welcomeCharlie = await alice.MlsService.StageAddMemberAsync(
+            groupInfo.GroupId, fetchedCharlieKPs[0]);
         _output.WriteLine($"AddMember (Charlie): welcome={welcomeCharlie.WelcomeData.Length} bytes, commit={welcomeCharlie.CommitData?.Length ?? 0} bytes");
 
         // Publish commit for Charlie's addition
         if (welcomeCharlie.CommitData != null && welcomeCharlie.CommitData.Length > 0)
         {
-            var commitEventId2 = await alice.NostrService.PublishCommitAsync(
-                welcomeCharlie.CommitData, nostrGroupIdHex, alice.PrivKeyHex);
+            var commitEventId2 = await alice.NostrService.PublishCommitEventAsync(
+                welcomeCharlie.CommitData);
             _output.WriteLine($"Commit for Charlie published: eventId={commitEventId2}");
+
+            await alice.MlsService.MergeStagedAsync(groupInfo.GroupId);
 
             // Bob must process this commit to advance his epoch!
             // In production, this happens via SubscribeToGroupMessagesAsync + HandleGroupMessageEventAsync.
@@ -383,12 +392,14 @@ public class WebAppInteropInvestigationTests : IAsyncLifetime
                     new { kinds = new[] { 445 }, ids = new[] { commitEventId2 }, limit = 1 });
                 if (commitEvents.Count > 0)
                 {
-                    using var commitDoc = JsonDocument.Parse(commitEvents[0]);
-                    var commitContent = commitDoc.RootElement.GetProperty("content").GetString()!;
-                    var commitBytes = Convert.FromBase64String(commitContent);
-                    _output.WriteLine($"Commit event fetched: {commitBytes.Length} bytes (MIP-03 encrypted)");
+                    // The whole event. The engine's peeler verifies the id and
+                    // signature before any field of it is trusted, so it ingests
+                    // the envelope and refuses bare ciphertext -- which is also
+                    // what MessageService hands it in production, via
+                    // NostrEventReceived.RawJson.
+                    byte[] commitBytes = System.Text.Encoding.UTF8.GetBytes(commitEvents[0]);
+                    _output.WriteLine($"Commit event fetched: {commitBytes.Length} bytes (signed kind-445)");
 
-                    // DecryptMessageAsync now handles commits gracefully
                     var commitResult = await bob.MlsService.DecryptMessageAsync(chatBob.MlsGroupId!, commitBytes);
                     _output.WriteLine($"Bob processed commit: IsCommit={commitResult.IsCommit}");
                     Assert.True(commitResult.IsCommit);
@@ -540,8 +551,8 @@ public class WebAppInteropInvestigationTests : IAsyncLifetime
             _output.WriteLine($"  [{string.Join(", ", tag.Select(t => $"\"{t}\""))}]");
         }
 
-        var eventId = await user.NostrService.PublishKeyPackageAsync(
-            kp.Data, user.PrivKeyHex, kp.NostrTags);
+        var eventId = await KeyPackagePublishing.PublishAndBindAsync(
+            user.NostrService, user.MlsService, kp, user.PrivKeyHex);
         _output.WriteLine($"Published: {eventId}");
         await Task.Delay(2000);
 
@@ -614,8 +625,8 @@ public class WebAppInteropInvestigationTests : IAsyncLifetime
 
         // Bob publishes KeyPackage
         var kpBob = await bob.MlsService.GenerateKeyPackageAsync();
-        var kpEventId = await bob.NostrService.PublishKeyPackageAsync(
-            kpBob.Data, bob.PrivKeyHex, kpBob.NostrTags);
+        var kpEventId = await KeyPackagePublishing.PublishAndBindAsync(
+            bob.NostrService, bob.MlsService, kpBob, bob.PrivKeyHex);
         await Task.Delay(2000);
 
         // Alice creates group and adds Bob
@@ -623,7 +634,12 @@ public class WebAppInteropInvestigationTests : IAsyncLifetime
         var fetchedKPs = (await alice.NostrService.FetchKeyPackagesAsync(bob.PubKeyHex)).ToList();
         Assert.NotEmpty(fetchedKPs);
 
-        var welcome = await alice.MlsService.AddMemberAsync(groupInfo.GroupId, fetchedKPs[0]);
+        // Staged and merged: what this test inspects is the gift wrap, but it
+        // has to come by a Welcome honestly to have one to inspect.
+        var welcome = await alice.MlsService.StageAddMemberAsync(groupInfo.GroupId, fetchedKPs[0]);
+        if (welcome.CommitData is { Length: > 0 })
+            await alice.NostrService.PublishCommitEventAsync(welcome.CommitData);
+        await alice.MlsService.MergeStagedAsync(groupInfo.GroupId);
 
         // Publish Welcome
         var welcomeEventId = await alice.NostrService.PublishWelcomeAsync(
@@ -663,9 +679,9 @@ public class WebAppInteropInvestigationTests : IAsyncLifetime
             try
             {
                 var gwPubkeyHex = gwPubkey!;
-                var sealConvKey = MarmotCs.Protocol.Nip44.Nip44Encryption.DeriveConversationKey(
+                var sealConvKey = Scramble.Nostr.Crypto.Nip44.DeriveConversationKey(
                     Convert.FromHexString(bob.PrivKeyHex), Convert.FromHexString(gwPubkeyHex));
-                var sealJson = MarmotCs.Protocol.Nip44.Nip44Encryption.Decrypt(gwContent!, sealConvKey);
+                var sealJson = Scramble.Nostr.Crypto.Nip44.Decrypt(gwContent!, sealConvKey);
                 _output.WriteLine("  Seal JSON:");
                 LogPrettyJson(sealJson);
 
@@ -681,9 +697,9 @@ public class WebAppInteropInvestigationTests : IAsyncLifetime
                 Assert.Equal(13, sealKind);
                 Assert.Equal(alice.PubKeyHex, sealPubkey);
 
-                var rumorConvKey = MarmotCs.Protocol.Nip44.Nip44Encryption.DeriveConversationKey(
+                var rumorConvKey = Scramble.Nostr.Crypto.Nip44.DeriveConversationKey(
                     Convert.FromHexString(bob.PrivKeyHex), Convert.FromHexString(sealPubkey));
-                var rumorJson = MarmotCs.Protocol.Nip44.Nip44Encryption.Decrypt(sealContent, rumorConvKey);
+                var rumorJson = Scramble.Nostr.Crypto.Nip44.Decrypt(sealContent, rumorConvKey);
                 _output.WriteLine("\n  Rumor (kind 444 Welcome) JSON:");
                 LogPrettyJson(rumorJson);
 

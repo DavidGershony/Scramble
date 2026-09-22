@@ -2,7 +2,6 @@ using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using Scramble.Core.Configuration;
 using Scramble.Core.Crypto;
-using Scramble.Core.Marmot;
 using Scramble.Core.Services;
 using Scramble.UI.Services;
 using Xunit;
@@ -192,36 +191,13 @@ public class SecurityTests
 
     #endregion
 
-    #region H3 — Native Interop Bounds Checking
+    // H3 was three tests of MarmotWrapper.ValidateNativeBufferLength, the bounds
+    // check on buffers crossing the P/Invoke boundary to the Rust backend. Removed
+    // 2026-09-21 with the wrapper: there is no native boundary left in this app, so
+    // there is nothing for the guard to guard. The equivalent surface on the Dark
+    // Matter engine is managed all the way down -- a malformed length is a decode
+    // failure in DotnetMls, covered by its own suite and the RFC 9420 vectors.
 
-    [Theory]
-    [InlineData(0)]
-    [InlineData(1)]
-    [InlineData(1024)]
-    [InlineData(50_000_000)]
-    public void H3_ValidBufferLength_Accepted(int length)
-    {
-        var ex = Record.Exception(() => MarmotWrapper.ValidateNativeBufferLength(length, "test"));
-        Assert.Null(ex);
-    }
-
-    [Theory]
-    [InlineData(-1)]
-    [InlineData(-100)]
-    [InlineData(int.MinValue)]
-    public void H3_NegativeBufferLength_Rejected(int length)
-    {
-        Assert.Throws<MarmotException>(() => MarmotWrapper.ValidateNativeBufferLength(length, "test"));
-    }
-
-    [Fact]
-    public void H3_OversizedBufferLength_Rejected()
-    {
-        Assert.Throws<MarmotException>(() =>
-            MarmotWrapper.ValidateNativeBufferLength(200_000_000, "test"));
-    }
-
-    #endregion
 
     #region M3 — Relay Rate Limiting
 
@@ -297,17 +273,17 @@ public class SecurityTests
         var plaintext = "{\"id\":\"test123\",\"method\":\"connect\",\"params\":[\"abc\"]}";
 
         // Encrypt with A's private key + B's public key
-        var convKeyAB = MarmotCs.Protocol.Nip44.Nip44Encryption.DeriveConversationKey(
+        var convKeyAB = Scramble.Nostr.Crypto.Nip44.DeriveConversationKey(
             Convert.FromHexString(privA), Convert.FromHexString(pubB));
-        var encrypted = MarmotCs.Protocol.Nip44.Nip44Encryption.Encrypt(plaintext, convKeyAB);
+        var encrypted = Scramble.Nostr.Crypto.Nip44.Encrypt(plaintext, convKeyAB);
 
         // Encrypted should NOT contain ?iv= (that's NIP-04 format)
         Assert.DoesNotContain("?iv=", encrypted);
 
         // Decrypt with B's private key + A's public key
-        var convKeyBA = MarmotCs.Protocol.Nip44.Nip44Encryption.DeriveConversationKey(
+        var convKeyBA = Scramble.Nostr.Crypto.Nip44.DeriveConversationKey(
             Convert.FromHexString(privB), Convert.FromHexString(pubA));
-        var decrypted = MarmotCs.Protocol.Nip44.Nip44Encryption.Decrypt(encrypted, convKeyBA);
+        var decrypted = Scramble.Nostr.Crypto.Nip44.Decrypt(encrypted, convKeyBA);
 
         Assert.Equal(plaintext, decrypted);
     }

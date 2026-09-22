@@ -64,7 +64,7 @@ public class KeyPackageConsumptionTests
         var mlsMock = new Mock<IMlsService>();
         mlsMock.Setup(m => m.InitializeAsync(It.IsAny<string>(), It.IsAny<string>()))
             .Returns(Task.CompletedTask);
-        mlsMock.Setup(m => m.ProcessWelcomeAsync(It.IsAny<byte[]>(), It.IsAny<string>()))
+        mlsMock.Setup(m => m.ProcessWelcomeAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>()))
             .ReturnsAsync(new MlsGroupInfo
             {
                 GroupId = groupId,

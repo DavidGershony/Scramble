@@ -12,14 +12,11 @@ class Program
     {
         // Parse CLI arguments before anything else
         string? profileName = null;
-        string? mdkBackendArg = null;
         bool allowLocalRelays = false;
         for (int i = 0; i < args.Length; i++)
         {
             if (args[i].Equals("--profile", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
                 profileName = args[++i];
-            else if (args[i].Equals("--mdk", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
-                mdkBackendArg = args[++i];
             else if (args[i].Equals("--allow-local-relays", StringComparison.OrdinalIgnoreCase))
                 allowLocalRelays = true;
         }
@@ -42,17 +39,6 @@ class Program
                 ProfileConfiguration.SetProfileForAccount(activeAccount.PublicKeyHex);
             }
             // else: default profile (login screen)
-        }
-
-        if (mdkBackendArg != null)
-        {
-            var backend = mdkBackendArg.ToLowerInvariant() switch
-            {
-                "managed" => MdkBackend.Managed,
-                "rust" => MdkBackend.Rust,
-                _ => throw new ArgumentException($"Unknown --mdk value '{mdkBackendArg}'. Use 'rust' or 'managed'.")
-            };
-            ProfileConfiguration.SetMdkBackend(backend);
         }
 
         if (allowLocalRelays)

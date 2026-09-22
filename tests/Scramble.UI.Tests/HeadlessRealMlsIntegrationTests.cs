@@ -32,7 +32,6 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
     [AvaloniaTheory]
     public async Task LoginFlow_SetsIsLoggedIn_MainUIBecomesVisible(string backend)
     {
-        if (backend == "rust" && !NativeDllAvailable()) return; // Skip when native DLL absent
         var ctx = await CreateRealContext(backend, saveUser: false);
 
         var mainVm = new MainViewModel(ctx.MessageService, ctx.MockNostr.Object, ctx.Storage, ctx.MlsService, ctx.MockClipboard.Object, ctx.MockQrGenerator.Object, ctx.MockLauncher.Object);
@@ -59,7 +58,6 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task MainWindow_WhenNotLoggedIn_LoginViewIsVisible(string backend)
     {
-        if (backend == "rust" && !NativeDllAvailable()) return;
         var ctx = await CreateRealContext(backend, saveUser: false);
 
         var mainVm = new MainViewModel(ctx.MessageService, ctx.MockNostr.Object, ctx.Storage, ctx.MlsService, ctx.MockClipboard.Object, ctx.MockQrGenerator.Object, ctx.MockLauncher.Object);
@@ -82,7 +80,6 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task PendingInvite_ArrivesViaObservable_AppearsInChatList(string backend)
     {
-        if (backend == "rust" && !NativeDllAvailable()) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -91,9 +88,10 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
         await alice.MlsService.InitializeAsync(alice.User.PrivateKeyHex, alice.User.PublicKeyHex);
 
         var bobKp = await ctx.MlsService.GenerateKeyPackageAsync();
-        PrepareKeyPackageForAddMember(bobKp, ctx.User.PublicKeyHex);
+        await PrepareKeyPackageForAddMemberAsync(bobKp, ctx);
         var groupInfo = await alice.MlsService.CreateGroupAsync("Observable Test", new[] { "wss://relay.test" });
-        var realWelcome = await alice.MlsService.AddMemberAsync(groupInfo.GroupId, bobKp);
+        var realWelcome = await alice.MlsService.StageAddMemberAsync(groupInfo.GroupId, bobKp);
+        await alice.MlsService.MergeStagedAsync(groupInfo.GroupId);
 
         var chatListVm = new ChatListViewModel(ctx.MessageService, ctx.Storage, ctx.MlsService, ctx.MockNostr.Object);
         Dispatcher.UIThread.RunJobs();
@@ -114,7 +112,7 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
             {
                 new() { "p", ctx.User.PublicKeyHex },
                 new() { "e", bobKp.NostrEventId! },
-                new() { "encoding", "base64" }
+                new() { "relays", "wss://test.relay" }
             },
             RelayUrl = "wss://test.relay"
         };
@@ -136,7 +134,6 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ChatSelection_LoadsChatInChatViewModel(string backend)
     {
-        if (backend == "rust" && !NativeDllAvailable()) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -172,7 +169,6 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task NewGroupDialog_OpensAndBindsGroupName(string backend)
     {
-        if (backend == "rust" && !NativeDllAvailable()) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -204,7 +200,6 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task SettingsNavigation_TogglesCurrentView(string backend)
     {
-        if (backend == "rust" && !NativeDllAvailable()) return;
         var ctx = await CreateRealContext(backend);
 
         var mainVm = new MainViewModel(ctx.MessageService, ctx.MockNostr.Object, ctx.Storage, ctx.MlsService, ctx.MockClipboard.Object, ctx.MockQrGenerator.Object, ctx.MockLauncher.Object);
@@ -232,7 +227,6 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
     [AvaloniaTheory]
     public async Task FullFlow_Login_CreateGroup_AppearsInChatList(string backend)
     {
-        if (backend == "rust" && !NativeDllAvailable()) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -288,7 +282,6 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ResetGroup_RemovesChatFromList(string backend)
     {
-        if (backend == "rust" && !NativeDllAvailable()) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -341,7 +334,6 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task CancelResetGroup_KeepsChatInList(string backend)
     {
-        if (backend == "rust" && !NativeDllAvailable()) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -386,7 +378,6 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task DecryptionError_SurfacesStatusMessage(string backend)
     {
-        if (backend == "rust" && !NativeDllAvailable()) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -440,7 +431,6 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ChatListView_RendersPendingInvites(string backend)
     {
-        if (backend == "rust" && !NativeDllAvailable()) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -449,9 +439,10 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
         await alice.MlsService.InitializeAsync(alice.User.PrivateKeyHex, alice.User.PublicKeyHex);
 
         var bobKp = await ctx.MlsService.GenerateKeyPackageAsync();
-        PrepareKeyPackageForAddMember(bobKp, ctx.User.PublicKeyHex);
+        await PrepareKeyPackageForAddMemberAsync(bobKp, ctx);
         var groupInfo = await alice.MlsService.CreateGroupAsync("Render Test", new[] { "wss://relay.test" });
-        var realWelcome = await alice.MlsService.AddMemberAsync(groupInfo.GroupId, bobKp);
+        var realWelcome = await alice.MlsService.StageAddMemberAsync(groupInfo.GroupId, bobKp);
+        await alice.MlsService.MergeStagedAsync(groupInfo.GroupId);
 
         var chatListVm = new ChatListViewModel(ctx.MessageService, ctx.Storage, ctx.MlsService, ctx.MockNostr.Object);
         var chatListView = new ChatListView { DataContext = chatListVm };
@@ -473,7 +464,7 @@ public class HeadlessRealMlsIntegrationTests : HeadlessTestBase
             {
                 new() { "p", ctx.User.PublicKeyHex },
                 new() { "e", bobKp.NostrEventId! },
-                new() { "encoding", "base64" }
+                new() { "relays", "wss://test.relay" }
             },
             RelayUrl = "wss://test.relay"
         };

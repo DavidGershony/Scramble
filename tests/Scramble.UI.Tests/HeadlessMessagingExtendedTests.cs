@@ -42,7 +42,6 @@ public class HeadlessMessagingExtendedTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task SendVoiceMessage_SavesAudioMessage(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat) = await CreateGroupWithMls(backend);
 
         await ctx.MessageService.SendVoiceMessageAsync(
@@ -69,7 +68,6 @@ public class HeadlessMessagingExtendedTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task SendVoiceMessage_PublishesEncryptedEvent(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat) = await CreateGroupWithMls(backend);
 
         await ctx.MessageService.SendVoiceMessageAsync(
@@ -92,7 +90,6 @@ public class HeadlessMessagingExtendedTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task SendMediaMessage_Image_SavesCorrectType(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat) = await CreateGroupWithMls(backend);
 
         await ctx.MessageService.SendMediaMessageAsync(
@@ -119,7 +116,6 @@ public class HeadlessMessagingExtendedTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task SendMediaMessage_File_SavesCorrectType(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat) = await CreateGroupWithMls(backend);
 
         await ctx.MessageService.SendMediaMessageAsync(
@@ -146,7 +142,6 @@ public class HeadlessMessagingExtendedTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task SendMediaMessage_PublishesEncryptedEvent(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat) = await CreateGroupWithMls(backend);
 
         await ctx.MessageService.SendMediaMessageAsync(
@@ -169,7 +164,6 @@ public class HeadlessMessagingExtendedTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task FetchAndCacheProfile_ReturnsMetadata(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -197,7 +191,6 @@ public class HeadlessMessagingExtendedTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task FetchAndCacheProfile_NullOnFetchFailure(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -217,7 +210,6 @@ public class HeadlessMessagingExtendedTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task LoadOlderMessages_ReturnsResult(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat) = await CreateGroupWithMls(backend);
 
         // Send some messages first

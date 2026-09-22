@@ -55,6 +55,39 @@ public interface IMlsService
     Task ClearStagedAsync(byte[] groupId);
 
     /// <summary>
+    /// Re-runs the inbound messages the engine held because it could not read
+    /// them yet, and returns the ones that became readable.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Owed after anything that resolves one of our commits</b> — a
+    /// <see cref="MergeStagedAsync"/> or a <see cref="ClearStagedAsync"/> that
+    /// actually cleared something. While a commit of ours is outstanding the
+    /// engine cannot take input, so a peer's message that arrives in that window
+    /// comes back buffered: the bytes are kept and the engine will re-run them,
+    /// but only when somebody asks. A caller that takes the buffered answer and
+    /// never calls this has silently dropped the message while reporting that it
+    /// kept it.
+    /// </para>
+    /// <para>
+    /// <b>Empty is the normal answer and is not a failure.</b> Nothing buffered,
+    /// nothing newly readable, or a backend that never buffers all return an
+    /// empty list. No refusal is thrown for "there was nothing to replay" — the
+    /// caller is a recovery path and has no way to act on one.
+    /// </para>
+    /// <para>
+    /// Application messages only. A held commit is applied by the same pass and
+    /// advances the epoch, but it carries no user-visible content and does not
+    /// appear here, so every element is a message to deliver.
+    /// </para>
+    /// <para>
+    /// Ordered as the engine delivered them: oldest source epoch first, and
+    /// within an epoch the order they arrived in.
+    /// </para>
+    /// </remarks>
+    Task<IReadOnlyList<MlsDecryptedMessage>> ReplayBufferedMessagesAsync(byte[] groupId);
+
+    /// <summary>
     /// Stage a remove-member commit without advancing local MLS state.
     /// </summary>
     Task<byte[]> StageRemoveMemberAsync(byte[] groupId, string memberPublicKey);
@@ -69,7 +102,35 @@ public interface IMlsService
     /// </summary>
     /// <param name="welcomeData">The welcome rumor data from AddMember.</param>
     /// <param name="wrapperEventId">The kind-444 Nostr event ID that wrapped this welcome.</param>
-    Task<MlsGroupInfo> ProcessWelcomeAsync(byte[] welcomeData, string wrapperEventId);
+    /// <param name="keyPackageEventId">
+    /// The kind-30443 event id from the Welcome rumor's <c>e</c> tag, naming the
+    /// KeyPackage the inviter consumed. Optional, but <b>pass it whenever it is
+    /// known</b>: with it, a Welcome naming a KeyPackage this device never
+    /// published is refused. Without it, the engine falls back to trying each
+    /// stored KeyPackage, which still proves possession — the group secrets are
+    /// HPKE-sealed to one init key — but no longer proves the inviter used ours.
+    /// <c>PendingInvite.KeyPackageEventId</c> carries it.
+    /// </param>
+    Task<MlsGroupInfo> ProcessWelcomeAsync(
+        byte[] welcomeData, string wrapperEventId, string? keyPackageEventId = null);
+
+    /// <summary>
+    /// Records the Nostr event id a generated KeyPackage was published under.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Call this after publishing a KeyPackage.</b> Until it is called the
+    /// stored record has no event id, and a Welcome naming that id cannot be
+    /// resolved to the private material it needs — which is what makes
+    /// <see cref="ProcessWelcomeAsync"/>'s binding possible at all.
+    /// </para>
+    /// <para>
+    /// Separate from <see cref="GenerateKeyPackageAsync"/> because the publish
+    /// happens in between and can fail: the material must be stored before the
+    /// bytes go to a relay, and the event id does not exist until after.
+    /// </para>
+    /// </remarks>
+    Task MarkKeyPackagePublishedAsync(KeyPackage keyPackage, string eventIdHex);
 
     /// <summary>
     /// Check whether we have the key material needed to process a Welcome message,
@@ -188,6 +249,30 @@ public interface IMlsService
     void SetNostrEventSigner(INostrEventSigner signer);
 
     /// <summary>
+    /// Supplies the NIP-46 remote signer, once it has connected.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Separate from <see cref="SetNostrEventSigner"/> because the two sign
+    /// different things. That one exists so kind-445 events can be signed
+    /// remotely; this one exists because a Marmot account-identity proof
+    /// (kind 450) commits to an exact event template, including its
+    /// <c>created_at</c>, and <see cref="INostrEventSigner"/> has no parameter
+    /// for one — it stamps its own, and the signature then verifies over a
+    /// different id than the proof commits to.
+    /// </para>
+    /// <para>
+    /// Takes <see cref="IExternalSigner"/> rather than a protocol-specific
+    /// signer so that no engine type reaches the callers, which are ViewModels.
+    /// </para>
+    /// <para>
+    /// Null clears it. Safe to call before the signer finishes connecting: it
+    /// is read when a proof is signed, not here.
+    /// </para>
+    /// </remarks>
+    void SetExternalSigner(IExternalSigner? signer);
+
+    /// <summary>
     /// Get the MIP-04 media exporter secret for a group.
     /// This is MLS-Exporter("marmot", "encrypted-media", 32) from the current epoch.
     /// Used for deriving per-file encryption keys for MIP-04 media.
@@ -298,6 +383,20 @@ public class MlsDecryptedMessage
     /// The Nostr kind of the inner rumor event (e.g. 9 for regular message, 7 for reaction).
     /// </summary>
     public int RumorKind { get; set; } = 9;
+
+    /// <summary>
+    /// The inner rumor's <c>created_at</c>, in Unix seconds. Zero when unknown.
+    /// </summary>
+    /// <remarks>
+    /// <b>For messages that arrive without a transport envelope.</b> The live
+    /// inbound path timestamps a message from the kind-445 event that carried it,
+    /// which is the closest thing to a send time and is what the UI orders on.
+    /// A message delivered by <see cref="IMlsService.ReplayBufferedMessagesAsync"/>
+    /// has no such envelope — it comes back out of the engine's durable store as
+    /// MLS bytes — so without this it would be stamped with the moment it was
+    /// replayed and sort to the bottom of a chat it belongs in the middle of.
+    /// </remarks>
+    public long RumorCreatedAt { get; set; }
 
     /// <summary>
     /// For reaction events (kind 7): the Nostr event ID of the message being reacted to.

@@ -138,7 +138,6 @@ public partial class SettingsViewModel : ViewModelBase
     public static Func<string[], Task<bool>>? PermissionRequestFunc { get; set; }
 
     // Library versions
-    public string MarmotCsVersion { get; } = GetPackageVersion("MarmotCs.Core");
     public string DotnetMlsVersion { get; } = GetPackageVersion("DotnetMls");
 
     // App version (read from assembly InformationalVersion set by Directory.Build.props)
@@ -1232,6 +1231,11 @@ public partial class SettingsViewModel : ViewModelBase
 
             // Save key package locally
             await _storageService.SaveKeyPackageAsync(keyPackage);
+
+            // And bind the engine's own record to the event id, so a Welcome
+            // naming this KeyPackage can be resolved to its private material.
+            // No-op on the legacy backends.
+            await _mlsService.MarkKeyPackagePublishedAsync(keyPackage, eventId);
 
             KeyPackageStatus = $"Key package published successfully!\nEvent ID: {eventId[..16]}...";
             KeyPackageSuccess = true;

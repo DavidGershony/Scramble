@@ -19,7 +19,6 @@ public class HeadlessChatManagementTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task DeleteChat_RemovesFromList(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -70,7 +69,6 @@ public class HeadlessChatManagementTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ChatSearch_FiltersChats(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -123,7 +121,6 @@ public class HeadlessChatManagementTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task UnreadCount_IncrementsOnNewMessage(string backend)
     {
-        if (ShouldSkip(backend)) return;
 
         // Two users: Alice and Bob in a group, Bob sends, Alice's unread increments
         var alice = await CreateRealContext(backend);
@@ -136,8 +133,9 @@ public class HeadlessChatManagementTests : HeadlessTestBase
         var groupInfo = await alice.MlsService.CreateGroupAsync("Unread Test", new[] { "wss://relay.test" });
         var groupIdHex = Convert.ToHexString(groupInfo.GroupId).ToLowerInvariant();
         var bobKp = await bob.MlsService.GenerateKeyPackageAsync();
-        PrepareKeyPackageForAddMember(bobKp, bob.User.PublicKeyHex);
-        var welcome = await alice.MlsService.AddMemberAsync(groupInfo.GroupId, bobKp);
+        await PrepareKeyPackageForAddMemberAsync(bobKp, bob);
+        var welcome = await alice.MlsService.StageAddMemberAsync(groupInfo.GroupId, bobKp);
+        await alice.MlsService.MergeStagedAsync(groupInfo.GroupId);
         var fakeEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
         await bob.MlsService.ProcessWelcomeAsync(welcome.WelcomeData, fakeEventId);
 
@@ -185,7 +183,6 @@ public class HeadlessChatManagementTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task LoadMoreMessages_PaginatesCorrectly(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -233,7 +230,6 @@ public class HeadlessChatManagementTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ContactMetadataPanel_OpensAndShowsInfo(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -287,7 +283,6 @@ public class HeadlessChatManagementTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task LoadChats_UppercaseParticipantKeys_NotMarkedOrphan(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 

@@ -29,7 +29,6 @@ public class HeadlessShareTargetTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ShareFlow_SelectChat_ProducesCorrectHandoff(string backend)
     {
-        if (ShouldSkip(backend)) return;
 
         // --- Arrange: create two accounts with different chats ---
         var ctxA = await CreateRealContext(backend);

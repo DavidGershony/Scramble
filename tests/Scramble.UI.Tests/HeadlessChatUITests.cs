@@ -51,7 +51,6 @@ public class HeadlessChatUITests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ShowChatInfo_TogglesMetadataPanel(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat, chatVm) = await CreateChatWithViewModel(backend);
 
         Assert.False(chatVm.ShowMetadataPanel);
@@ -73,7 +72,6 @@ public class HeadlessChatUITests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ShowChatInfo_FetchesContactMetadata(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -111,7 +109,6 @@ public class HeadlessChatUITests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ShowInviteDialog_OpensWithGroupLink(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat, chatVm) = await CreateChatWithViewModel(backend);
 
         Assert.False(chatVm.ShowInviteDialog);
@@ -129,7 +126,6 @@ public class HeadlessChatUITests : HeadlessTestBase
     [InlineData("managed")]
     public async Task CopyGroupLink_CopiesToClipboard(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat, chatVm) = await CreateChatWithViewModel(backend);
 
         ctx.MockClipboard.Setup(c => c.SetTextAsync(It.IsAny<string>())).Returns(Task.CompletedTask);
@@ -152,7 +148,6 @@ public class HeadlessChatUITests : HeadlessTestBase
     [InlineData("managed")]
     public async Task Recording_StartSetsIsRecording(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat, chatVm) = await CreateChatWithViewModel(backend);
 
         var mockAudio = new Mock<IAudioRecordingService>();
@@ -177,7 +172,6 @@ public class HeadlessChatUITests : HeadlessTestBase
     [InlineData("managed")]
     public async Task Recording_CancelStopsWithoutSending(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat, chatVm) = await CreateChatWithViewModel(backend);
 
         var mockAudio = new Mock<IAudioRecordingService>();
@@ -210,7 +204,6 @@ public class HeadlessChatUITests : HeadlessTestBase
     [InlineData("managed")] // Rust backend doesn't support MIP-04 media exporter secret
     public async Task AttachFile_CallsFilePickerAndUploads(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat, chatVm) = await CreateChatWithViewModel(backend);
 
         var fileData = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x01, 0x02, 0x03, 0x04 };
@@ -238,7 +231,6 @@ public class HeadlessChatUITests : HeadlessTestBase
     [InlineData("managed")]
     public async Task AttachFile_UserCancels_NoUpload(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat, chatVm) = await CreateChatWithViewModel(backend);
 
         // File picker returns null (user cancelled)
@@ -266,7 +258,6 @@ public class HeadlessChatUITests : HeadlessTestBase
     [InlineData("managed")]
     public async Task SendInvite_MlsFails_DoesNotAddParticipant(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat, chatVm) = await CreateChatWithViewModel(backend);
         chatVm.SetUserContext(ctx.User.PrivateKeyHex, ctx.User.PublicKeyHex);
 
@@ -303,7 +294,6 @@ public class HeadlessChatUITests : HeadlessTestBase
     [InlineData("managed")]
     public async Task SendInvite_NoKeyPackage_ShowsError(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var (ctx, chat, chatVm) = await CreateChatWithViewModel(backend);
         chatVm.SetUserContext(ctx.User.PrivateKeyHex, ctx.User.PublicKeyHex);
 

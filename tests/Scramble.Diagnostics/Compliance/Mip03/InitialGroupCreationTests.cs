@@ -53,7 +53,7 @@ public class InitialGroupCreationTests : IAsyncLifetime
             CreatedAt = DateTime.UtcNow
         });
 
-        _mlsService = new ManagedMlsService(_storage);
+        _mlsService = DarkMatterMlsServiceFactory.Create(_storage);
         _messageService = new MessageService(_storage, _nostrService, _mlsService);
         await _messageService.InitializeAsync();
 

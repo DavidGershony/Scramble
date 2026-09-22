@@ -20,7 +20,6 @@ public class HeadlessMlsMessagingTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task SendMessage_InGroup_EncryptsViaRealMls(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -56,7 +55,6 @@ public class HeadlessMlsMessagingTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ReceiveGroupMessage_DecryptsAndAppearsInChat(string backend)
     {
-        if (ShouldSkip(backend)) return;
 
         // Two users: Alice creates group, adds Bob, Bob sends message, Alice decrypts
         var alice = await CreateRealContext(backend);
@@ -71,10 +69,11 @@ public class HeadlessMlsMessagingTests : HeadlessTestBase
 
         // Bob generates KeyPackage
         var bobKp = await bob.MlsService.GenerateKeyPackageAsync();
-        PrepareKeyPackageForAddMember(bobKp, bob.User.PublicKeyHex);
+        await PrepareKeyPackageForAddMemberAsync(bobKp, bob);
 
         // Alice adds Bob
-        var welcome = await alice.MlsService.AddMemberAsync(groupInfo.GroupId, bobKp);
+        var welcome = await alice.MlsService.StageAddMemberAsync(groupInfo.GroupId, bobKp);
+        await alice.MlsService.MergeStagedAsync(groupInfo.GroupId);
 
         // Bob processes Welcome
         var fakeWelcomeEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
@@ -131,7 +130,6 @@ public class HeadlessMlsMessagingTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task MultipleGroups_SwitchBetween_LoadsCorrectMessages(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 

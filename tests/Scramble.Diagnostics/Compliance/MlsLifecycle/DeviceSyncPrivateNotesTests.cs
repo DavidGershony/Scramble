@@ -1,5 +1,6 @@
 using Scramble.Core.Models;
 using Xunit;
+using Scramble.Diagnostics.TestHelpers;
 
 namespace Scramble.Diagnostics.Compliance.MlsLifecycle;
 
@@ -42,11 +43,13 @@ public class DeviceSyncPrivateNotesTests : MlsLifecycleTestBase
         // Both devices publish KeyPackages. Multi-device is what makes the
         // slot IDs diverge — we sanity check that below.
         var kpA = await deviceA.MlsService.GenerateKeyPackageAsync();
-        await deviceA.NostrService.PublishKeyPackageAsync(kpA.Data, shared.privateKeyHex, kpA.NostrTags);
+        await KeyPackagePublishing.PublishAndBindAsync(
+            deviceA.NostrService, deviceA.MlsService, kpA, shared.privateKeyHex);
         var slotA = deviceA.MlsService.GetLocalKeyPackageSlotId();
 
         var kpB = await deviceB.MlsService.GenerateKeyPackageAsync();
-        await deviceB.NostrService.PublishKeyPackageAsync(kpB.Data, shared.privateKeyHex, kpB.NostrTags);
+        await KeyPackagePublishing.PublishAndBindAsync(
+            deviceB.NostrService, deviceB.MlsService, kpB, shared.privateKeyHex);
         var slotB = deviceB.MlsService.GetLocalKeyPackageSlotId();
 
         Assert.NotEqual(slotA, slotB); // else this is a single-device test
@@ -127,8 +130,14 @@ public class DeviceSyncPrivateNotesTests : MlsLifecycleTestBase
             CreatedAt = DateTime.UtcNow
         });
 
+        // The engine the app registers -- this helper is a variant of
+        // MlsLifecycleTestBase.CreatePartyAsync and has to match it. It did not,
+        // and the mismatch was invisible until FetchKeyPackagesAsync started
+        // reading KeyPackages with the engine's codec: a legacy-engine KeyPackage
+        // is not one it accepts, so the peer device simply could not be found.
         Scramble.Core.Services.IMlsService mls =
-            new Scramble.Core.Services.ManagedMlsService(storage);
+            Scramble.Core.Services.DarkMatterMlsServiceFactory.Create(storage);
+        await mls.InitializeAsync(privateKeyHex, publicKeyHex);
         var messages = new Scramble.Core.Services.MessageService(storage, nostr, mls);
         await messages.InitializeAsync();
 

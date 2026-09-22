@@ -4,9 +4,17 @@
     "projects": [
       "src\\Scramble.Core\\Scramble.Core.csproj",
       "src\\Scramble.Desktop\\Scramble.Desktop.csproj",
+      "src\\Scramble.Marmot.Abstractions\\Scramble.Marmot.Abstractions.csproj",
+      "src\\Scramble.Marmot.AppComponents\\Scramble.Marmot.AppComponents.csproj",
+      "src\\Scramble.Marmot.Engine\\Scramble.Marmot.Engine.csproj",
+      "src\\Scramble.Marmot.Identity\\Scramble.Marmot.Identity.csproj",
+      "src\\Scramble.Marmot.Storage.Sqlite\\Scramble.Marmot.Storage.Sqlite.csproj",
+      "src\\Scramble.Marmot.Wire.Nostr\\Scramble.Marmot.Wire.Nostr.csproj",
+      "src\\Scramble.Nostr.Crypto\\Scramble.Nostr.Crypto.csproj",
       "src\\Scramble.Presentation\\Scramble.Presentation.csproj",
       "src\\Scramble.UI\\Scramble.UI.csproj",
       "tests\\Scramble.Core.Tests\\Scramble.Core.Tests.csproj",
+      "tests\\Scramble.Marmot.Tests\\Scramble.Marmot.Tests.csproj",
       "tests\\Scramble.UI.Tests\\Scramble.UI.Tests.csproj"
     ]
   }

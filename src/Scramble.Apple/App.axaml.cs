@@ -73,9 +73,8 @@ public partial class App : Application
                 _logger?.LogDebug("Creating ShellViewModel...");
                 var shellViewModel = new ShellViewModel(nostrService, secureStorage, clipboard, qrCodeGenerator, launcher, platform);
 
-                // MLS service factory — only Managed (pure-C#) backend on macOS for now
-                shellViewModel.MlsServiceFactory = storage => new ManagedMlsService(storage);
-                _logger?.LogInformation("Using Managed MLS backend");
+                // MLS service — the Dark Matter engine, same as every other head.
+                shellViewModel.MlsServiceFactory = DarkMatterMlsServiceFactory.Create;
 
                 _logger?.LogDebug("Creating MainWindow...");
 

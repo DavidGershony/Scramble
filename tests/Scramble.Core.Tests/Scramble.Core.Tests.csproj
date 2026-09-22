@@ -37,12 +37,4 @@
     </None>
   </ItemGroup>
 
-  <!-- Copy native DLL to test output so integration tests exercise the real native lib -->
-  <ItemGroup Condition="Exists('..\..\src\Scramble.Desktop\scramble_native.dll')">
-    <None Include="..\..\src\Scramble.Desktop\scramble_native.dll">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <Link>scramble_native.dll</Link>
-    </None>
-  </ItemGroup>
-
 </Project>

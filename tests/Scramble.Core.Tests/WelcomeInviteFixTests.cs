@@ -39,7 +39,7 @@ public class WelcomeInviteFixTests
             .Returns(Task.CompletedTask);
 
         var mlsMock = new Mock<IMlsService>();
-        mlsMock.Setup(m => m.ProcessWelcomeAsync(It.IsAny<byte[]>(), It.IsAny<string>()))
+        mlsMock.Setup(m => m.ProcessWelcomeAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>()))
             .ThrowsAsync(new InvalidOperationException(
                 "None of the 1 stored KeyPackages match this Welcome. The private key material for the targeted KeyPackage may have been lost."));
 
@@ -79,7 +79,7 @@ public class WelcomeInviteFixTests
             .ReturnsAsync(new List<PendingInvite> { invite });
 
         var mlsMock = new Mock<IMlsService>();
-        mlsMock.Setup(m => m.ProcessWelcomeAsync(It.IsAny<byte[]>(), It.IsAny<string>()))
+        mlsMock.Setup(m => m.ProcessWelcomeAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string?>()))
             .ThrowsAsync(new InvalidOperationException("Some other MLS error"));
 
         var nostrMock = new Mock<INostrService>();

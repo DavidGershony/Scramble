@@ -102,12 +102,8 @@ public partial class App : Application
                 _logger?.LogDebug("Creating ShellViewModel...");
                 var shellViewModel = new ShellViewModel(nostrService, secureStorage, clipboard, qrCodeGenerator, launcher, platform);
 
-                // MLS service factory — platform-specific backend selection
-                shellViewModel.MlsServiceFactory = storage =>
-                    ProfileConfiguration.ActiveMdkBackend == MdkBackend.Managed
-                        ? new ManagedMlsService(storage)
-                        : new MlsService(storage);
-                _logger?.LogInformation("Using {Backend} MLS backend", ProfileConfiguration.ActiveMdkBackend);
+                // MLS service — the Dark Matter engine, on every head. P11's flip.
+                shellViewModel.MlsServiceFactory = DarkMatterMlsServiceFactory.Create;
 
                 _logger?.LogDebug("Creating MainWindow...");
                 // Set platform notification service

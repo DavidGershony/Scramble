@@ -93,7 +93,11 @@ public class DeviceSyncE2ETests : IAsyncLifetime
             CreatedAt = DateTime.UtcNow
         });
 
-        IMlsService mlsService = new ManagedMlsService(storage);
+        // The engine the app registers. Device sync publishes its invite commit
+        // through MessageService, so this test only means something on the engine
+        // MessageService is written against -- see MlsLifecycleTestBase.
+        IMlsService mlsService = DarkMatterMlsServiceFactory.Create(storage);
+        await mlsService.InitializeAsync(privKeyHex, pubKeyHex);
 
         var messageService = new MessageService(storage, nostrService, mlsService);
         _messageServices.Add(messageService);
@@ -137,12 +141,14 @@ public class DeviceSyncE2ETests : IAsyncLifetime
         // ── Step 2: Both publish KeyPackages ──
         _output.WriteLine("\n[Step 2] Publishing KeyPackages for both devices");
         var kpA = await deviceA.MlsService.GenerateKeyPackageAsync();
-        await deviceA.NostrService.PublishKeyPackageAsync(kpA.Data, keys.privateKeyHex, kpA.NostrTags);
+        await KeyPackagePublishing.PublishAndBindAsync(
+            deviceA.NostrService, deviceA.MlsService, kpA, keys.privateKeyHex);
         var slotA = deviceA.MlsService.GetLocalKeyPackageSlotId();
         _output.WriteLine($"  Device A KeyPackage published (slot={slotA?[..Math.Min(16, slotA?.Length ?? 0)]})");
 
         var kpB = await deviceB.MlsService.GenerateKeyPackageAsync();
-        await deviceB.NostrService.PublishKeyPackageAsync(kpB.Data, keys.privateKeyHex, kpB.NostrTags);
+        await KeyPackagePublishing.PublishAndBindAsync(
+            deviceB.NostrService, deviceB.MlsService, kpB, keys.privateKeyHex);
         var slotB = deviceB.MlsService.GetLocalKeyPackageSlotId();
         _output.WriteLine($"  Device B KeyPackage published (slot={slotB?[..Math.Min(16, slotB?.Length ?? 0)]})");
 

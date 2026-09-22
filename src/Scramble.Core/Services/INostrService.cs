@@ -160,21 +160,79 @@ public interface INostrService
     Task<string> PublishWelcomeAsync(byte[] welcomeData, string recipientPublicKey, string? privateKeyHex, string keyPackageEventId);
 
     /// <summary>
-    /// Publish a commit/evolution message (kind 445).
-    /// Should be published before sending Welcome messages.
+    /// Publish MIP-03 ciphertext as a kind-445 (legacy engines only).
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>No production caller, and it cannot get one.</b> Every commit path moved
+    /// to <see cref="PublishCommitEventAsync"/> at P11's flip, because what the
+    /// Dark Matter engine hands back is already a finished, signed kind-445. This
+    /// builds a <i>fresh</i> event around the bytes it is given and attaches
+    /// <c>["encoding","base64"]</c> — a tag current peers reject before any MLS
+    /// processing, so anything published through here is dropped silently by every
+    /// conformant client.
+    /// </para>
+    /// <para>
+    /// It survives only because tests still construct the legacy engines, whose
+    /// ciphertext this is the correct wrapper for. **It goes with `marmot-cs` at
+    /// P11 step 5**, along with the ambiguous <c>byte[]</c> contract that lets a
+    /// caller confuse ciphertext with an event. Do not add a caller; if you are
+    /// holding commit bytes from the current engine, you want
+    /// <see cref="PublishCommitEventAsync"/>.
+    /// </para>
+    /// </remarks>
     Task<string> PublishCommitAsync(byte[] commitData, string groupId, string? privateKeyHex);
 
     /// <summary>
-    /// Publish a group message (kind 445).
+    /// Publish MIP-03 ciphertext as a kind-445 (legacy engines only).
     /// </summary>
+    /// <remarks>
+    /// The same wrapper as <see cref="PublishCommitAsync"/> reached by the other
+    /// door — removes and admin updates used this one — with the same
+    /// <c>["encoding","base64"]</c> tag, the same absence of production callers
+    /// since the flip, and the same removal at step 5.
+    /// </remarks>
     Task<string> PublishGroupMessageAsync(byte[] encryptedData, string groupId, string? privateKeyHex);
 
     /// <summary>
     /// Publish a pre-built signed Nostr event JSON directly to all connected relays.
     /// Returns the event ID extracted from the JSON.
     /// </summary>
+    /// <remarks>
+    /// <b>It does not throw when no relay confirms</b> — it logs and returns the
+    /// id, which is right for an application message and wrong for a commit. A
+    /// commit that may not be on any relay must not be merged, so commits go
+    /// through <see cref="PublishCommitEventAsync"/> instead.
+    /// </remarks>
     Task<string> PublishRawEventJsonAsync(byte[] eventJsonBytes);
+
+    /// <summary>
+    /// Publish a commit that is already a complete signed kind-445 event, and
+    /// require a relay to confirm it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The Dark Matter engine wraps a commit while it is still staged, under the
+    /// pre-commit exporter secret — the only moment the secret and the commit
+    /// coexist — so what a staging call hands back is a finished event rather
+    /// than MIP-03 ciphertext. <see cref="PublishCommitAsync"/> would base64 it
+    /// into a second kind-445 and every peer would drop the result silently;
+    /// that path now refuses such bytes outright.
+    /// </para>
+    /// <para>
+    /// <b>The confirmation is why this is not just
+    /// <see cref="PublishRawEventJsonAsync"/>.</b> MIP-03's order is publish,
+    /// then apply: a caller merges a staged commit only once a relay has taken
+    /// it, and rolls back otherwise. That decision is carried by
+    /// <see cref="PublishUnconfirmedException"/>, so a publish member that
+    /// returns quietly on no-OK would advance the committer into an epoch the
+    /// group may never see — a silent fork with nothing to detect it.
+    /// </para>
+    /// </remarks>
+    /// <param name="commitEventJson">UTF-8 JSON of the signed kind-445 event.</param>
+    /// <returns>The event id the relay confirmed.</returns>
+    /// <exception cref="PublishUnconfirmedException">No relay confirmed it.</exception>
+    Task<string> PublishCommitEventAsync(byte[] commitEventJson);
 
     /// <summary>
     /// Waits for at least one relay to confirm acceptance of a published event.
@@ -349,6 +407,24 @@ public class NostrEventReceived
     public List<List<string>> Tags { get; set; } = new();
     public string RelayUrl { get; set; } = string.Empty;
     public string Signature { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The event object exactly as the relay sent it, when it came from a relay.
+    /// </summary>
+    /// <remarks>
+    /// <b>The Dark Matter engine ingests the envelope, not the ciphertext.</b>
+    /// Nothing in a Nostr event is trustworthy until its id and signature
+    /// verify, and the peeler is the only thing that checks them — so a caller
+    /// that strips a kind-445 down to its base64 content is handing the engine
+    /// attacker-chosen routing. Keeping the original text also avoids
+    /// re-serialising it: an id is a hash of a canonical form, and a
+    /// round trip that re-escapes one character changes it.
+    /// <para>
+    /// Empty for events that never had an envelope of their own — a gift-wrap
+    /// rumor, or a test's hand-built event.
+    /// </para>
+    /// </remarks>
+    public string RawJson { get; set; } = string.Empty;
 }
 
 public class NostrFilter

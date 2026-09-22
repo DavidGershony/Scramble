@@ -21,7 +21,6 @@ public class HeadlessProfileAndRelayTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ShowMyProfile_OpensDialogWithKeys(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -45,7 +44,6 @@ public class HeadlessProfileAndRelayTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task CloseMyProfile_ClosesDialog(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -71,7 +69,6 @@ public class HeadlessProfileAndRelayTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task CopyNpub_CopiesToClipboard(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -99,7 +96,6 @@ public class HeadlessProfileAndRelayTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task CopyNsec_CopiesToClipboard(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -129,7 +125,6 @@ public class HeadlessProfileAndRelayTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task SelectableRelays_PopulatedOnNewChat(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -148,7 +143,6 @@ public class HeadlessProfileAndRelayTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task SelectableRelays_DeselectUpdatesCount(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -174,7 +168,6 @@ public class HeadlessProfileAndRelayTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task ReconnectRelay_CallsNostrService(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 

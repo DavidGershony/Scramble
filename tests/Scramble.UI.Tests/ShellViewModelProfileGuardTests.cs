@@ -111,7 +111,7 @@ public class ShellViewModelProfileGuardTests : IDisposable
             new Mock<IPlatformClipboard>().Object,
             new Mock<IQrCodeGenerator>().Object,
             new Mock<IPlatformLauncher>().Object);
-        shell.MlsServiceFactory = storage => new ManagedMlsService(storage);
+        shell.MlsServiceFactory = storage => DarkMatterMlsServiceFactory.Create(storage);
 
         // Act: try to switch into profile A.
         await shell.SwitchAccountAsync(pubA);
@@ -169,7 +169,7 @@ public class ShellViewModelProfileGuardTests : IDisposable
             new Mock<IPlatformClipboard>().Object,
             new Mock<IQrCodeGenerator>().Object,
             new Mock<IPlatformLauncher>().Object);
-        shell.MlsServiceFactory = storage => new ManagedMlsService(storage);
+        shell.MlsServiceFactory = storage => DarkMatterMlsServiceFactory.Create(storage);
 
         await shell.SwitchAccountAsync(pub);
         await Task.Delay(500);

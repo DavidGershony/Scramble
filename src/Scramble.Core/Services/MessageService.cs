@@ -7,7 +7,10 @@ using Microsoft.Extensions.Logging;
 using Scramble.Core.Logging;
 using Scramble.Core.Crypto;
 using Scramble.Core.Models;
-using MarmotCs.Protocol.Mip02;
+using Scramble.Marmot;
+using Scramble.Marmot.Ingest;
+using Scramble.Marmot.Wire.Nostr;
+using Scramble.Nostr.Crypto;
 
 namespace Scramble.Core.Services;
 
@@ -815,42 +818,50 @@ public class MessageService : IMessageService, IDisposable
         // Stage the add-member commit with the specific peer device KP
         var staged = await _mlsService.StageAddMemberAsync(chat.MlsGroupId, peerKeyPackage);
 
-        // Publish commit and wait for relay confirmation
-        var nostrGroupId = _mlsService.GetNostrGroupId(chat.MlsGroupId);
-        var commitGroupId = nostrGroupId != null
-            ? Convert.ToHexString(nostrGroupId).ToLowerInvariant()
-            : groupIdHex;
-
-        if (staged.CommitData != null && staged.CommitData.Length > 0)
+        // Publish commit and wait for relay confirmation. The group's transport
+        // address is inside the event the engine already signed, so there is no
+        // longer an h-tag for this caller to choose.
+        try
         {
-            var commitEventId = await _nostrService.PublishCommitAsync(
-                staged.CommitData, commitGroupId, _currentUser.PrivateKeyHex);
-            _logger.LogInformation("InvitePeerToSyncGroup: commit confirmed, event {EventId}", commitEventId);
-
-            await _mlsService.MergeStagedAsync(chat.MlsGroupId);
-
-            // Mark commit as processed
-            await _storageService.SaveMessageAsync(new Message
+            if (staged.CommitData != null && staged.CommitData.Length > 0)
             {
-                Id = Guid.NewGuid().ToString(),
-                ChatId = syncChatId,
-                Content = "[peer device added to sync group]",
-                SenderPublicKey = _currentUser.PublicKeyHex,
-                NostrEventId = commitEventId,
-                Timestamp = DateTime.UtcNow,
-                Type = MessageType.System,
-                Status = MessageStatus.Sent
-            });
+                var commitEventId = await _nostrService.PublishCommitEventAsync(staged.CommitData);
+                _logger.LogInformation("InvitePeerToSyncGroup: commit confirmed, event {EventId}", commitEventId);
 
-            // Send Welcome to peer device
-            var welcomeEventId = await _nostrService.PublishWelcomeAsync(
-                staged.WelcomeData, staged.RecipientPublicKey, _currentUser.PrivateKeyHex,
-                staged.KeyPackageEventId);
-            _logger.LogInformation("InvitePeerToSyncGroup: Welcome sent, event {EventId}", welcomeEventId);
+                await _mlsService.MergeStagedAsync(chat.MlsGroupId);
+                await DrainReplayedMessagesAsync(chat.MlsGroupId, "InvitePeerToSyncGroup");
 
-            // Track invite timestamp for 3-day liveness window
-            await _storageService.SaveSettingAsync(
-                $"sync_invite_{peerKeyPackage.SlotId}", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
+                // Mark commit as processed
+                await _storageService.SaveMessageAsync(new Message
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    ChatId = syncChatId,
+                    Content = "[peer device added to sync group]",
+                    SenderPublicKey = _currentUser.PublicKeyHex,
+                    NostrEventId = commitEventId,
+                    Timestamp = DateTime.UtcNow,
+                    Type = MessageType.System,
+                    Status = MessageStatus.Sent
+                });
+
+                // Send Welcome to peer device
+                var welcomeEventId = await _nostrService.PublishWelcomeAsync(
+                    staged.WelcomeData, staged.RecipientPublicKey, _currentUser.PrivateKeyHex,
+                    staged.KeyPackageEventId);
+                _logger.LogInformation("InvitePeerToSyncGroup: Welcome sent, event {EventId}", welcomeEventId);
+
+                // Track invite timestamp for 3-day liveness window
+                await _storageService.SaveSettingAsync(
+                    $"sync_invite_{peerKeyPackage.SlotId}", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
+            }
+        }
+        catch (Exception ex)
+        {
+            // The sync group is the one group a user cannot leave and rejoin by hand, so a
+            // commit stranded here costs them every future device add.
+            _logger.LogWarning(ex, "InvitePeerToSyncGroup: invite failed before merge, rolling back");
+            await RollbackStagedCommitAsync(chat.MlsGroupId, "InvitePeerToSyncGroup");
+            throw;
         }
     }
 
@@ -1265,18 +1276,15 @@ public class MessageService : IMessageService, IDisposable
                 // 2. Publish commit and wait for relay confirmation
                 if (_currentUser != null && staged.CommitData != null && staged.CommitData.Length > 0)
                 {
-                    var nostrGroupId = _mlsService.GetNostrGroupId(chat.MlsGroupId);
-                    var commitGroupId = nostrGroupId != null
-                        ? Convert.ToHexString(nostrGroupId).ToLowerInvariant()
-                        : groupIdHex;
-                    var commitEventId = await _nostrService.PublishCommitAsync(
-                        staged.CommitData, commitGroupId, _currentUser.PrivateKeyHex);
+                    var commitEventId = await _nostrService.PublishCommitEventAsync(staged.CommitData);
                     // ↑ throws PublishUnconfirmedException on no-OK (Phase 3)
                     _logger.LogInformation("AddMember: commit confirmed by relay, event {EventId}", commitEventId);
 
                     // 3. Only NOW advance local MLS state (MIP-03 step 3)
                     await _mlsService.MergeStagedAsync(chat.MlsGroupId);
                     _logger.LogInformation("AddMember: local MLS state merged to new epoch");
+
+                    await DrainReplayedMessagesAsync(chat.MlsGroupId, "AddMember");
 
                     // Mark commit as processed to prevent re-processing our own relay echo
                     await _storageService.SaveMessageAsync(new Message
@@ -1315,7 +1323,7 @@ public class MessageService : IMessageService, IDisposable
                 // Commit was NOT confirmed — rollback local MLS state
                 _logger.LogWarning(ex, "AddMember: commit publish failed for KP {KpId}, rolling back staged commit — continuing",
                     keyPackage.NostrEventId?[..Math.Min(16, keyPackage.NostrEventId?.Length ?? 0)] ?? "none");
-                await _mlsService.ClearStagedAsync(chat.MlsGroupId);
+                await RollbackStagedCommitAsync(chat.MlsGroupId, "AddMember");
                 lastPublishFailure = ex;
             }
             catch (Exception ex)
@@ -1323,7 +1331,7 @@ public class MessageService : IMessageService, IDisposable
                 // Unexpected error — clear staged state and continue with remaining devices
                 _logger.LogWarning(ex, "AddMember: failed to add KP {KpId} — clearing staged state and continuing",
                     keyPackage.NostrEventId?[..Math.Min(16, keyPackage.NostrEventId?.Length ?? 0)] ?? "none");
-                try { await _mlsService.ClearStagedAsync(chat.MlsGroupId); } catch { }
+                await RollbackStagedCommitAsync(chat.MlsGroupId, "AddMember");
             }
         }
 
@@ -1401,20 +1409,15 @@ public class MessageService : IMessageService, IDisposable
                 var staged = await _mlsService.StageAddMemberAsync(chat.MlsGroupId!, peerKeyPackage);
 
                 // Publish commit and wait for relay confirmation
-                var nostrGroupId = _mlsService.GetNostrGroupId(chat.MlsGroupId!);
-                var commitGroupId = nostrGroupId != null
-                    ? Convert.ToHexString(nostrGroupId).ToLowerInvariant()
-                    : groupIdHex;
-
                 if (staged.CommitData != null && staged.CommitData.Length > 0)
                 {
-                    var commitEventId = await _nostrService.PublishCommitAsync(
-                        staged.CommitData, commitGroupId, _currentUser.PrivateKeyHex);
+                    var commitEventId = await _nostrService.PublishCommitEventAsync(staged.CommitData);
                     _logger.LogInformation("AddPeerDevice: commit confirmed for group {GroupId}, event {EventId}",
                         groupIdHex[..Math.Min(16, groupIdHex.Length)], commitEventId);
 
                     // Advance local MLS state
                     await _mlsService.MergeStagedAsync(chat.MlsGroupId!);
+                    await DrainReplayedMessagesAsync(chat.MlsGroupId!, "AddPeerDevice");
 
                     // Mark commit as processed
                     await _storageService.SaveMessageAsync(new Message
@@ -1446,15 +1449,135 @@ public class MessageService : IMessageService, IDisposable
                     groupIdHex[..Math.Min(16, groupIdHex.Length)]);
                 result.FailedCount++;
 
-                // Attempt to clear staged commit if it exists
-                try { await _mlsService.ClearStagedAsync(chat.MlsGroupId!); }
-                catch { /* best-effort cleanup */ }
+                await RollbackStagedCommitAsync(chat.MlsGroupId!, "AddPeerDevice");
             }
         }
 
         _logger.LogInformation("AddPeerDevice: added={Added}, skipped={Skipped} non-admin, failed={Failed}",
             result.AddedCount, result.SkippedNonAdminGroups.Count, result.FailedCount);
         return result;
+    }
+
+    /// <summary>
+    /// Drops a commit that was staged but never merged.
+    /// Left staged, it wedges the group: the engine refuses to stage a second commit while
+    /// one is pending, so every later membership or admin change fails, and nothing in the
+    /// UI can clear it.
+    /// Does nothing once the commit has been merged, and never throws — a rollback that threw
+    /// would bury the failure the caller is about to report under its own.
+    /// </summary>
+    private async Task RollbackStagedCommitAsync(byte[] groupId, string operation)
+    {
+        try
+        {
+            if (!_mlsService.HasPendingCommit(groupId))
+                return;
+
+            await _mlsService.ClearStagedAsync(groupId);
+
+            // The commit is gone, so the group can read input again — and anything
+            // that arrived while it was outstanding is still held. Same obligation
+            // as after a merge; see DrainReplayedMessagesAsync.
+            await DrainReplayedMessagesAsync(groupId, operation);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "{Operation}: could not clear the staged commit — further commits on this group will fail to stage",
+                operation);
+        }
+    }
+
+    /// <summary>
+    /// Delivers the inbound messages the engine held while a commit of ours was
+    /// outstanding.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Owed after every commit resolution, both ways round.</b> While one of our
+    /// commits is unresolved the engine cannot take input, so a peer's message that
+    /// arrives in that window is kept rather than delivered — durable, and invisible
+    /// until something asks for it. Merging the commit and abandoning it both end
+    /// the window, so both owe this call; before P11 nothing made it at all and
+    /// those messages stayed on disk unread indefinitely.
+    /// </para>
+    /// <para>
+    /// <b>Never throws.</b> Same reasoning as
+    /// <see cref="RollbackStagedCommitAsync"/>: the operation that triggered this
+    /// has already succeeded, replay is recovery on top of it, and a recovery pass
+    /// that failed the thing it was recovering for would be worse than the gap it
+    /// closes.
+    /// </para>
+    /// <para>
+    /// <b>Deduplicated on the rumor id, not the transport id.</b> A replayed message
+    /// never had a kind-445 event of its own to be remembered by — it comes back out
+    /// of the engine as MLS bytes — so the transport-id check the live path uses
+    /// cannot see it, and a message already stored would be delivered twice. The
+    /// rumor id is the one identifier both paths share.
+    /// </para>
+    /// <para>
+    /// Commits are not expected here and are skipped rather than trusted: a replay
+    /// pass does apply held commits, but they advance the epoch without producing a
+    /// message and the engine does not return them.
+    /// </para>
+    /// </remarks>
+    private async Task DrainReplayedMessagesAsync(byte[] groupId, string operation)
+    {
+        try
+        {
+            IReadOnlyList<MlsDecryptedMessage> replayed =
+                await _mlsService.ReplayBufferedMessagesAsync(groupId);
+
+            if (replayed.Count == 0)
+                return;
+
+            var groupIdHex = Convert.ToHexString(groupId).ToLowerInvariant();
+            var chat = await _storageService.GetChatByGroupIdAsync(groupIdHex);
+
+            if (chat == null)
+            {
+                _logger.LogWarning(
+                    "{Operation}: replay produced {Count} message(s) for group {GroupId} but no chat is stored for it",
+                    operation, replayed.Count, groupIdHex[..Math.Min(16, groupIdHex.Length)]);
+                return;
+            }
+
+            int delivered = 0;
+            int duplicates = 0;
+
+            foreach (MlsDecryptedMessage decrypted in replayed)
+            {
+                if (decrypted.IsCommit)
+                    continue;
+
+                if (!string.IsNullOrEmpty(decrypted.RumorEventId)
+                    && await _storageService.GetMessageByRumorEventIdAsync(decrypted.RumorEventId) != null)
+                {
+                    duplicates++;
+                    continue;
+                }
+
+                // The rumor's own created_at, because a replayed message has no
+                // transport event to take one from. Stamping it with the moment of
+                // the replay would sort an old message to the bottom of the chat.
+                var timestamp = decrypted.RumorCreatedAt > 0
+                    ? DateTimeOffset.FromUnixTimeSeconds(decrypted.RumorCreatedAt).UtcDateTime
+                    : DateTime.UtcNow;
+
+                await DeliverDecryptedMessageAsync(chat, decrypted, nostrEventId: null, timestamp);
+                delivered++;
+            }
+
+            _logger.LogInformation(
+                "{Operation}: replayed {Delivered} buffered message(s) for chat {ChatName} ({Duplicates} already stored)",
+                operation, delivered, chat.Name, duplicates);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "{Operation}: could not replay buffered messages — any message held during this commit stays unread until the next one",
+                operation);
+        }
     }
 
     public async Task RemoveMemberAsync(string chatId, string memberPublicKey)
@@ -1484,11 +1607,11 @@ public class MessageService : IMessageService, IDisposable
         {
             if (_currentUser != null)
             {
-                var groupIdHex = Convert.ToHexString(chat.MlsGroupId).ToLowerInvariant();
-                await _nostrService.PublishGroupMessageAsync(commitData, groupIdHex, _currentUser.PrivateKeyHex);
+                await _nostrService.PublishCommitEventAsync(commitData);
                 // ↑ throws PublishUnconfirmedException on no-OK
 
                 await _mlsService.MergeStagedAsync(chat.MlsGroupId);
+                await DrainReplayedMessagesAsync(chat.MlsGroupId, "RemoveMember");
             }
 
             chat.ParticipantPublicKeys.Remove(memberPublicKey);
@@ -1498,7 +1621,16 @@ public class MessageService : IMessageService, IDisposable
         catch (PublishUnconfirmedException ex)
         {
             _logger.LogWarning(ex, "RemoveMember: commit publish failed, rolling back");
-            await _mlsService.ClearStagedAsync(chat.MlsGroupId);
+            await RollbackStagedCommitAsync(chat.MlsGroupId, "RemoveMember");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Not every publish failure is a missing relay OK — a rejected or malformed
+            // commit throws something else entirely. Without this arm the commit stays
+            // staged and the group takes no further admin or membership change.
+            _logger.LogWarning(ex, "RemoveMember: commit failed before merge, rolling back");
+            await RollbackStagedCommitAsync(chat.MlsGroupId, "RemoveMember");
             throw;
         }
     }
@@ -1531,10 +1663,10 @@ public class MessageService : IMessageService, IDisposable
 
         try
         {
-            var groupIdHex = Convert.ToHexString(chat.MlsGroupId).ToLowerInvariant();
-            await _nostrService.PublishGroupMessageAsync(commitData, groupIdHex, _currentUser.PrivateKeyHex);
+            await _nostrService.PublishCommitEventAsync(commitData);
 
             await _mlsService.MergeStagedAsync(chat.MlsGroupId);
+            await DrainReplayedMessagesAsync(chat.MlsGroupId, "UpdateAdminPubkeys");
 
             // Update local chat state
             chat.AdminPublicKeys = normalized;
@@ -1547,7 +1679,16 @@ public class MessageService : IMessageService, IDisposable
         catch (PublishUnconfirmedException ex)
         {
             _logger.LogWarning(ex, "UpdateAdminPubkeys: commit publish failed, rolling back");
-            await _mlsService.ClearStagedAsync(chat.MlsGroupId);
+            await RollbackStagedCommitAsync(chat.MlsGroupId, "UpdateAdminPubkeys");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Same hazard as RemoveMember: anything other than a missing relay OK used to
+            // escape with the commit still staged, and an admin-policy commit left pending
+            // locks the admin list for good.
+            _logger.LogWarning(ex, "UpdateAdminPubkeys: commit failed before merge, rolling back");
+            await RollbackStagedCommitAsync(chat.MlsGroupId, "UpdateAdminPubkeys");
             throw;
         }
     }
@@ -1918,20 +2059,36 @@ public class MessageService : IMessageService, IDisposable
                 nostrEvent.EventId[..Math.Min(16, nostrEvent.EventId.Length)]);
         }
 
-        // Parse Welcome event tags via MIP-02 protocol library
+        // Read the Welcome's tags with the engine's own kind-444 codec.
+        //
+        // It replaced marmot-cs's WelcomeEventParser, which *requires* an
+        // ["encoding","base64"] tag and throws FormatException without one — and
+        // the catch below returns, silently. Current peers must not emit that tag,
+        // so this path had been dropping every Welcome a current peer sent: no
+        // invite, no error, nothing in the UI. It worked only because the app's own
+        // Welcomes carried the same non-conformant tag, which is interop failing in
+        // a mirror.
+        //
+        // The engine's reader also rejects a *repeated* e or relays tag rather than
+        // taking the first — explicitly a MUST NOT, because "take the first" lets
+        // an attacker prepend a tag and steer the join.
         string? keyPackageEventId;
         List<string> relayUrls;
         try
         {
-            var tagsArray = nostrEvent.Tags.Select(t => t.ToArray()).ToArray();
-            var (_, parsedKpId, parsedRelays) = WelcomeEventParser.ParseWelcomeEvent(
-                nostrEvent.Content, tagsArray);
-            keyPackageEventId = parsedKpId;
-            relayUrls = parsedRelays
+            WelcomeRumor rumor = WelcomeEvent.Read(new Rumor(
+                nostrEvent.PublicKey,
+                new DateTimeOffset(nostrEvent.CreatedAt, TimeSpan.Zero).ToUnixTimeSeconds(),
+                nostrEvent.Kind,
+                nostrEvent.Tags.Select(t => (IReadOnlyList<string>)t).ToList(),
+                nostrEvent.Content));
+
+            keyPackageEventId = Convert.ToHexString(rumor.KeyPackageEventId).ToLowerInvariant();
+            relayUrls = rumor.Relays
                 .Where(u => u.StartsWith("wss://") || u.StartsWith("ws://"))
                 .ToList();
         }
-        catch (FormatException ex)
+        catch (Exception ex) when (ex is PeelFailedException or FormatException)
         {
             _logger.LogWarning("HandleWelcome: rejecting malformed Welcome {EventId}: {Reason}",
                 nostrEvent.EventId[..Math.Min(16, nostrEvent.EventId.Length)], ex.Message);
@@ -1950,7 +2107,11 @@ public class MessageService : IMessageService, IDisposable
         {
             try
             {
-                var groupInfo = await _mlsService.ProcessWelcomeAsync(welcomeData, nostrEvent.EventId);
+                // The id WelcomeEventParser already pulled out of the e tag
+                // above. Passing it makes this join fail closed on a Welcome
+                // naming a KeyPackage we never published.
+                var groupInfo = await _mlsService.ProcessWelcomeAsync(
+                    welcomeData, nostrEvent.EventId, keyPackageEventId);
                 if (groupInfo.GroupName?.StartsWith(DeviceSyncGroupNamePrefix, StringComparison.Ordinal) == true)
                 {
                     _logger.LogInformation("HandleWelcome: auto-accepting device-sync welcome {EventId}",
@@ -2177,37 +2338,161 @@ public class MessageService : IMessageService, IDisposable
     }
 
     /// <summary>
-    /// Detects the "pre-join commit" case: an inbound MLS commit at an epoch
-    /// older than our local group state, typically the commit that added us to
-    /// the group (we joined via the subsequent Welcome and are already at the
-    /// post-commit epoch). This is expected MLS behaviour and should not surface
-    /// as a decryption error.
-    ///
-    /// The match is intentionally narrow. Other Unprocessable failures
-    /// — verify_id mismatches (MDK PR #287), unknown GroupContextExtensions
-    /// proposals (WN PR #791), bad signatures, decryption failures —
-    /// must NOT be swallowed; they indicate real protocol drift or bugs.
-    ///
-    /// Note: marmot-cs's <c>Mdk.ProcessMessageAsync</c> currently flattens
-    /// inner exceptions into <c>UnprocessableResult.Reason = ex.Message</c>
-    /// (see lib/marmot-cs/src/MarmotCs.Core/Mdk.cs:791-798), so we cannot
-    /// discriminate on a typed <see cref="MarmotCs.Core.Errors.StaleEpochException"/>;
-    /// we have to substring-match the reason. Until marmot-cs surfaces a
-    /// typed stale-epoch result this is the best we can do without masking
-    /// real failures.
+    /// Whether an inbound message the engine declined is an expected refusal
+    /// rather than something the user should be told about.
     /// </summary>
-    private static bool IsExpectedPreJoinCommitFailure(Exception ex)
+    /// <remarks>
+    /// <para>
+    /// <b>Most of what a relay delivers should be declined, and saying so is not
+    /// an error.</b> Duplicates, our own echoes, traffic addressed elsewhere,
+    /// commits from before we joined, a branch convergence did not select — every
+    /// one of those is a healthy client working correctly. Reporting them on
+    /// <see cref="DecryptionErrors"/> puts *"Failed to decrypt message… Group may
+    /// need reset"* in front of a user whose group is fine, and buries the
+    /// refusals that do mean something.
+    /// </para>
+    /// <para>
+    /// <b>It classifies on <see cref="IngestOutcome"/>, not on words.</b> This
+    /// predicate used to substring-match marmot-cs's phrasing —
+    /// <c>"UnprocessableResult"</c> plus <c>"epoch"</c> — to find the pre-join
+    /// case. The Dark Matter engine words its refusals differently, so after the
+    /// flip the match could never fire and every expected refusal became a
+    /// user-visible decryption error. A predicate keyed on another component's
+    /// prose fails silently the moment that component is replaced, which is why
+    /// the outcome now travels as a value on
+    /// <see cref="MlsIngestRefusedException"/>.
+    /// </para>
+    /// <para>
+    /// <b>Unknown outcomes are surfaced, not swallowed.</b> The arms below name
+    /// what is expected; anything else — a bad signature, an authorization
+    /// failure, a proposal we refused, a variant added upstream after this was
+    /// written — reaches the user. That is the direction to fail in: a refusal
+    /// wrongly shown is investigable, one wrongly hidden is not. The narrowness
+    /// the old comment argued for is kept, and now it is enumerable: verify_id
+    /// mismatches and unhandled GroupContextExtensions commits land in
+    /// <see cref="StaleReason.InvalidAgainstCanonicalState"/> or
+    /// <see cref="InputRejectionCategory.InvalidEncoding"/>, neither of which is
+    /// listed here.
+    /// </para>
+    /// <para>
+    /// <b>The legacy substring path is kept for the legacy engines.</b>
+    /// <c>ManagedMlsService</c> and <c>MlsService</c> still throw prose, and both
+    /// are still constructed by tests until <c>marmot-cs</c> goes at step 5. It is
+    /// scoped to exceptions that are not <see cref="MlsIngestRefusedException"/>,
+    /// so it cannot second-guess a typed outcome.
+    /// </para>
+    /// </remarks>
+    private static bool IsExpectedInboundRefusal(Exception ex)
     {
-        // ManagedMlsService.DecryptMessageAsync wraps Unprocessable as:
-        //   "Expected ApplicationMessageResult or CommitResult but got
-        //    UnprocessableResult: <reason>"
-        // So we only treat it as pre-join if BOTH markers are present AND the
-        // reason mentions an epoch issue.
+        if (ex is MlsIngestRefusedException refused)
+            return IsExpectedOutcome(refused.Outcome);
+
+        // marmot-cs's Mdk.ProcessMessageAsync flattens inner exceptions into
+        // UnprocessableResult.Reason, so on the legacy engines there is no typed
+        // result to read and the reason has to be matched as text. Both markers
+        // are required, so a verify_id or signature failure is not caught here.
         var msg = ex.Message;
         if (msg is null) return false;
         if (!msg.Contains("UnprocessableResult", StringComparison.Ordinal)) return false;
         return msg.Contains("epoch", StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>The refusals a healthy client produces in normal operation.</summary>
+    private static bool IsExpectedOutcome(IngestOutcome outcome) => outcome switch
+    {
+        // Routing and deduplication: never ours to read in the first place.
+        IngestOutcome.Ignored
+        {
+            Category: InputRejectionCategory.Duplicate
+                   or InputRejectionCategory.OwnEcho
+                   or InputRejectionCategory.WrongRecipient
+                   or InputRejectionCategory.UnknownGroup,
+        } => true,
+
+        // Held, not lost. The bytes are durable and the engine replays them
+        // through MessageIngest.ReplayAsync once the group can read them.
+        //
+        // Quiet is right because the replay is now actually scheduled: every
+        // MergeStagedAsync and every rollback that clears a pending commit calls
+        // DrainReplayedMessagesAsync, which delivers whatever became readable.
+        // So a message buffered while one of our commits was outstanding arrives
+        // when that commit resolves, and "failed to decrypt" would be false.
+        //
+        // STILL OPEN: the other event the engine names as owing a replay is a
+        // convergence pass adopting a branch, and ConvergeAsync has no app caller
+        // at all. Messages buffered on a branch we later adopt are still unread
+        // until some commit of ours happens to resolve afterwards.
+        IngestOutcome.Buffered => true,
+        IngestOutcome.TransportDeferred => true,
+        IngestOutcome.ResourceRefused => true,
+
+        // Statements about where the message sits in group history, all of them
+        // normal. PreMembership is the case this predicate was written for: the
+        // commit that added us, which we cannot decrypt because we joined at the
+        // epoch after it. LosingBranch is what a lost commit race looks like on
+        // this engine — convergence picked the other branch by CommitOrdering,
+        // and that is the system working.
+        IngestOutcome.Stale
+        {
+            Reason: StaleReason.AlreadySeen
+                 or StaleReason.NotForThisClient
+                 or StaleReason.UnknownGroup
+                 or StaleReason.OwnEcho
+                 or StaleReason.PreMembership
+                 or StaleReason.BeyondAnchor
+                 or StaleReason.BeyondRollbackHorizon
+                 or StaleReason.BeyondAppRetention
+                 or StaleReason.LosingBranch,
+        } => true,
+
+        // Everything else is worth a user's attention, including LocalState —
+        // whose own documentation says to surface it, because no retry fixes
+        // this device's standing in the group.
+        _ => false,
+    };
+
+    /// <summary>
+    /// Whether a refusal means this device can no longer follow the group.
+    /// </summary>
+    /// <remarks>
+    /// <b>The same prose-matching bug as the pre-join predicate had, one arm
+    /// along.</b> This was <c>ex.Message.Contains("epoch")</c>, which read
+    /// marmot-cs's wording; the Dark Matter engine names the condition
+    /// <see cref="StaleReason.InvalidAgainstCanonicalState"/> — "does not apply to
+    /// the history this device actually holds" — and says nothing about epochs, so
+    /// the resync banner had stopped being raised at all. The substring arm is
+    /// kept for the legacy engines, which still throw text.
+    /// </remarks>
+    private static bool IndicatesOutOfSync(Exception ex) =>
+        ex is MlsIngestRefusedException refused
+            ? refused.Outcome is IngestOutcome.Stale
+              {
+                  Reason: StaleReason.InvalidAgainstCanonicalState,
+              }
+            : ex.Message?.Contains("epoch", StringComparison.OrdinalIgnoreCase) == true;
+
+    /// <summary>
+    /// What to hand the MLS service for one inbound kind-445 event.
+    /// </summary>
+    /// <remarks>
+    /// <b>The envelope when we have it, the ciphertext when we do not.</b> The
+    /// Dark Matter engine ingests the whole signed event: its peeler is the only
+    /// thing that verifies the id and signature, so handing it content stripped
+    /// out of the event would mean routing on fields nobody checked — and it
+    /// refuses bare ciphertext rather than guess. The legacy engines take MIP-03
+    /// ciphertext and nothing else.
+    /// <para>
+    /// So the shape of the payload is decided by what the caller actually has,
+    /// not by which engine is registered. <see cref="NostrEventReceived.RawJson"/>
+    /// is set by every relay parse path; it is empty only for an event that never
+    /// had an envelope — a gift-wrap rumor, or one a test built by hand — and the
+    /// base64 content is then the only thing there is.
+    /// </para>
+    /// </remarks>
+    private static byte[] InboundPayloadFor(NostrEventReceived nostrEvent) =>
+        string.IsNullOrEmpty(nostrEvent.RawJson)
+            ? Convert.FromBase64String(nostrEvent.Content)
+            : System.Text.Encoding.UTF8.GetBytes(nostrEvent.RawJson);
 
     private async Task HandleGroupMessageEventAsync(NostrEventReceived nostrEvent)
     {
@@ -2254,7 +2539,7 @@ public class MessageService : IMessageService, IDisposable
         _logger.LogDebug("HandleGroupMessage: raw content prefix ({Len} chars): {Prefix}",
             nostrEvent.Content.Length,
             nostrEvent.Content[..Math.Min(80, nostrEvent.Content.Length)]);
-        var encryptedData = Convert.FromBase64String(nostrEvent.Content);
+        var encryptedData = InboundPayloadFor(nostrEvent);
         _logger.LogInformation("HandleGroupMessage: decrypting {Len} bytes for chat {ChatName}, first4hex={First4}",
             encryptedData.Length, chat.Name,
             Convert.ToHexString(encryptedData[..Math.Min(4, encryptedData.Length)]).ToLowerInvariant());
@@ -2270,30 +2555,26 @@ public class MessageService : IMessageService, IDisposable
             decrypted = await _mlsService.DecryptMessageAsync(
                 chat.MlsGroupId!, encryptedData, nostrEvent.EventId, eventCreatedAt);
         }
-        catch (MarmotCs.Core.Errors.RaceLostException raceLost)
+        catch (Exception ex) when (IsExpectedInboundRefusal(ex))
         {
-            // MIP-03 tiebreaker: our staged commit lost the race against this incoming commit.
-            // The incoming commit was applied, our pending was cleared. Log and let the caller
-            // retry their operation at the new epoch.
-            _logger.LogWarning(
-                "HandleGroupMessage: MIP-03 race lost — incoming commit {WinnerId} won for group {GroupId}, new epoch {NewEpoch}",
-                raceLost.WinnerEventId, groupIdHex[..Math.Min(16, groupIdHex.Length)], raceLost.NewEpoch);
-            return;
-        }
-        catch (Exception ex) when (IsExpectedPreJoinCommitFailure(ex))
-        {
-            // Pre-join commit: we joined via Welcome at epoch N+1 and cannot
-            // decrypt the commit at epoch N that preceded our Welcome. This is
-            // expected MLS behaviour. We log at Warning (not Error) and don't
-            // surface to the UI via _decryptionErrors.
+            // An expected refusal: a commit from before we joined, a duplicate,
+            // our own echo, a message held for replay, a branch convergence did
+            // not select. Logged at Information because a healthy client produces
+            // these constantly, and deliberately NOT sent to _decryptionErrors —
+            // the UI turns that into "Group may need reset", which would be a lie.
             //
-            // NOTE: this filter is intentionally narrow. Broader catches (e.g.
-            // any "Unprocessable" or any "stale*") mask real bugs such as
-            // verify_id failures (MDK PR #287) and unhandled GroupContextExtensions
-            // commits (WN PR #791) — both of which surface as Unprocessable from
-            // the underlying MDK and must be visible.
-            _logger.LogWarning(
-                "HandleGroupMessage: skipping pre-join commit on event {EventId} in group {GroupId} (epoch={CurrentEpoch}, type={ExType}): {Error}",
+            // There is no arm here for a lost commit race. The old engine threw
+            // RaceLostException from this call and the app caught it; the Dark
+            // Matter engine has no such exception and does not decide races at
+            // ingest at all. An inbound commit arriving while ours is unresolved
+            // comes back Buffered, and which branch wins is settled later by
+            // CommitOrdering — priority class, then committer, then content
+            // digest, all of which every member computes identically. The losing
+            // side then sees Stale(LosingBranch). Both are listed above as
+            // expected, which is the whole of what this layer should do about a
+            // race: nothing.
+            _logger.LogInformation(
+                "HandleGroupMessage: expected refusal for event {EventId} in group {GroupId} (epoch={CurrentEpoch}, type={ExType}): {Error}",
                 nostrEvent.EventId[..Math.Min(16, nostrEvent.EventId.Length)],
                 groupIdHex[..Math.Min(16, groupIdHex.Length)],
                 chat.MlsEpoch,
@@ -2320,9 +2601,9 @@ public class MessageService : IMessageService, IDisposable
                 Timestamp = DateTime.UtcNow
             });
 
-            // If the error mentions an epoch mismatch the device has fallen behind and can no
-            // longer decrypt future messages — mark it so the UI can surface a resync banner.
-            if (!chat.IsOutOfSync && ex.Message?.Contains("epoch", StringComparison.OrdinalIgnoreCase) == true)
+            // The device has fallen behind and can no longer decrypt future messages —
+            // mark it so the UI can surface a resync banner.
+            if (!chat.IsOutOfSync && IndicatesOutOfSync(ex))
             {
                 chat.IsOutOfSync = true;
                 await _storageService.SaveChatAsync(chat);
@@ -2363,6 +2644,43 @@ public class MessageService : IMessageService, IDisposable
             return;
         }
 
+        await DeliverDecryptedMessageAsync(chat, decrypted, nostrEvent.EventId, nostrEvent.CreatedAt);
+    }
+
+    /// <summary>
+    /// Turns one decrypted MLS message into a stored message, a
+    /// <see cref="NewMessages"/> notification and a chat update.
+    /// </summary>
+    /// <param name="chat">The chat the message belongs to.</param>
+    /// <param name="decrypted">What the MLS layer handed back. Not a commit.</param>
+    /// <param name="nostrEventId">
+    /// The transport event that carried it, when there was one. Null for a message
+    /// the engine replayed out of its own store — see
+    /// <see cref="DrainReplayedMessagesAsync"/>. It is only ever used for
+    /// relay-echo deduplication, so a null simply skips the bookkeeping that
+    /// exists for echoes that cannot happen.
+    /// </param>
+    /// <param name="timestamp">
+    /// When the message was sent. The transport event's <c>created_at</c> on the
+    /// live path; the inner rumor's on the replay path, which is the only send
+    /// time a replayed message has.
+    /// </param>
+    /// <remarks>
+    /// <b>Lifted out of <c>HandleGroupMessageEventAsync</c> so replay can reuse
+    /// it, and deliberately not copied.</b> Reaction folding, MIP-04 media typing,
+    /// reply resolution, unknown-sender backfill and the unread count are all
+    /// decisions about what a message <i>is</i>, not about how it arrived, and a
+    /// second copy of them would drift from this one the first time any of them
+    /// changed. Everything above the split — the h-tag lookup, the transport
+    /// dedup, the decrypt and its refusal classification — is genuinely about
+    /// arrival and stays where it was.
+    /// </remarks>
+    private async Task DeliverDecryptedMessageAsync(
+        Chat chat,
+        MlsDecryptedMessage decrypted,
+        string? nostrEventId,
+        DateTime timestamp)
+    {
         _logger.LogInformation("HandleGroupMessage: decrypted message from {Sender}, epoch={Epoch}, content length={Len}, hasImage={HasImage}, rumorKind={Kind}",
             decrypted.SenderPublicKey[..Math.Min(16, decrypted.SenderPublicKey.Length)], decrypted.Epoch, decrypted.Plaintext.Length,
             decrypted.ImageUrl != null, decrypted.RumorKind);
@@ -2393,8 +2711,10 @@ public class MessageService : IMessageService, IDisposable
                 _logger.LogWarning("HandleGroupMessage: reaction target event {EventId} not found in local DB", decrypted.ReactionTargetEventId);
             }
 
-            // Mark this event as processed so relay echoes are skipped
-            if (!string.IsNullOrEmpty(nostrEvent.EventId))
+            // Mark this event as processed so relay echoes are skipped. A replayed
+            // reaction has no transport event to echo, so there is nothing to mark;
+            // re-applying one is harmless because the add below is idempotent.
+            if (!string.IsNullOrEmpty(nostrEventId))
             {
                 var reactionMarker = new Message
                 {
@@ -2403,8 +2723,8 @@ public class MessageService : IMessageService, IDisposable
                     SenderPublicKey = decrypted.SenderPublicKey,
                     Type = MessageType.Text,
                     Content = string.Empty,
-                    NostrEventId = nostrEvent.EventId,
-                    Timestamp = nostrEvent.CreatedAt,
+                    NostrEventId = nostrEventId,
+                    Timestamp = timestamp,
                     IsDeleted = true // Hidden from UI
                 };
                 await _storageService.SaveMessageAsync(reactionMarker);
@@ -2458,10 +2778,10 @@ public class MessageService : IMessageService, IDisposable
             EncryptionNonce = decrypted.EncryptionNonce,
             MediaType = decrypted.MediaType,
             EncryptionVersion = decrypted.EncryptionVersion,
-            NostrEventId = nostrEvent.EventId,
+            NostrEventId = nostrEventId,
             RumorEventId = decrypted.RumorEventId,
             MlsEpoch = decrypted.Epoch,
-            Timestamp = nostrEvent.CreatedAt,
+            Timestamp = timestamp,
             ReceivedAt = DateTime.UtcNow,
             Status = MessageStatus.Delivered,
             IsFromCurrentUser = decrypted.SenderPublicKey == _currentUser?.PublicKeyHex
@@ -2528,7 +2848,11 @@ public class MessageService : IMessageService, IDisposable
         MlsGroupInfo groupInfo;
         try
         {
-            groupInfo = await _mlsService.ProcessWelcomeAsync(invite.WelcomeData, invite.NostrEventId);
+            // KeyPackageEventId is the Welcome's e tag, parsed by NostrService when
+            // the invite arrived. Passing it makes the join fail closed on a
+            // Welcome naming a KeyPackage we never published.
+            groupInfo = await _mlsService.ProcessWelcomeAsync(
+                invite.WelcomeData, invite.NostrEventId, invite.KeyPackageEventId);
         }
         catch (InvalidOperationException ex) when (ex.Message.Contains("KeyPackage"))
         {
@@ -2681,6 +3005,13 @@ public class MessageService : IMessageService, IDisposable
             keyPackage.RelayUrls = _nostrService.ConnectedRelayUrls.ToList();
             await _storageService.SaveKeyPackageAsync(keyPackage);
 
+            // Binds the engine's own record to the event id, so a Welcome naming
+            // this KeyPackage resolves to its private material. Without it the
+            // engine can only find the material by trying every stored
+            // KeyPackage, which still opens the Welcome but no longer proves the
+            // inviter used one of ours. No-op on the legacy backends.
+            await _mlsService.MarkKeyPackagePublishedAsync(keyPackage, eventId);
+
             _logger.LogInformation("AutoPublishKP: published new KeyPackage {EventId}", eventId[..Math.Min(16, eventId.Length)]);
         }
         catch (Exception ex)
@@ -2739,22 +3070,51 @@ public class MessageService : IMessageService, IDisposable
         }
     }
 
-    // TODO: Migrate to staged commit path (StageSelfUpdateAsync + MergeStagedAsync)
-    // for full MIP-03 compliance. Currently uses auto-merge UpdateKeysAsync which
-    // advances local state before relay confirmation.
-    private async Task PerformSelfUpdateAsync(byte[] groupId)
+    /// <summary>
+    /// Rotates this member's leaf key, stage-publish-merge.
+    /// </summary>
+    /// <remarks>
+    /// <b>The merge is not optional, and it used to be absent.</b>
+    /// <c>UpdateKeysAsync</c> applied the rotation itself on the old engine, so
+    /// this method published and stopped. The Dark Matter engine stages it like
+    /// every other commit — which means a rotation left unmerged is a pending
+    /// staged commit, and the engine refuses to stage a second one while one is
+    /// pending. Publishing without finishing would therefore wedge the group at
+    /// the first key rotation: no further add, remove or admin change could be
+    /// staged, for a reason nothing in the UI could explain or clear.
+    /// <para>
+    /// Rolled back on any failure, for the same reason the membership paths are:
+    /// an unpublished rotation applied locally moves this member to an epoch the
+    /// group cannot reach, and gains no forward secrecy anybody agrees about.
+    /// </para>
+    /// <para>
+    /// Internal rather than private so that the publish-then-merge order, and the
+    /// rollback, can be tested without the five-minute scheduler in front of them.
+    /// </para>
+    /// </remarks>
+    internal async Task PerformSelfUpdateAsync(byte[] groupId)
     {
         if (_currentUser == null) return;
 
-        var commitData = await _mlsService.UpdateKeysAsync(groupId);
-        var nostrGroupId = _mlsService.GetNostrGroupId(groupId);
         var groupIdHex = Convert.ToHexString(groupId).ToLowerInvariant();
-        var commitGroupId = nostrGroupId != null
-            ? Convert.ToHexString(nostrGroupId).ToLowerInvariant()
-            : groupIdHex;
+        var commitData = await _mlsService.UpdateKeysAsync(groupId);
 
-        await _nostrService.PublishGroupMessageAsync(commitData, commitGroupId, _currentUser.PrivateKeyHex);
-        _logger.LogInformation("PerformSelfUpdate: published self-update commit for group {GroupId}", groupIdHex[..Math.Min(16, groupIdHex.Length)]);
+        try
+        {
+            await _nostrService.PublishCommitEventAsync(commitData);
+            await _mlsService.MergeStagedAsync(groupId);
+            _logger.LogInformation("PerformSelfUpdate: published and merged self-update commit for group {GroupId}",
+                groupIdHex[..Math.Min(16, groupIdHex.Length)]);
+
+            await DrainReplayedMessagesAsync(groupId, "PerformSelfUpdate");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "PerformSelfUpdate: self-update failed for group {GroupId}, rolling back",
+                groupIdHex[..Math.Min(16, groupIdHex.Length)]);
+            await RollbackStagedCommitAsync(groupId, "PerformSelfUpdate");
+            throw;
+        }
     }
 
     public async Task DeclineInviteAsync(string inviteId)
@@ -3090,7 +3450,7 @@ public class MessageService : IMessageService, IDisposable
             }
 
             // Decrypt
-            var encryptedData = Convert.FromBase64String(nostrEvent.Content);
+            var encryptedData = InboundPayloadFor(nostrEvent);
 
             MlsDecryptedMessage decrypted;
             try

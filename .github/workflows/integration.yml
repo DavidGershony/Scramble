@@ -29,10 +29,17 @@ on:
     paths:
       - 'src/Scramble.Core/**'
       - 'src/Scramble.Presentation/**'
-      - 'lib/marmot-cs/**'
+      - 'src/Scramble.Marmot.Abstractions/**'
+      - 'src/Scramble.Marmot.Storage.Sqlite/**'
+      - 'src/Scramble.Marmot.AppComponents/**'
+      - 'src/Scramble.Marmot.Engine/**'
+      - 'src/Scramble.Marmot.Identity/**'
+      - 'src/Scramble.Nostr.Crypto/**'
+      - 'src/Scramble.Marmot.Wire.Nostr/**'
       - 'lib/dotnet-mls/**'
       - 'tests/Scramble.Diagnostics/**'
       - 'tests/Scramble.Core.Tests/**'
+      - 'tests/Scramble.Marmot.Tests/**'
       - 'tests/Scramble.UI.Tests/**'
       - '.github/workflows/integration.yml'
       - 'docker-compose.test.yml'
@@ -41,10 +48,17 @@ on:
     paths:
       - 'src/Scramble.Core/**'
       - 'src/Scramble.Presentation/**'
-      - 'lib/marmot-cs/**'
+      - 'src/Scramble.Marmot.Abstractions/**'
+      - 'src/Scramble.Marmot.Storage.Sqlite/**'
+      - 'src/Scramble.Marmot.AppComponents/**'
+      - 'src/Scramble.Marmot.Engine/**'
+      - 'src/Scramble.Marmot.Identity/**'
+      - 'src/Scramble.Nostr.Crypto/**'
+      - 'src/Scramble.Marmot.Wire.Nostr/**'
       - 'lib/dotnet-mls/**'
       - 'tests/Scramble.Diagnostics/**'
       - 'tests/Scramble.Core.Tests/**'
+      - 'tests/Scramble.Marmot.Tests/**'
       - 'tests/Scramble.UI.Tests/**'
       - '.github/workflows/integration.yml'
       - 'docker-compose.test.yml'
@@ -63,20 +77,6 @@ jobs:
         fetch-depth: 0
         submodules: recursive
 
-    - name: Setup Rust
-      uses: dtolnay/rust-toolchain@stable
-
-    - name: Cache Rust build
-      uses: Swatinem/rust-cache@v2
-      with:
-        workspaces: src/Scramble.Native
-
-    - name: Build Rust native shared object
-      run: cargo build --release --manifest-path src/Scramble.Native/Cargo.toml
-
-    - name: Copy .so to Desktop project
-      run: cp src/Scramble.Native/target/release/libscramble_native.so src/Scramble.Desktop/
-
     - name: Install .NET
       uses: actions/setup-dotnet@v4
       with:
@@ -84,6 +84,51 @@ jobs:
 
     - name: Start relay + Whitenoise containers
       run: docker compose -f docker-compose.test.yml up -d nostr-relay
+
+    # The Dark Matter interop peer. Built from a pinned mdk ref rather than
+    # pulled, because upstream publishes no image — which makes this the
+    # slowest step in the workflow by a wide margin: a cold cargo release build
+    # of the mdk workspace. Docker layer caching is what keeps it off the
+    # critical path on repeat runs; if this becomes the reason PRs are slow,
+    # move the whole DarkMatterInterop suite to a nightly Ubuntu workflow
+    # rather than dropping it, and say so here.
+    #
+    # The interop tests SKIP when this container is absent, so a failure to
+    # build here turns the suite green-but-empty. The explicit readiness check
+    # below is what stops that from passing silently.
+    # The Marmot reference CLI - the peer that can actually complete an invite
+    # and exchange messages. Built from the same pinned mdk ref as the agent.
+    # See tests/mdk-cli-docker/Dockerfile for why the other two peers cannot do
+    # this job.
+    #
+    # The interop tests SKIP when this container is absent, so a failed build
+    # would turn the suite green-but-empty. The readiness check below is what
+    # stops that passing silently, and must not be removed as redundant.
+    - name: Build and start the mdk-cli interop peer
+      run: |
+        docker compose -f docker-compose.test.yml up -d --build mdk-cli
+        for i in {1..40}; do
+          if docker exec mdk-cli-interop wn --version >/dev/null 2>&1; then
+            echo "mdk-cli ready"; exit 0
+          fi
+          sleep 3
+        done
+        echo "mdk-cli never came up" >&2
+        docker compose -f docker-compose.test.yml logs mdk-cli
+        exit 1
+
+    - name: Build and start the wn-agent interop peer
+      run: |
+        docker compose -f docker-compose.test.yml up -d --build wn-agent
+        for i in {1..40}; do
+          if docker exec wn-agent-interop test -S /run/marmot-agent/wn-agent.sock 2>/dev/null; then
+            echo "wn-agent ready"; exit 0
+          fi
+          sleep 3
+        done
+        echo "wn-agent never came up" >&2
+        docker compose -f docker-compose.test.yml logs wn-agent
+        exit 1
 
     - name: Wait for relay
       run: |
@@ -117,18 +162,15 @@ jobs:
     #     in ephemeral runners.
     #   - Category=WhitenoiseInterop, WebInterop: need external services.
     #
-    # What's kept: Native (in-process MDK), MIP-Compliance / ProtocolCompliance
-    # (FaultyRelay in-process), plus the shared-UI Integration category on the
-    # Diagnostics project (my S2 lifecycle tests + DeviceSync), which uses
-    # FaultyRelay and TestRelayConfig respectively.
-    - name: Execute Core.Tests integration suite
-      run: >
-        dotnet test tests/Scramble.Core.Tests/Scramble.Core.Tests.csproj
-        --no-build --configuration Release -p:DesktopOnly=true
-        --filter "Category=Native"
-        --logger "trx;LogFileName=core-integration.trx"
-        --results-directory TestResults
-
+    # What's kept: MIP-Compliance / ProtocolCompliance (FaultyRelay
+    # in-process), plus the shared-UI Integration category on the Diagnostics
+    # project (S2 lifecycle tests + DeviceSync), which uses FaultyRelay and
+    # TestRelayConfig respectively.
+    #
+    # Category=Native is gone with src/Scramble.Native. There is no
+    # Core.Tests step any more: that step filtered Category=Native, the
+    # cutover removed the last test carrying it, and a filter matching
+    # nothing exits 0 -- so it had become a green step that ran no tests.
     - name: Execute UI.Tests integration suite
       run: >
         dotnet test tests/Scramble.UI.Tests/Scramble.UI.Tests.csproj
@@ -141,13 +183,23 @@ jobs:
       run: >
         dotnet test tests/Scramble.Diagnostics/Scramble.Diagnostics.csproj
         --configuration Release -p:DesktopOnly=true
-        --filter "Category=Integration|Category=MIP-Compliance|Category=ProtocolCompliance|Category=EpochSync|Category=DeviceSync|Category=OutboxModel|Category=Notifications|Category=RelayHarness|Category=ExporterSecret"
+        --filter "Category=Integration|Category=MIP-Compliance|Category=ProtocolCompliance|Category=EpochSync|Category=DeviceSync|Category=OutboxModel|Category=Notifications|Category=RelayHarness|Category=ExporterSecret|Category=DarkMatterInterop"
         --logger "trx;LogFileName=diagnostics-integration.trx"
         --results-directory TestResults
 
     - name: Dump relay logs on failure
       if: failure()
       run: docker compose -f docker-compose.test.yml logs nostr-relay
+
+    - name: Dump wn-agent logs on failure
+      if: failure()
+      run: docker compose -f docker-compose.test.yml logs wn-agent
+
+    - name: Dump mdk-cli logs on failure
+      if: failure()
+      run: |
+        docker compose -f docker-compose.test.yml logs mdk-cli
+        docker exec mdk-cli-interop sh -c 'cat /logs/wnd.log 2>/dev/null | tail -200' || true
 
     - name: Stop containers
       if: always()

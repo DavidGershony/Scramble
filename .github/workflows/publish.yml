@@ -29,20 +29,6 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src/Scramble.Native
-
-      - name: Build Rust native DLL
-        run: cargo build --release --manifest-path src/Scramble.Native/Cargo.toml
-
-      - name: Copy DLL to Desktop project
-        run: cp src/Scramble.Native/target/release/scramble_native.dll src/Scramble.Desktop/
-
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:

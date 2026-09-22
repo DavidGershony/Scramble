@@ -31,11 +31,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The engine. marmot-cs went at P11 step 5; this is the only one now. -->
+    <ProjectReference Include="..\Scramble.Marmot.Engine\Scramble.Marmot.Engine.csproj" />
+    <ProjectReference Include="..\Scramble.Marmot.Storage.Sqlite\Scramble.Marmot.Storage.Sqlite.csproj" />
+
     <ProjectReference Include="..\..\lib\dotnet-mls\src\DotnetMls\DotnetMls.csproj" />
     <ProjectReference Include="..\..\lib\dotnet-mls\src\DotnetMls.Crypto\DotnetMls.Crypto.csproj" />
-    <ProjectReference Include="..\..\lib\marmot-cs\src\MarmotCs.Core\MarmotCs.Core.csproj" />
-    <ProjectReference Include="..\..\lib\marmot-cs\src\MarmotCs.Storage.Memory\MarmotCs.Storage.Memory.csproj" />
-    <ProjectReference Include="..\..\lib\marmot-cs\src\MarmotCs.Storage.Sqlite\MarmotCs.Storage.Sqlite.csproj" />
   </ItemGroup>
 
 </Project>

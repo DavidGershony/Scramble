@@ -20,7 +20,6 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task AcceptInvite_ProcessesWelcome_CreatesChat(string backend)
     {
-        if (ShouldSkip(backend)) return;
 
         // Alice creates group and generates a Welcome for Bob
         var alice = await CreateRealContext(backend);
@@ -34,10 +33,11 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
 
         // Bob generates KeyPackage
         var bobKp = await bob.MlsService.GenerateKeyPackageAsync();
-        PrepareKeyPackageForAddMember(bobKp, bob.User.PublicKeyHex);
+        await PrepareKeyPackageForAddMemberAsync(bobKp, bob);
 
         // Alice adds Bob → produces Welcome
-        var welcome = await alice.MlsService.AddMemberAsync(groupInfo.GroupId, bobKp);
+        var welcome = await alice.MlsService.StageAddMemberAsync(groupInfo.GroupId, bobKp);
+        await alice.MlsService.MergeStagedAsync(groupInfo.GroupId);
 
         // Create ChatListViewModel BEFORE pushing the welcome so it subscribes to NewInvites
         var chatListVm = new ChatListViewModel(bob.MessageService, bob.Storage, bob.MlsService, bob.MockNostr.Object);
@@ -55,8 +55,8 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
             Tags = new List<List<string>>
             {
                 new() { "p", bob.User.PublicKeyHex },
-                new() { "e", welcome.KeyPackageEventId ?? "test-kp-id" },
-                new() { "encoding", "base64" }
+                new() { "e", welcome.KeyPackageEventId ?? "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1" },
+                new() { "relays", "wss://test.relay" }
             },
             RelayUrl = "wss://test.relay"
         };
@@ -87,7 +87,6 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task DeclineInvite_RemovesFromPendingList(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -96,9 +95,10 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
         await alice.MlsService.InitializeAsync(alice.User.PrivateKeyHex, alice.User.PublicKeyHex);
 
         var bobKp = await ctx.MlsService.GenerateKeyPackageAsync();
-        PrepareKeyPackageForAddMember(bobKp, ctx.User.PublicKeyHex);
+        await PrepareKeyPackageForAddMemberAsync(bobKp, ctx);
         var groupInfo = await alice.MlsService.CreateGroupAsync("Decline Test", new[] { "wss://relay.test" });
-        var realWelcome = await alice.MlsService.AddMemberAsync(groupInfo.GroupId, bobKp);
+        var realWelcome = await alice.MlsService.StageAddMemberAsync(groupInfo.GroupId, bobKp);
+        await alice.MlsService.MergeStagedAsync(groupInfo.GroupId);
 
         var chatListVm = new ChatListViewModel(ctx.MessageService, ctx.Storage, ctx.MlsService, ctx.MockNostr.Object);
         Dispatcher.UIThread.RunJobs();
@@ -115,7 +115,7 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
             {
                 new() { "p", ctx.User.PublicKeyHex },
                 new() { "e", bobKp.NostrEventId! },
-                new() { "encoding", "base64" }
+                new() { "relays", "wss://test.relay" }
             },
             RelayUrl = "wss://test.relay"
         };
@@ -135,12 +135,16 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
         Assert.Equal(0, chatListVm.PendingInviteCount);
     }
 
+    // Managed only, and not because the Rust backend is unavailable here: group
+    // creation now invites through IMessageService.AddMemberAsync, which stages
+    // the commit, and MlsService refuses the staged API outright
+    // ("not available with the Rust MDK backend"). Driving this path against it
+    // would assert a configuration the app can no longer be started in — no head
+    // registers that backend since P11's flip. The row goes with marmot-cs.
     [AvaloniaTheory]
-    [InlineData("rust")]
     [InlineData("managed")]
     public async Task CreateGroup_WithInvite_PublishesWelcome(string backend)
     {
-        if (ShouldSkip(backend)) return;
 
         // Alice creates a group and invites Bob
         var alice = await CreateRealContext(backend);
@@ -151,7 +155,7 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
 
         // Bob generates KeyPackage and prepare it for MLS add_member
         var bobKp = await bob.MlsService.GenerateKeyPackageAsync();
-        PrepareKeyPackageForAddMember(bobKp, bob.User.PublicKeyHex);
+        await PrepareKeyPackageForAddMemberAsync(bobKp, bob);
 
         // Mock Alice's NostrService to return Bob's prepared KeyPackage when fetched
         alice.MockNostr.Setup(n => n.FetchKeyPackagesAsync(bob.User.PublicKeyHex))
@@ -190,7 +194,6 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
     [InlineData("managed")]
     public async Task RescanInvites_FindsMissedWelcomes(string backend)
     {
-        if (ShouldSkip(backend)) return;
         var ctx = await CreateRealContext(backend);
         await ctx.MessageService.InitializeAsync();
 
@@ -199,9 +202,10 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
         await alice.MlsService.InitializeAsync(alice.User.PrivateKeyHex, alice.User.PublicKeyHex);
 
         var bobKp = await ctx.MlsService.GenerateKeyPackageAsync();
-        PrepareKeyPackageForAddMember(bobKp, ctx.User.PublicKeyHex);
+        await PrepareKeyPackageForAddMemberAsync(bobKp, ctx);
         var groupInfo = await alice.MlsService.CreateGroupAsync("Rescan Test", new[] { "wss://relay.test" });
-        var realWelcome = await alice.MlsService.AddMemberAsync(groupInfo.GroupId, bobKp);
+        var realWelcome = await alice.MlsService.StageAddMemberAsync(groupInfo.GroupId, bobKp);
+        await alice.MlsService.MergeStagedAsync(groupInfo.GroupId);
 
         var missedWelcomeEventId = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
         var missedWelcome = new NostrEventReceived
@@ -215,7 +219,7 @@ public class HeadlessGroupLifecycleTests : HeadlessTestBase
             {
                 new() { "p", ctx.User.PublicKeyHex },
                 new() { "e", bobKp.NostrEventId! },
-                new() { "encoding", "base64" }
+                new() { "relays", "wss://test.relay" }
             },
             RelayUrl = "wss://test.relay"
         };

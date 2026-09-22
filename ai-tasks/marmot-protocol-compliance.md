@@ -1,3 +1,7 @@
+> ⚠️ **SUPERSEDED (2026-07).** Original pre-Dark-Matter compliance plan. Target is
+> now the **Dark Matter** rewrite (mdk 0.9.x). **Do not plan from this file.** See
+> `00-START-HERE-dark-matter.md`. Kept for history.
+
 # Marmot Protocol Compliance — Plan of Work
 
 ## Goal

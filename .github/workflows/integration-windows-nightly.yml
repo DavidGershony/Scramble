@@ -13,13 +13,15 @@ name: Integration (Windows, nightly)
 #   * FaultyRelay-backed compliance tests (MIP-Compliance, ProtocolCompliance,
 #     RelayHarness, ExporterSecret) — cover MLS lifecycle, protocol
 #     conformance, WebSocket wire framing on the actual Windows .NET runtime.
-#   * Native tests — exercise the Rust MDK PInvoke bindings against
-#     scramble_native.dll on Windows.
 #
 # What this covers that Ubuntu integration doesn't:
-#   * Windows native DLL loading (`scramble_native.dll` vs `.so`)
-#   * Path-separator assumptions in test fixtures
-#   * DPAPI-backed SecureStorage (SecureStorageTests, unit-tier).
+#   * Path-separator assumptions in test fixtures, on a real Windows runtime.
+#
+# What it does NOT cover, despite an earlier note here saying so: DPAPI-backed
+# SecureStorage. The four real-DPAPI facts in SecureStorageTests are unit-tier
+# `Assert.SkipUnless(OSPlatform.Windows)` facts with no Category trait, so the
+# Category filters here could never have selected them -- and they need no step
+# here, because dotnet-desktop.yml runs on windows-latest and already runs them.
 #
 # What's explicitly OUT:
 #   * Category=FullE2E — uses WhitenoiseDockerClient. Deliberately excluded
@@ -51,21 +53,6 @@ jobs:
         fetch-depth: 0
         submodules: recursive
 
-    - name: Setup Rust
-      uses: dtolnay/rust-toolchain@stable
-
-    - name: Cache Rust build
-      uses: Swatinem/rust-cache@v2
-      with:
-        workspaces: src/Scramble.Native
-
-    - name: Build Rust native DLL
-      run: cargo build --release --manifest-path src/Scramble.Native/Cargo.toml
-
-    - name: Copy DLL to Desktop project
-      shell: pwsh
-      run: cp src/Scramble.Native/target/release/scramble_native.dll src/Scramble.Desktop/
-
     - name: Install .NET
       uses: actions/setup-dotnet@v4
       with:
@@ -76,12 +63,6 @@ jobs:
 
     - name: Build (Release, DesktopOnly)
       run: dotnet build Scramble.Desktop.slnf --no-restore --configuration Release -p:DesktopOnly=true
-
-    - name: Execute Core.Tests Windows-integration surface
-      run: >
-        dotnet test tests/Scramble.Core.Tests/Scramble.Core.Tests.csproj
-        --no-build --configuration Release -p:DesktopOnly=true
-        --filter "Category=Native"
 
     - name: Execute Diagnostics FaultyRelay + compliance surface
       run: >

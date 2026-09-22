@@ -61,14 +61,19 @@ Any change under these paths triggers the required integration suite:
 
 - `src/Scramble.Core/Services/**`
 - `src/Scramble.Presentation/**`
-- `lib/marmot-cs/**`, `lib/dotnet-mls/**`
+- `lib/dotnet-mls/**`
 - `tests/Scramble.Diagnostics/**`
 - `tests/Scramble.Core.Tests/**`
 
-- **Gate:** `.github/workflows/integration.yml` runs the whitelist union of
-  `Category=Integration|Relay|MIP-Compliance|ProtocolCompliance|FullE2E|
-  EpochSync|DeviceSync|OutboxModel|Notifications|RelayHarness|
-  ExporterSecret|Native` on Ubuntu with `docker-compose.test.yml` up.
+- **Gate:** `.github/workflows/integration.yml`, on Ubuntu with
+  `docker-compose.test.yml` up, runs two steps: `Category=Integration` on
+  `tests/Scramble.UI.Tests`, and on `tests/Scramble.Diagnostics` the union
+  `Category=Integration|MIP-Compliance|ProtocolCompliance|EpochSync|DeviceSync|
+  OutboxModel|Notifications|RelayHarness|ExporterSecret|DarkMatterInterop`.
+  `Relay` and `FullE2E` are **not** in the gate — they hardcode a relay URL or
+  need a Whitenoise container, and run in `integration-windows-nightly.yml`.
+  This list is the gate's contents, so correct it here when the workflow
+  changes; it has been wrong in both directions before.
 - **Escape hatch:** none. If a new subsystem needs a new category, add it
   to both `integration.yml` and `docs/ci-setup.md`.
 - **Why:** ANALYSIS.md STEP 6 — pre-existing `dotnet-desktop.yml` explicitly
@@ -157,6 +162,34 @@ than average.
   `src/Scramble.Mobile.Android/`. See I1-M.
 - **Don't defer regression tests.** If you're writing a `fix:`, the test
   that proves the fix is part of the fix, not a follow-up. See I3.
+- **Check a test fails before trusting it.** A test written alongside the
+  code it checks inherits the same misreading, and reads convincingly
+  either way. Break the implementation deliberately and confirm the test
+  notices — a survivor means the test covers nothing, whatever its name
+  says. For protocol code, where a mistake stays silent until a peer
+  disagrees, use the `split-and-mutate` skill: the implementer and the test
+  author work from a shared contract and not from each other.
+
+### Dark Matter cutover rules (decided 2026-08-09)
+
+Provenance: `ai-tasks/protocol-agnostic-report-2026-08.md` — the engine stays
+Marmot-only; protocol agnosticism (Concord / NIP-29, Armada-style) lives at the
+app-layer conversation seam, deferred until after the migration ships.
+
+- **No `Scramble.Marmot` types in `Scramble.Presentation`.** ViewModels bind
+  only to protocol-neutral models (`Chat`, `Message`, `Member`, `Role`, …)
+  surfaced by `Scramble.Core` services; chat records carry a protocol
+  discriminator. Engine types (`SendIntent`, `IngestOutcome`, `GroupEvent`,
+  epoch/commit state) stop at the service layer.
+- **Generic Nostr crypto is not Marmot-namespaced.** When porting codecs into
+  the new engine, `Nip44Encryption`, `GiftWrap`, and other generic Nostr
+  primitives go in a shared namespace (e.g. `Scramble.Marmot.Wire.Nostr` →
+  keep the generic pieces under a `…Nostr.Crypto`-style namespace with no
+  Marmot semantics), so a future non-Marmot provider can reuse them without
+  referencing the engine.
+- **Do not build** `IConversationProvider`, Concord, or NIP-29 code during the
+  migration. Interface extraction happens after a second concrete provider
+  exists.
 
 ## Reproducing CI locally
 
@@ -166,10 +199,32 @@ dotnet test Scramble.Desktop.slnf --filter "Category!=Relay&Category!=Integratio
 
 # Integration tests (needs Docker)
 docker compose -f docker-compose.test.yml up -d nostr-relay
-dotnet test tests/Scramble.Diagnostics/ --filter "Category=Integration|Category=MIP-Compliance|Category=ProtocolCompliance|Category=FullE2E|Category=EpochSync|Category=DeviceSync|Category=OutboxModel|Category=Notifications|Category=RelayHarness|Category=ExporterSecret"
+# Kept character-for-character in step with integration.yml. It drifted once,
+# in both directions at the same time: this line ran FullE2E, which CI does not,
+# and omitted DarkMatterInterop, which CI does — so "reproducing CI locally"
+# skipped the entire 30-test interop suite while running a category CI ignores.
+dotnet test tests/Scramble.Diagnostics/ --filter "Category=Integration|Category=MIP-Compliance|Category=ProtocolCompliance|Category=EpochSync|Category=DeviceSync|Category=OutboxModel|Category=Notifications|Category=RelayHarness|Category=ExporterSecret|Category=DarkMatterInterop"
 
 # Drift check
 ./scripts/check-drift.ps1
+
+# The Android head. No CI workflow builds it on a PR -- dotnet-desktop.yml passes
+# DesktopOnly=true, drift.yml only path-filters it, and publish.yml runs on a v*
+# tag -- so this is the only routine check that it compiles at all. It needs both
+# properties and JAVA_HOME, and it must be run from PowerShell: passing
+# AndroidSdkDirectory through Git Bash did not take.
+$env:JAVA_HOME='C:\work\jdk'
+dotnet build src\Scramble.Mobile.Android\Scramble.Mobile.Android.csproj `
+  -p:AndroidSdkDirectory='C:\work\android-sdk' -p:JavaSdkDirectory='C:\work\jdk'
+
+# Does the Android head actually RUN? Building it does not answer that --
+# Avalonia-on-Android fails at startup, not at compile time. Boot an emulator
+# first, then run the smoke test against it. -memory is not optional: at the
+# Pixel_9 default of 2048 MB the app reaches a visible window and is then killed
+# by the lowmemorykiller, which looks like a crash with no exception.
+& "$env:ANDROID_SDK_ROOT\emulator\emulator.exe" -avd Pixel_9 `
+  -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -memory 6144
+./scripts/android-smoke.ps1
 ```
 
 ## Documentation index
@@ -180,5 +235,7 @@ dotnet test tests/Scramble.Diagnostics/ --filter "Category=Integration|Category=
   status checks.
 - `AGENTS.md` — agent-specific notes (unchanged).
 - `src/Scramble.Android/OBSOLETE.md` — legacy-head deprecation notice.
+- `ai-tasks/remaining-work-2026-09.md` — what is left on the Dark Matter
+  migration, in dependency order.
 - `ai-tasks/` — per-feature planning docs. Completed ones under
   `ai-tasks/completed/`.

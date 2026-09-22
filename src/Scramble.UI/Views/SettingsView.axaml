@@ -868,7 +868,6 @@
                                Classes="secondary" TextWrapping="Wrap" />
                     <StackPanel Spacing="4">
                         <TextBlock Text="{Binding AppVersion, StringFormat='Version {0}'}" Classes="muted" />
-                        <TextBlock Text="{Binding MarmotCsVersion, StringFormat='Marmot SDK: {0}'}" Classes="muted" />
                         <TextBlock Text="{Binding DotnetMlsVersion, StringFormat='MLS Engine: {0}'}" Classes="muted" />
                         <TextBlock Text="Built with Avalonia" Classes="muted" />
                     </StackPanel>

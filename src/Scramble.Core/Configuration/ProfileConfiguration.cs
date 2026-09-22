@@ -5,8 +5,6 @@ using Scramble.Core.Logging;
 
 namespace Scramble.Core.Configuration;
 
-public enum MdkBackend { Rust, Managed }
-
 /// <summary>
 /// Holds the active profile name and derived paths for multi-instance support.
 /// Call <see cref="SetProfile"/> once at startup before any services are created.
@@ -14,10 +12,6 @@ public enum MdkBackend { Rust, Managed }
 public static class ProfileConfiguration
 {
     private static readonly ILogger _logger = LoggingConfiguration.CreateLogger<object>();
-
-    public static MdkBackend ActiveMdkBackend { get; private set; } = MdkBackend.Managed;
-
-    public static void SetMdkBackend(MdkBackend backend) => ActiveMdkBackend = backend;
 
     /// <summary>
     /// When true, relay URL validation allows connections to private/reserved IPs (localhost, 10.x, etc.).

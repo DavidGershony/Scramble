@@ -13,7 +13,7 @@ namespace Scramble.Core.Tests;
 public class SlotIdReconciliationTests : IAsyncLifetime
 {
     private readonly ITestOutputHelper _output;
-    private ManagedMlsService _mls = null!;
+    private IMlsService _mls = null!;
     private StorageService _storage = null!;
     private string _dbPath = null!;
     private string _pubKey = null!;
@@ -30,7 +30,7 @@ public class SlotIdReconciliationTests : IAsyncLifetime
         _storage = new StorageService(_dbPath, new MockSecureStorage());
         await _storage.InitializeAsync();
 
-        _mls = new ManagedMlsService(_storage);
+        _mls = DarkMatterMlsServiceFactory.Create(_storage);
         await _mls.InitializeAsync(_privKey, _pubKey);
     }
 
@@ -56,7 +56,7 @@ public class SlotIdReconciliationTests : IAsyncLifetime
         var dbPath2 = Path.Combine(Path.GetTempPath(), $"scramble_reconcile2_{Guid.NewGuid()}.db");
         var storage2 = new StorageService(dbPath2, new MockSecureStorage());
         await storage2.InitializeAsync();
-        var mls2 = new ManagedMlsService(storage2);
+        var mls2 = DarkMatterMlsServiceFactory.Create(storage2);
         await mls2.InitializeAsync(_privKey, _pubKey);
 
         // No KP generated yet — slot ID should be null

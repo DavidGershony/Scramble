@@ -23,16 +23,4 @@
     <ProjectReference Include="..\Scramble.UI\Scramble.UI.csproj" />
   </ItemGroup>
 
-  <!-- Native Marmot MLS library -->
-  <ItemGroup Condition="Exists('scramble_native.dll')">
-    <None Include="scramble_native.dll">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-  </ItemGroup>
-  <ItemGroup Condition="Exists('libscramble_native.so')">
-    <None Include="libscramble_native.so">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-  </ItemGroup>
-
 </Project>

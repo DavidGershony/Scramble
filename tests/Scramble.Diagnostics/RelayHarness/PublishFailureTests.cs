@@ -10,12 +10,27 @@ namespace Scramble.Diagnostics.RelayHarness;
 /// <summary>
 /// Drives Scramble's <see cref="MessageService.AddMemberAsync"/> against a single
 /// <see cref="FaultyRelay"/> with fault knobs to verify MIP-03 compliance:
-///
-/// After Phase 3+4 fixes, PublishCommitAsync now throws
-/// <see cref="PublishUnconfirmedException"/> when no relay confirms.
-/// AddMemberAsync uses the staged commit API to avoid advancing local state
-/// until relay confirmation, and rolls back on failure.
+/// AddMemberAsync stages the commit, publishes it, advances local state only on a
+/// relay's confirmation, and rolls back without one.
 /// </summary>
+/// <remarks>
+/// <para>
+/// <b>On the Dark Matter engine, which is what the app registers.</b> These tests
+/// ran on <c>ManagedMlsService</c> until P11's flip, and the distinction is not
+/// cosmetic: what a staging call returns there is MIP-03 ciphertext, and here it
+/// is a finished signed kind-445. The publish member is different in consequence
+/// — <see cref="INostrService.PublishCommitEventAsync"/> puts the event on the
+/// wire as it stands — and the confirmation it demands is the whole subject of
+/// this file. Testing the confirmation against an engine the app no longer uses
+/// would prove it for a path that no longer exists.
+/// </para>
+/// <para>
+/// <b>And it is the only place the no-OK path can be proved.</b> A relay that
+/// takes an event and never answers is not something a mock can stand in for: the
+/// timeout, the tracker and the exception are all in <c>NostrService</c>, between
+/// the socket and the caller.
+/// </para>
+/// </remarks>
 [Trait("Category", "RelayHarness")]
 public class PublishFailureTests : IAsyncLifetime
 {
@@ -87,7 +102,8 @@ public class PublishFailureTests : IAsyncLifetime
             CreatedAt = DateTime.UtcNow
         });
 
-        IMlsService mls = new ManagedMlsService(storage);
+        IMlsService mls = DarkMatterMlsServiceFactory.Create(storage);
+        await mls.InitializeAsync(keys.privateKeyHex, keys.publicKeyHex);
         var messages = new MessageService(storage, nostr, mls);
         _messageServices.Add(messages);
         await messages.InitializeAsync();

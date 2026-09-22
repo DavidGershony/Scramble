@@ -32,12 +32,4 @@
     <ProjectReference Include="..\..\src\Scramble.UI\Scramble.UI.csproj" />
   </ItemGroup>
 
-  <!-- Copy native DLL to test output so Rust backend integration tests work -->
-  <ItemGroup Condition="Exists('..\..\src\Scramble.Desktop\scramble_native.dll')">
-    <None Include="..\..\src\Scramble.Desktop\scramble_native.dll">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <Link>scramble_native.dll</Link>
-    </None>
-  </ItemGroup>
-
 </Project>

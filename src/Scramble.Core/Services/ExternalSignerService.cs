@@ -7,7 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using NBitcoin.Secp256k1;
-using MarmotCs.Protocol.Nip44;
+using Scramble.Nostr.Crypto;
 using Scramble.Core.Crypto;
 using Scramble.Core.Logging;
 using System.Net;
@@ -397,11 +397,59 @@ public class ExternalSignerService : IExternalSigner, IDisposable
         return response;
     }
 
+    /// <summary>
+    /// Every event kind this app asks a remote signer to sign.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This list and what we actually publish have to agree, and nothing
+    /// checked that they did.</b> Until 2026-09-17 it read
+    /// <c>443, 444, 445, 1059</c> — of which only 445 is a kind we sign, while
+    /// 443 is signed by nothing at all. It had been written against an older
+    /// kind set and never moved with the code.
+    /// </para>
+    /// <para>
+    /// <b>The consequence is softer than it looks, which is why it survived.</b>
+    /// NIP-46 <c>perms</c> is a request made at connection time, not an
+    /// enforcement boundary; signers differ on an ungranted kind, and Amber
+    /// prompts rather than refusing. So the symptom was an approval dialog on
+    /// every KeyPackage publish rather than a failure, and it read as the
+    /// signer being noisy.
+    /// </para>
+    /// <para>
+    /// <b>It is a connection-time string</b>, so a change here reaches only
+    /// connections made after it. An already-paired signer keeps the grant it
+    /// was given until the user reconnects.
+    /// </para>
+    /// <para>
+    /// <c>450</c> is here ahead of its use: the Dark Matter engine signs an
+    /// account-identity proof with it, and a grant that arrives after the
+    /// pairing is a grant nobody has.
+    /// </para>
+    /// </remarks>
+    internal static readonly int[] SignedKinds =
+    [
+        0,      // profile metadata
+        5,      // deletion request
+        13,     // seal (NIP-59 gift wrap)
+        445,    // Marmot group message
+        450,    // Marmot account-identity proof (0x8009)
+        1059,   // gift wrap (NIP-59)
+        10002,  // relay list
+        10050,  // DM relay list
+        10051,  // Blossom server list
+        22242,  // NIP-42 relay auth
+        30443,  // Marmot KeyPackage
+    ];
+
     public string GenerateConnectionUri(IEnumerable<string> relayUrls)
     {
         GenerateLocalKeyPair();
         _secret = GenerateRandomSecret();
-        var perms = "nip04_encrypt,nip04_decrypt,nip44_encrypt,nip44_decrypt,sign_event:443,sign_event:444,sign_event:445,sign_event:1059";
+        var perms = string.Join(
+            ",",
+            ["nip04_encrypt", "nip04_decrypt", "nip44_encrypt", "nip44_decrypt",
+             .. SignedKinds.Select(kind => $"sign_event:{kind}")]);
         // Relay URLs are not percent-encoded: Amber's bunker:// URIs use raw
         // wss://… in the relay query value, and Amber's nostrconnect parser
         // appears to fail validation when relays come back as wss%3A%2F%2F….
@@ -1494,16 +1542,16 @@ public class ExternalSignerService : IExternalSigner, IDisposable
 
     private static string EncryptNip44(string plaintext, string privateKeyHex, string pubKeyHex)
     {
-        var conversationKey = Nip44Encryption.DeriveConversationKey(
+        var conversationKey = Nip44.DeriveConversationKey(
             Convert.FromHexString(privateKeyHex), Convert.FromHexString(pubKeyHex));
-        return Nip44Encryption.Encrypt(plaintext, conversationKey);
+        return Nip44.Encrypt(plaintext, conversationKey);
     }
 
     private static string DecryptNip44(string base64Payload, string privateKeyHex, string pubKeyHex)
     {
-        var conversationKey = Nip44Encryption.DeriveConversationKey(
+        var conversationKey = Nip44.DeriveConversationKey(
             Convert.FromHexString(privateKeyHex), Convert.FromHexString(pubKeyHex));
-        return Nip44Encryption.Decrypt(base64Payload, conversationKey);
+        return Nip44.Decrypt(base64Payload, conversationKey);
     }
 
     public void Dispose()

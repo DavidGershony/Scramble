@@ -2,7 +2,7 @@ using System.Reactive.Subjects;
 using System.Text;
 using System.Text.Json;
 using NBitcoin.Secp256k1;
-using MarmotCs.Protocol.Nip44;
+using Scramble.Nostr.Crypto;
 using Scramble.Core.Services;
 using Xunit;
 using SHA256 = System.Security.Cryptography.SHA256;
@@ -90,18 +90,18 @@ public class ExternalSignerIntegrationTests
 
         public Task<string> Nip44EncryptAsync(string plaintext, string recipientPubKey)
         {
-            var convKey = Nip44Encryption.DeriveConversationKey(
+            var convKey = Nip44.DeriveConversationKey(
                 Convert.FromHexString(_privateKeyHex),
                 Convert.FromHexString(recipientPubKey));
-            return Task.FromResult(Nip44Encryption.Encrypt(plaintext, convKey));
+            return Task.FromResult(Nip44.Encrypt(plaintext, convKey));
         }
 
         public Task<string> Nip44DecryptAsync(string ciphertext, string senderPubKey)
         {
-            var convKey = Nip44Encryption.DeriveConversationKey(
+            var convKey = Nip44.DeriveConversationKey(
                 Convert.FromHexString(_privateKeyHex),
                 Convert.FromHexString(senderPubKey));
-            return Task.FromResult(Nip44Encryption.Decrypt(ciphertext, convKey));
+            return Task.FromResult(Nip44.Decrypt(ciphertext, convKey));
         }
 
         public Task<string> GetPublicKeyAsync() => Task.FromResult(_publicKeyHex);
@@ -133,9 +133,9 @@ public class ExternalSignerIntegrationTests
         var ciphertext = await signer.Nip44EncryptAsync(plaintext, bobPub);
 
         // Decrypt locally (simulates recipient with local key)
-        var convKey = Nip44Encryption.DeriveConversationKey(
+        var convKey = Nip44.DeriveConversationKey(
             Convert.FromHexString(bobPriv), Convert.FromHexString(alicePub));
-        var decrypted = Nip44Encryption.Decrypt(ciphertext, convKey);
+        var decrypted = Nip44.Decrypt(ciphertext, convKey);
 
         Assert.Equal(plaintext, decrypted);
     }
@@ -150,10 +150,10 @@ public class ExternalSignerIntegrationTests
         var signer = new TestExternalSigner(bobPriv, bobPub);
 
         // Encrypt locally
-        var convKey = Nip44Encryption.DeriveConversationKey(
+        var convKey = Nip44.DeriveConversationKey(
             Convert.FromHexString(alicePriv), Convert.FromHexString(bobPub));
         var plaintext = "Hello from local key! Newlines:\nLine 2\nLine 3";
-        var ciphertext = Nip44Encryption.Encrypt(plaintext, convKey);
+        var ciphertext = Nip44.Encrypt(plaintext, convKey);
 
         // Decrypt via signer (simulates Amber decrypting)
         var decrypted = await signer.Nip44DecryptAsync(ciphertext, alicePub);
@@ -164,7 +164,7 @@ public class ExternalSignerIntegrationTests
     [Fact]
     public async Task Nip44_NostrServiceSignerPath_LocalDecrypt_RoundTrips()
     {
-        // NostrService.Nip44EncryptAsync (signer path) → local Nip44Encryption.Decrypt
+        // NostrService.Nip44EncryptAsync (signer path) → local Nip44.Decrypt
         var (alicePriv, alicePub, _, _) = _nostrService.GenerateKeyPair();
         var (bobPriv, bobPub, _, _) = _nostrService.GenerateKeyPair();
 
@@ -175,9 +175,9 @@ public class ExternalSignerIntegrationTests
         var ciphertext = await _nostrService.Nip44EncryptAsync(plaintext, bobPub);
 
         // Decrypt locally as Bob
-        var convKey = Nip44Encryption.DeriveConversationKey(
+        var convKey = Nip44.DeriveConversationKey(
             Convert.FromHexString(bobPriv), Convert.FromHexString(alicePub));
-        var decrypted = Nip44Encryption.Decrypt(ciphertext, convKey);
+        var decrypted = Nip44.Decrypt(ciphertext, convKey);
 
         Assert.Equal(plaintext, decrypted);
     }
@@ -342,17 +342,17 @@ public class ExternalSignerIntegrationTests
 
         // --- Layer 3: Create gift wrap (kind 1059) with ephemeral key ---
         var (ephPriv, ephPub, _, _) = _nostrService.GenerateKeyPair();
-        var giftConvKey = Nip44Encryption.DeriveConversationKey(
+        var giftConvKey = Nip44.DeriveConversationKey(
             Convert.FromHexString(ephPriv), Convert.FromHexString(bobPub));
-        var giftContent = Nip44Encryption.Encrypt(sealJson, giftConvKey);
+        var giftContent = Nip44.Encrypt(sealJson, giftConvKey);
         var giftCreatedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var giftTags = new List<List<string>> { new() { "p", bobPub } };
 
         // --- Unwrap as Bob (local key path) ---
         // Layer 3 → 2: Decrypt gift wrap to get seal
-        var unwrapConvKey = Nip44Encryption.DeriveConversationKey(
+        var unwrapConvKey = Nip44.DeriveConversationKey(
             Convert.FromHexString(bobPriv), Convert.FromHexString(ephPub));
-        var decryptedSealJson = Nip44Encryption.Decrypt(giftContent, unwrapConvKey);
+        var decryptedSealJson = Nip44.Decrypt(giftContent, unwrapConvKey);
 
         // Verify decrypted seal matches original
         using var decSealDoc = JsonDocument.Parse(decryptedSealJson);
@@ -361,9 +361,9 @@ public class ExternalSignerIntegrationTests
         Assert.Equal(alicePub, decSealPubkey);
 
         // Layer 2 → 1: Decrypt seal to get rumor
-        var sealConvKey = Nip44Encryption.DeriveConversationKey(
+        var sealConvKey = Nip44.DeriveConversationKey(
             Convert.FromHexString(bobPriv), Convert.FromHexString(decSealPubkey));
-        var decryptedRumorJson = Nip44Encryption.Decrypt(decSealContent, sealConvKey);
+        var decryptedRumorJson = Nip44.Decrypt(decSealContent, sealConvKey);
 
         // Verify recovered rumor matches original
         using var rumorDoc = JsonDocument.Parse(decryptedRumorJson);
@@ -396,9 +396,9 @@ public class ExternalSignerIntegrationTests
         var rumorJson = SerializeRumor(alicePub, rumorCreatedAt, 444, rumorTags, rumorContent);
 
         // Seal: encrypt rumor to Bob, sign as Alice (locally)
-        var sealConvKey = Nip44Encryption.DeriveConversationKey(
+        var sealConvKey = Nip44.DeriveConversationKey(
             Convert.FromHexString(alicePriv), Convert.FromHexString(bobPub));
-        var sealContent = Nip44Encryption.Encrypt(rumorJson, sealConvKey);
+        var sealContent = Nip44.Encrypt(rumorJson, sealConvKey);
         var sealCreatedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var sealSerializedForId = NostrService.SerializeForEventId(
             alicePub, sealCreatedAt, 13, new List<List<string>>(), sealContent);
@@ -412,9 +412,9 @@ public class ExternalSignerIntegrationTests
 
         // Gift wrap: ephemeral key encrypts seal to Bob
         var (ephPriv, ephPub, _, _) = _nostrService.GenerateKeyPair();
-        var giftConvKey = Nip44Encryption.DeriveConversationKey(
+        var giftConvKey = Nip44.DeriveConversationKey(
             Convert.FromHexString(ephPriv), Convert.FromHexString(bobPub));
-        var giftContent = Nip44Encryption.Encrypt(sealJson, giftConvKey);
+        var giftContent = Nip44.Encrypt(sealJson, giftConvKey);
 
         // --- Unwrap as Bob via signer ---
         // Layer 3 → 2: Signer decrypts gift wrap (counterparty = ephemeral pub)
@@ -467,9 +467,9 @@ public class ExternalSignerIntegrationTests
 
         // Gift wrap with ephemeral key
         var (ephPriv, ephPub, _, _) = _nostrService.GenerateKeyPair();
-        var giftConvKey = Nip44Encryption.DeriveConversationKey(
+        var giftConvKey = Nip44.DeriveConversationKey(
             Convert.FromHexString(ephPriv), Convert.FromHexString(bobPub));
-        var giftContent = Nip44Encryption.Encrypt(sealJson, giftConvKey);
+        var giftContent = Nip44.Encrypt(sealJson, giftConvKey);
 
         // Bob unwraps via signer
         var unwrappedSeal = await bobSigner.Nip44DecryptAsync(giftContent, ephPub);

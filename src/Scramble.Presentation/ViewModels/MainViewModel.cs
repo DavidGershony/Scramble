@@ -462,13 +462,15 @@ public partial class MainViewModel : ViewModelBase
                 // _storedKeyPackages.Clear() — if a KP were generated between the two calls, it
                 // would be silently lost. See KeyPackageAuditPersistenceTests.DoubleImport test.
 
-                // Wire up the Nostr event signer for kind 445 MLS group messages.
-                // Local key users sign immediately; signer users wire after background restore.
-                if (!string.IsNullOrEmpty(CurrentUser.PrivateKeyHex))
-                {
-                    _mlsService.SetNostrEventSigner(new LocalNostrEventSigner(CurrentUser.PrivateKeyHex));
-                    _logger.LogInformation("MLS event signer set to LocalNostrEventSigner");
-                }
+                // Nothing is wired here for a local-key user, and that is the
+                // change rather than an omission. A kind-445 is signed with a
+                // fresh ephemeral key per MIP-03 — the engine generates it
+                // itself, and signing one with the account key would deanonymise
+                // every message the account sends. What does need the account key
+                // is the account-identity proof, and InitializeAsync above has
+                // already built a signer for it from this same private key.
+                // A remote signer has no local key to derive one from, so it is
+                // wired separately, in WireExternalSigner.
             }
             catch (Exception ex)
             {
@@ -636,8 +638,14 @@ public partial class MainViewModel : ViewModelBase
         ChatViewModel.MediaUploadService?.SetExternalSigner(ExternalSigner);
         _logger.LogInformation("External signer wired to NostrService and MediaUploadService");
 
-        _mlsService.SetNostrEventSigner(new ExternalNostrEventSigner(ExternalSigner));
-        _logger.LogInformation("MLS event signer set to ExternalNostrEventSigner (background restore)");
+        // The MLS seam takes the signer itself, not a Nostr event signer. What it
+        // needs the signer for is the account-identity proof: a template whose
+        // created_at is fixed by the engine and whose signature is verified
+        // against that exact template before it is trusted. INostrEventSigner
+        // picks its own created_at, so a signature obtained through it verifies
+        // over a different template than the proof commits to.
+        _mlsService.SetExternalSigner(ExternalSigner);
+        _logger.LogInformation("External signer wired into MLS for account-identity proofs");
     }
 
     private void RefreshRelayStatusesFromSettings()
