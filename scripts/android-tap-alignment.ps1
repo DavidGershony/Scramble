@@ -54,7 +54,6 @@ param(
     [string]$ArtifactDir = '.'
 )
 $ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.Drawing
 
 function Get-Adb {
     foreach ($c in @($env:ANDROID_SDK_ROOT, $env:ANDROID_HOME, "$env:LOCALAPPDATA\Android\Sdk", 'C:\work\android-sdk')) {
@@ -66,9 +65,40 @@ function Get-Adb {
 }
 $adb = Get-Adb
 
+# A PNG for humans to look at when this fails.
 function Get-Screenshot([string]$path) {
     & $adb exec-out screencap -p > $path
     if (-not (Test-Path $path) -or (Get-Item $path).Length -eq 0) { throw "screencap produced nothing at $path" }
+}
+
+<#
+.SYNOPSIS
+    The raw framebuffer, as width/height plus RGBA bytes.
+.DESCRIPTION
+    `screencap` without -p emits a small header then w*h*4 bytes, which needs no
+    image library to read. That matters: the first version of this script used
+    System.Drawing, which is Windows-only, so it died on the Linux CI runner
+    before printing a single line -- the smoke test passed, the step failed, and
+    the log had nothing in it. Parsing bytes works everywhere pwsh does.
+
+    The header is 12 bytes (width, height, format) on older Android and 16 on
+    newer (a colour-space field was added), so it is derived from the length
+    rather than assumed.
+#>
+function Get-Framebuffer([string]$path) {
+    & $adb exec-out screencap > $path
+    $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $path))
+    if ($bytes.Length -lt 32) { throw "raw screencap produced $($bytes.Length) bytes" }
+
+    $w = [BitConverter]::ToUInt32($bytes, 0)
+    $h = [BitConverter]::ToUInt32($bytes, 4)
+    if ($w -le 0 -or $h -le 0 -or $w -gt 20000 -or $h -gt 20000) { throw "implausible framebuffer size ${w}x${h}" }
+
+    $header = $bytes.Length - ($w * $h * 4)
+    if ($header -ne 12 -and $header -ne 16) {
+        throw "cannot account for the screencap header: ${w}x${h} leaves $header byte(s)"
+    }
+    return [pscustomobject]@{ W = [int]$w; H = [int]$h; Offset = [int]$header; Bytes = $bytes }
 }
 
 # Pulled rather than read through `adb shell cat`, whose CRLF translation
@@ -113,10 +143,12 @@ $cy = [int](($target.T + $target.B) / 2)
 $before = Join-Path $ArtifactDir 'tap-before.png'
 $after  = Join-Path $ArtifactDir 'tap-after.png'
 Get-Screenshot $before
+$fbA = Get-Framebuffer (Join-Path $ArtifactDir 'fb-before.raw')
 Write-Host "[tap] tapping ($cx,$cy)"
 & $adb shell input tap $cx $cy | Out-Null
 Start-Sleep -Seconds 3
 Get-Screenshot $after
+$fbB = Get-Framebuffer (Join-Path $ArtifactDir 'fb-after.raw')
 $nodesAfter = Get-Nodes (Get-UiTree 'ui-after')
 
 # --- hit-test space: which nodes appeared or vanished, and where ------------
@@ -134,23 +166,26 @@ if ($changedNodes.Count -eq 0) {
 $nodeCentroid = ($changedNodes | ForEach-Object { ($_.T + $_.B) / 2 } | Measure-Object -Average).Average
 
 # --- render space: which pixels changed, and where --------------------------
-$bmpA = [System.Drawing.Bitmap]::FromFile((Resolve-Path $before))
-$bmpB = [System.Drawing.Bitmap]::FromFile((Resolve-Path $after))
-try {
-    if ($bmpA.Width -ne $bmpB.Width -or $bmpA.Height -ne $bmpB.Height) { throw 'screenshot sizes differ' }
+if ($fbA.W -ne $fbB.W -or $fbA.H -ne $fbB.H) { throw 'framebuffer sizes differ between the two captures' }
 
-    # Skip the status-bar band: its clock ticks on its own and is not the app.
-    $skipTop = [int]($bmpA.Height * 0.08)
-    $sumY = 0.0; $count = 0
-    for ($y = $skipTop; $y -lt $bmpA.Height; $y += 2) {
-        for ($x = 0; $x -lt $bmpA.Width; $x += 2) {
-            $pa = $bmpA.GetPixel($x, $y); $pb = $bmpB.GetPixel($x, $y)
-            if ([Math]::Abs($pa.R-$pb.R) + [Math]::Abs($pa.G-$pb.G) + [Math]::Abs($pa.B-$pb.B) -gt 24) {
-                $sumY += $y; $count++
-            }
-        }
+# Skip the status-bar band: its clock ticks on its own and is not the app.
+$skipTop = [int]($fbA.H * 0.08)
+$sumY = 0.0; $count = 0
+$bytesA = $fbA.Bytes; $bytesB = $fbB.Bytes
+$offA = $fbA.Offset; $offB = $fbB.Offset
+$stride = $fbA.W * 4
+
+for ($y = $skipTop; $y -lt $fbA.H; $y += 2) {
+    $rowA = $offA + ($y * $stride)
+    $rowB = $offB + ($y * $stride)
+    for ($x = 0; $x -lt $fbA.W; $x += 2) {
+        $i = $x * 4
+        $d = [Math]::Abs($bytesA[$rowA + $i]     - $bytesB[$rowB + $i]) +
+             [Math]::Abs($bytesA[$rowA + $i + 1] - $bytesB[$rowB + $i + 1]) +
+             [Math]::Abs($bytesA[$rowA + $i + 2] - $bytesB[$rowB + $i + 2])
+        if ($d -gt 24) { $sumY += $y; $count++ }
     }
-} finally { $bmpA.Dispose(); $bmpB.Dispose() }
+}
 
 if ($count -eq 0) {
     Write-Host '[tap] FAILED: the visual tree changed but not one pixel did.' -ForegroundColor Red
