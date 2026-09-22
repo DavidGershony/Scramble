@@ -981,3 +981,35 @@ the replay moved the epoch, mirroring `IngestAsync`, plus the routing re-sync a
 commit needs. The test is an engine-suite test: buffer a peer's commit behind a
 staged commit of ours, clear ours, replay, reopen the store, assert the epoch
 survived. That is `Scramble.Marmot.Tests` territory, not `Scramble.Core.Tests`.
+
+---
+
+## 18. A cached proposal's record is terminal — does the cache outlive it? (2026-09-22)
+
+Raised by reading upstream's 0.10.4 fix (#1935, handoff §3am), not by a failure.
+
+`MessageIngest.IngestHandshakeAsync` persists the record as
+`MessageRecordState.Processed` and *then* returns `IngestOutcome.Buffered` when the
+handshake outcome is `ProposalCached`. Processed is terminal: replay does not
+reconsider it, and dedup will answer duplicate for that content id forever.
+
+That is defensible on its face — the message *was* peeled and its proposal cached, so
+this is not upstream's "a wrapper nobody opened became terminal". **The question is
+what happens across a restart.** If the MLS proposal cache lives only in the
+in-memory `MlsGroup` and is not part of `Export()`, then after a restart the proposal
+is gone while its record says processed, and a commit citing it by hash has nothing
+to resolve against — the same silent-loss shape as §16, reached by a different door.
+
+**Not answerable by reading.** `MlsGroup.Export()` is in `lib/dotnet-mls`; whether it
+serialises the proposal store needs checking there, and `lib/dotnet-mls` changes need
+explicit permission.
+
+**The test if it turns out to matter:** ingest a proposal alone (so it is cached but
+no commit applies), close the store, reopen it, then ingest a commit that cites that
+proposal by hash — and assert it applies. A commit citing a proposal by hash is also
+the shape §5's trap table says to use for read-before-apply tests, because an Add
+commit's inline proposals cannot tell the orderings apart.
+
+Low urgency: it needs a proposal to arrive separately from its commit, which our own
+paths do not currently produce — every commit we build carries its proposals inline.
+A peer that sends them separately would find it.

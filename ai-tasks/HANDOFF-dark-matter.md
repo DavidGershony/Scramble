@@ -2486,6 +2486,74 @@ choose, and with a kind granted only after pairing. Test doubles agree with our
 assumptions by construction. **The Android head was not compiled locally** — no
 Android SDK on this machine — so CI is the first build of it.
 
+### 3am. The owed pin diff is done: the wire is identical, one engine fix is not
+
+2026-09-22. §3ag recorded that §3ac's *method* was owed — nobody had compared blob
+SHAs across the range our peer had drifted over. Done now, and it answers the
+question it was owed for.
+
+**The clients moved again while step 5 was landing.** iOS, Android **and** Mac all
+ship `fcc85edd` = `marmotkit-v0.10.4`, nine commits ahead of our peer's `0.10.3`
+(`7d8bba365def75a66774f2b2036f839411010001`); Linux is still 317 behind.
+`check-shipped-pins.ps1` says so itself.
+
+**Method, per §3ac:** `git/trees/<tag>?recursive=1` at both tags, `truncated`
+confirmed false on each (1533 and 1554 blobs), blob SHAs compared. Not
+`gh api compare`, whose `.files` caps at 300 and has silently dropped whole crates
+before.
+
+**175 files differ. Eight touch anything wire-relevant:**
+
+| Path | Verdict |
+|---|---|
+| `crates/traits/**` | **byte-identical** — no component id, encoding, required-capabilities rule or `0x8009` account proof moved |
+| `Cargo.toml` — the openmls pin | **unchanged**, still `59e7d3b27a7e95237879dd5478de1fd90eff7ada`. §3ac names this as the thing that can move the KeyPackage lifetime bound invisibly; it did not |
+| `cgka-engine/src/message_processor/{ingest,mod,store}.rs` | changed — see below |
+| `cgka-engine/tests/{deferred_peel_lifecycle,mip03_guards}.rs` | the tests for that change |
+| `cgka-engine/AGENTS.md`, `Cargo.lock` | docs and lockfile |
+
+So **nothing we encode, refuse, or advertise changes across the nine commits**, and
+the 34 green interop tests against `0.10.3` are not resting on an unexamined range
+any more.
+
+#### The one engine fix lands exactly where we just worked
+
+Upstream #1935: *"never retire a raw wrapper the halt gate parked before any peel."*
+Their own description: `ingest_group_message` answers `Buffered` **both** after a
+successful peel and **before any peel at the `!can_ingest` halt gate**, and
+`replay_buffered_messages` stamped a `PeelDeferred` row `Processed` on any
+`Buffered` — so a wrapper nobody opened became terminal and
+`recorded_message_outcome` answered `Duplicate` for its id forever.
+
+That is the same halt gate our §16/§17 work is built on, and the same failure shape:
+a message the engine reports it kept, and then never delivers.
+
+**We do not have that defect, checked rather than assumed:**
+
+- our halt-gate row is persisted `MessageRecordState.Created`, not `PeelDeferred`;
+- `MessageIngest.ReplayAsync` returns immediately while `!CanIngest`, so a halted
+  group replays nothing;
+- it calls `PreserveAsync(record, epoch, ct)` after a dispatch rather than stamping
+  `Processed` across any `Buffered`.
+
+So a wrapper parked before any peel is never made terminal here.
+
+#### One adjacent question this raised, which reading cannot settle
+
+A **cached proposal** takes a different door to the same shape. `IngestHandshakeAsync`
+persists `MessageRecordState.Processed` and *then* returns `Buffered` when the
+outcome is `ProposalCached`. That is defensible — it was peeled and cached, so it is
+not "nobody opened it" — **but the record is terminal**. If the MLS proposal cache
+does not survive an export and restore, the proposal is gone while its record says
+processed, and a commit citing it by hash has nothing to resolve against. Whether
+`MlsGroup.Export()` carries the proposal cache is the open question; it is not
+answerable by grep and wants a test. Recorded in `remaining-work` §18.
+
+**Recommendation:** bump the peer to `0.10.4` (it is what every current client ships,
+and the wire is identical so the bump is low-risk), keeping §3ag's procedure in mind —
+the *rebuild* re-resolves the newest tag, which is the intended behaviour here rather
+than an accident this time.
+
 ### 3al. P11 step 5 — marmot-cs is gone, and the fast gate does not compile Diagnostics
 
 2026-09-21/22. Five commits, each green on its own, because the order is what keeps
