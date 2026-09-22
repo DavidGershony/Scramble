@@ -774,7 +774,7 @@ offered above, not the lazier one.
 
 ---
 
-## 14. The engine's store is not encrypted at rest (2026-09-19) — RELEASE BLOCKER
+## 14. The engine's store is not encrypted at rest (2026-09-19) — CLOSED 2026-09-22
 
 Found while writing the flip's DI, by reading what the legacy registration did
 rather than what the plan said about it.
@@ -822,6 +822,66 @@ protection is simply gone.
    choice, so that choice would have to be revisited.
 
 Decide before any release, not before step 3.
+
+### Closed 2026-09-22: option 1, with a census instead of a per-method suite
+
+`SecureMarmotStorageProvider` (in `Scramble.Core`, because `Scramble.Marmot.*`
+must not depend on Core where `ISecureStorage` lives) sits between
+`SqliteMarmotStorageProvider` and the engine, and
+`DarkMatterMlsServiceFactory.Create` wires it. Option 2 was rejected on the
+project's own history: the Rust uniffi backend was abandoned because Android
+could not load ARM-cross-compiled natives, and SQLCipher is the same bet.
+
+**Protected:** `groups.live_state`, `messages.wire`, `welcomes.wire`,
+`outbound_intents.payload`, `key_packages.private_material`,
+`epoch_archive.group_state`, `staged_commits.group_state`, and — beyond what
+this section listed — `epoch_archive.tip_committer` and
+`staged_commits.tip_committer`, which say which member drove a group to an epoch
+and are the equivalent of the `Message.SenderIdentity` the legacy decorator
+protected.
+
+**`snapshots.data` is protected transitively, and that is load-bearing rather
+than lucky.** The provider builds that JSON document *below* the decorator out of
+rows it reads for itself, so what it serialises is already-protected bytes and
+what `RollbackToSnapshotAsync` writes back is still protected — symmetric, with
+the decorator never touching it. Moving snapshot capture above the decorator
+would silently undo it, which is why the plaintext sweep searches Base64 forms
+too: it is what notices.
+
+**Left in the clear, and it has to be.** `Protect` is not deterministic (DPAPI is
+not), so an encrypted identifier is a different value on every write — lookups
+miss, `INSERT OR REPLACE` inserts, and the byte-equality the engine uses to
+recognise its own staged commit and its own branch never holds. That rules out
+every primary key and `WHERE` term: `groups.group_id`, `messages.id`,
+`welcomes.id`, `routing_index.transport_group_id`, every `group_id` foreign key,
+`messages.transport_id`, `key_packages.key_package_ref`/`event_id`, and the three
+digests this section asked about — `epoch_states.staged_commit` (a
+`StagedCommitHandle`, which is the commit id and is compared by bytes),
+`commit_publish_attempts.commit_id`, and both `tip_commit` columns (`CommitTip`'s
+`BranchId` is derived from it). All are content-derived digests of bytes a relay
+already carries. `key_packages.public_bytes` is clear for the plainer reason
+that it is published as a kind-30443 event.
+
+**The test is a census, not a suite.** `SecureMarmotStorageProviderTests` reads
+the real schema with `PRAGMA table_info` and requires *every* column — any type,
+not only BLOB — to carry a written-down disposition, and walks
+`IMarmotStorageProvider`'s signatures by reflection to require the same of every
+byte-carrying record member. A migration that adds a column, or a record that
+gains a `byte[]`, fails until somebody classifies it. Then it populates every
+sensitive column, closes the store, opens the file and asserts the known
+plaintexts appear nowhere in any column of any table. What it does not catch: a
+secret written into a column already classified non-secret.
+
+**No migration, and the legacy read is made legible rather than fatal.**
+`Unprotect` returns a prefix-less value unchanged, so an unprotected row from
+before this change reads back correctly and invisibly. The decorator notices
+(the value is unchanged by unprotecting), logs once per field, and counts it in
+`FieldsFoundUnprotected`. It does not throw: pre-cutover MLS state is abandoned
+by decision (`p11-cutover-plan-2026-09.md` §2), so refusing to open would only
+brick a developer's profile over state already written off — and the store heals
+forward, because every rewrite protects. The factory *does* throw when
+`IStorageService.SecureStorage` is null, which is the one case where proceeding
+would create a fresh unprotected store.
 
 ---
 

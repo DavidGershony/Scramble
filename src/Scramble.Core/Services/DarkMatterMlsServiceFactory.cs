@@ -52,23 +52,41 @@ public static class DarkMatterMlsServiceFactory
     /// <c>ai-tasks/p11-cutover-plan-2026-09.md</c> §2.
     /// </para>
     /// <para>
-    /// <b>The engine's rows are not encrypted at rest, and the legacy engine's
-    /// were.</b> <c>EncryptedSqliteStorageProvider</c> put MLS state, welcome
-    /// data and message content through <see cref="ISecureStorage"/> (DPAPI,
-    /// Android Keystore); <see cref="SqliteMarmotStorageProvider"/> writes
-    /// <c>groups.live_state</c>, <c>key_packages.private_material</c>,
-    /// <c>epoch_archive.group_state</c> and <c>messages.wire</c> as plain BLOBs.
-    /// The mechanism survives the cutover and the engine simply does not call it.
-    /// Closing that is a storage-layer change of its own — twelve sub-interfaces,
-    /// where a missed field is a silent leak — so it is recorded as a release
-    /// blocker rather than bolted onto the flip. Nothing ships from this branch
-    /// yet, which is the only reason that ordering is acceptable.
+    /// <b>The engine's rows are encrypted at rest by a decorator, not by the
+    /// engine.</b> <see cref="SqliteMarmotStorageProvider"/> knows nothing about
+    /// <see cref="ISecureStorage"/> — <c>Scramble.Marmot.*</c> is standalone and
+    /// must not depend on <c>Scramble.Core</c>, where that interface lives — so
+    /// <see cref="SecureMarmotStorageProvider"/> sits between it and the engine
+    /// and puts MLS state, welcome data, message content and KeyPackage private
+    /// material through the platform's protection (DPAPI, Android Keystore),
+    /// which is what <c>EncryptedSqliteStorageProvider</c> did for the legacy
+    /// engine. Wiring it here rather than inside the provider is what keeps that
+    /// dependency direction intact. Which columns are protected, which are
+    /// deliberately in the clear, and why an identifier cannot be encrypted at
+    /// all, are recorded on that class and enforced by a column census in
+    /// <c>SecureMarmotStorageProviderTests</c>.
     /// </para>
     /// </remarks>
     /// <param name="storageService">The active profile's storage service.</param>
     public static IMlsService Create(IStorageService storageService)
     {
         ArgumentNullException.ThrowIfNull(storageService);
+
+        // Fail closed rather than build an unprotected store. IStorageService
+        // documents SecureStorage as nullable "in tests", and under the legacy
+        // engine a null there cost nothing the MLS store noticed — the encrypted
+        // provider was registered separately. Now it decides whether ratchet
+        // state and leaf private keys land on disk in the clear, and that is not
+        // a decision to make by falling through. Every host and every caller in
+        // the tree supplies one; a caller that genuinely wants an unprotected
+        // ephemeral store can compose DarkMatterMlsService over a bare
+        // SqliteMarmotStorageProvider and say so in the open.
+        ISecureStorage secure = storageService.SecureStorage
+            ?? throw new InvalidOperationException(
+                "The Dark Matter MLS store cannot be created without an ISecureStorage: " +
+                "the engine's rows carry MLS ratchet state and leaf private keys, and " +
+                $"{nameof(SecureMarmotStorageProvider)} is what keeps them encrypted at rest. " +
+                $"Pass one to {nameof(StorageService)}'s constructor.");
 
         var logger = LoggingConfiguration.CreateLogger<object>();
 
@@ -80,13 +98,16 @@ public static class DarkMatterMlsServiceFactory
             ? ":memory:"
             : storageService.DatabasePath;
 
-        var storage = new SqliteMarmotStorageProvider(
-            $"Data Source={databasePath}", TablePrefix);
+        var storage = new SecureMarmotStorageProvider(
+            new SqliteMarmotStorageProvider($"Data Source={databasePath}", TablePrefix),
+            secure);
 
         logger.LogInformation(
-            "MLS backend: Dark Matter engine over {Database} (prefix {Prefix})",
+            "MLS backend: Dark Matter engine over {Database} (prefix {Prefix}), " +
+            "protected at rest by {Protection}",
             databasePath == ":memory:" ? ":memory:" : "the profile database",
-            TablePrefix);
+            TablePrefix,
+            secure.GetType().Name);
 
         return new DarkMatterMlsService(storage);
     }
