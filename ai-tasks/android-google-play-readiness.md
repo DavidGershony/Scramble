@@ -155,20 +155,47 @@ Android 13+ supports predictive back animations that show a preview of where the
 
 ## What's Already Production-Ready
 
+> **Re-checked 2026-09-22 against `src/Scramble.Mobile.Android`, the head that
+> actually ships.** Five claims in this section described
+> `src/Scramble.Android` — the head abandoned by the 2026-05-11 Avalonia pivot —
+> and were false of the shipped app. They are corrected below rather than
+> deleted, because which head a claim was true of is the useful part.
+
 ### Permissions & Security
-- All permissions properly declared in manifest with correct `maxSdkVersion` fallbacks
-- Runtime permission requests for camera, microphone, storage (granular Android 13+)
+- Permissions declared in the shipped manifest: INTERNET, RECORD_AUDIO,
+  FOREGROUND_SERVICE, FOREGROUND_SERVICE_DATA_SYNC, POST_NOTIFICATIONS,
+  WAKE_LOCK. **No CAMERA and no storage permissions** — consistent with there
+  being no QR scanner or file picker on this head yet, so their absence is a
+  missing feature and not a missing declaration.
 - POST_NOTIFICATIONS permission for Android 13+
-- `allowBackup="false"` — correct for a privacy-focused app
+- `allowBackup="false"` — **was not set on this head until 2026-09-22.**
+  Android defaults it to true, so the OS was backing the app's private data
+  directory, and therefore the profile SQLite file with its MLS ratchet state
+  and leaf private keys, to the user's cloud account. The abandoned head set it;
+  this one was created without it. Now set.
+  - **Still open:** on API 31+ `allowBackup="false"` stops cloud backup but not
+    device-to-device transfer. Closing that needs an
+    `android:dataExtractionRules` resource, which wants a real device to verify.
 - No hardcoded secrets, API keys, or test credentials anywhere in the codebase
-- Keys stored in Android Keystore (AES-GCM encryption)
-- SQLite database encrypted at rest via `EncryptedSqliteStorageProvider`
+- Keys stored in Android Keystore (AES-GCM encryption), via
+  `MobileAndroidSecureStorage`
+- The MLS store is encrypted at rest by `SecureMarmotStorageProvider`, the
+  decorator the Dark Matter cutover replaced `EncryptedSqliteStorageProvider`
+  with — that class was deleted with the legacy engine in P11 step 5. Which
+  columns are protected, which are deliberately in the clear and why, are
+  recorded on that class and enforced by a column census in
+  `SecureMarmotStorageProviderTests`.
 
 ### Build & Signing
-- Release keystore exists: `openchat-release.keystore`
-- Signing config uses environment variables (not hardcoded passwords)
-- Package name: `com.openchat.app` (proper format)
-- Target framework: `net9.0-android` (current)
+- Signing config uses environment variables (not hardcoded passwords), and
+  `AndroidKeyStore=true` is set — without it the SDK ignores the signing
+  properties and silently falls back to debug signing
+- **No release keystore is in the repo.** This section previously named
+  `openchat-release.keystore`; no such file is tracked. Producing and storing
+  one is outstanding release work, not a done item.
+- Application id: `app.scramble.chat` (was recorded here as `com.openchat.app`,
+  which predates the rename)
+- Target framework: `net10.0-android` (was recorded as `net9.0-android`)
 - Min SDK: API 24 (Android 7.0) — covers ~97% of devices
 
 ### Background Service
