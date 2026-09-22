@@ -168,8 +168,18 @@ if ($logcat -match 'FATAL EXCEPTION') {
 # so the app simply vanishes and every other assertion reports a dead process
 # with no cause. This is not hypothetical -- it is the shape the CI emulator
 # produced on 2026-09-22, where the app died with no managed exception at all.
+# Narrow on purpose. The first version matched 'tombstone', and Select-String
+# is case-insensitive, so it fired on the Android line
+#   SystemServerTimingAsync: ...com.android.server.os.NativeTombstoneManagerService
+# -- a routine service name -- and failed a run in which the app was alive and
+# on screen. 'signal 9 (Killed)' is excluded for the same reason: that is what a
+# normal force-stop and the lowmemorykiller both produce, and the LMK has its own
+# check with its own message.
+#
+# What is left are the two markers debuggerd writes only for a real native crash:
+# the 'Fatal signal' line, and the tombstone header naming the process.
 $nativeCrash = $logcat -split "`r?`n" |
-    Select-String -Pattern 'Fatal signal|SIGSEGV|SIGABRT|libc.*Fatal|DEBUG.*backtrace|tombstone'
+    Select-String -Pattern ('Fatal signal \d+|>>> ' + [regex]::Escape($PackageId) + ' <<<')
 if ($nativeCrash) {
     $failures += ("the process died on a native signal, not a managed exception:`n  " +
                   (($nativeCrash | Select-Object -First 10) -join "`n  "))
