@@ -121,7 +121,30 @@ public sealed class DarkMatterMlsService : IMlsService, IDisposable
     /// <inheritdoc />
     public string? LastEncryptedRumorEventId { get; private set; }
 
-    public void Dispose() => _gate.Dispose();
+    /// <summary>
+    /// Releases the gate and the store.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The store is disposed because this service is its owner.</b>
+    /// <see cref="DarkMatterMlsServiceFactory"/> constructs the provider, hands
+    /// it here and keeps no reference to it, so nothing else can close it — and
+    /// <c>SqliteMarmotStorageProvider</c> holds one long-lived
+    /// <c>SqliteConnection</c> on the profile's database file. Releasing only
+    /// the gate left that connection open for the life of the process, which on
+    /// Windows is what makes deleting or replacing a profile database fail.
+    /// </para>
+    /// <para>
+    /// <see cref="IMarmotStorageProvider"/> does not extend
+    /// <see cref="IDisposable"/> — an in-memory provider holds nothing — so the
+    /// cast is conditional rather than a requirement on the interface.
+    /// </para>
+    /// </remarks>
+    public void Dispose()
+    {
+        _gate.Dispose();
+        (_storage as IDisposable)?.Dispose();
+    }
 
     // ---------------------------------------------------------------- lifecycle
 

@@ -8,6 +8,7 @@ using Scramble.Marmot.Ingest;
 using Scramble.Marmot.Storage;
 using Scramble.Marmot.Storage.Sqlite;
 using Scramble.Nostr.Crypto;
+using Moq;
 using Xunit;
 using CoreKeyPackage = Scramble.Core.Models.KeyPackage;
 
@@ -1066,5 +1067,56 @@ public sealed class DarkMatterMlsServiceTests : IDisposable
         // through MessageService in InboundRefusalClassificationTests; what is
         // proved here is that the outcome it will be handed is this one.
         Assert.False(ex.Outcome.Advanced);
+    }
+
+    /// <summary>
+    /// Disposing the service must close the store it was built over.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The symptom is a locked file, not a slow leak.</b>
+    /// <c>SqliteMarmotStorageProvider</c> holds one long-lived
+    /// <c>SqliteConnection</c> for the profile's database, and
+    /// <see cref="DarkMatterMlsServiceFactory"/> hands that provider over and
+    /// keeps no reference to it — so this service is its only owner. A
+    /// <c>Dispose</c> that released only the gate left the connection open for
+    /// the life of the process, which on Windows is what makes deleting or
+    /// replacing a profile database fail.
+    /// </para>
+    /// <para>
+    /// Asserted through <see cref="IDisposable"/> on a mock rather than by
+    /// deleting a file, because a file-lock assertion would also be measuring
+    /// <c>Microsoft.Data.Sqlite</c>'s connection pooling and could pass or fail
+    /// for reasons that have nothing to do with this call.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void DisposingTheServiceDisposesTheStoreItWasGiven()
+    {
+        var storage = new Mock<IMarmotStorageProvider>();
+        var disposable = storage.As<IDisposable>();
+
+        using (new DarkMatterMlsService(storage.Object))
+        {
+        }
+
+        disposable.Verify(d => d.Dispose(), Times.Once());
+    }
+
+    /// <summary>
+    /// A provider that is not disposable must not make disposal throw.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="IMarmotStorageProvider"/> does not extend
+    /// <see cref="IDisposable"/>, so a caller may legitimately pass one that
+    /// holds nothing — and an in-memory provider in a test is the obvious case.
+    /// </remarks>
+    [Fact]
+    public void DisposingTheServiceOverANonDisposableStoreDoesNotThrow()
+    {
+        var storage = new Mock<IMarmotStorageProvider>();
+        var service = new DarkMatterMlsService(storage.Object);
+
+        service.Dispose();
     }
 }
