@@ -12,7 +12,9 @@ namespace Scramble.Desktop;
 [SupportedOSPlatform("windows")]
 public class DesktopSecureStorage : ISecureStorage
 {
-    private static readonly byte[] MagicPrefix = { 0xEE, 0xCC, 0x01, 0x00 };
+    // One definition, in Scramble.Core. See SecureStorageFormat for why these
+    // four bytes must never change and why the test doubles keep their own copy.
+    private static readonly byte[] MagicPrefix = SecureStorageFormat.MagicPrefix;
     private readonly ILogger<DesktopSecureStorage> _logger;
 
     public DesktopSecureStorage()

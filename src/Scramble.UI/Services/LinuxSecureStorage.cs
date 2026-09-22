@@ -15,7 +15,9 @@ public class LinuxSecureStorage : ISecureStorage
     private const int KeySize = 32; // 256 bits
     private const int NonceSize = 12;
     private const int TagSize = 16;
-    private static readonly byte[] MagicPrefix = { 0xEE, 0xCC, 0x01, 0x00 };
+    // One definition, in Scramble.Core. See SecureStorageFormat for why these
+    // four bytes must never change and why the test doubles keep their own copy.
+    private static readonly byte[] MagicPrefix = SecureStorageFormat.MagicPrefix;
 
     private readonly ILogger<LinuxSecureStorage> _logger;
     private readonly byte[] _key;

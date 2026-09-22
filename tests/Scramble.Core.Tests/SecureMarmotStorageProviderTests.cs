@@ -76,11 +76,15 @@ public sealed class SecureMarmotStorageProviderTests : IDisposable
     /// that merely looks fine.
     /// </summary>
     /// <remarks>
-    /// Spelled out here because the interface documents that the prefix exists
-    /// without naming it, and each platform head keeps its own copy — including
-    /// <see cref="MockSecureStorage"/>, which is what this suite protects with.
-    /// If a head ever changes the value, this test is where the divergence
-    /// surfaces.
+    /// <b>Deliberately a literal, and deliberately not
+    /// <c>SecureStorageFormat.MagicPrefix</c>.</b> The platform implementations
+    /// now share that one definition, which is what stops them drifting from each
+    /// other. This copy exists to catch the case sharing cannot: a change to the
+    /// shared value itself. A test that imported the constant would follow it and
+    /// stay green, while every profile database ever written became unreadable.
+    /// So this stays an independent pin — see the remarks on
+    /// <c>SecureStorageFormat</c> — as does each project's
+    /// <see cref="MockSecureStorage"/>.
     /// </remarks>
     private static readonly byte[] MagicPrefix = { 0xEE, 0xCC, 0x01, 0x00 };
 
