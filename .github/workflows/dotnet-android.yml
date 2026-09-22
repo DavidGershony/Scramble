@@ -144,13 +144,31 @@ jobs:
             -no-window -no-audio -no-boot-anim -no-snapshot
             -gpu swiftshader_indirect -memory 6144
           disable-animations: true
-          script: pwsh -NoProfile -File ./scripts/android-smoke.ps1 -Apk src/Scramble.Mobile.Android/bin/Release/net10.0-android/app.scramble.chat-Signed.apk -ScreenshotPath android-smoke.png
+          # Two checks, and the second exists because the first is not enough.
+          # android-smoke proves the app starts and stays up; it passed v0.7.0
+          # twice, a build in which every control responded to taps ~8.6mm above
+          # where it drew. Starting was never the property in question.
+          # android-tap-alignment taps a control and measures whether the redraw
+          # lands where the touch did. `&&` so a smoke failure stops there.
+          script: >-
+            pwsh -NoProfile -File ./scripts/android-smoke.ps1
+            -Apk src/Scramble.Mobile.Android/bin/Release/net10.0-android/app.scramble.chat-Signed.apk
+            -ScreenshotPath android-smoke.png
+            && pwsh -NoProfile -File ./scripts/android-tap-alignment.ps1 -ArtifactDir .
 
       # On failure this is the fastest way to see what was on screen instead.
-      - name: Upload the screenshot
+      # On failure these are the whole story: android-smoke.png is what was on
+      # screen, and tap-before/after plus the two uiautomator dumps are the two
+      # coordinate spaces the alignment check compared.
+      - name: Upload the screenshots and UI dumps
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: android-smoke-screenshot
-          path: android-smoke.png
+          name: android-smoke-artifacts
+          path: |
+            android-smoke.png
+            tap-before.png
+            tap-after.png
+            ui-before.xml
+            ui-after.xml
           if-no-files-found: warn
