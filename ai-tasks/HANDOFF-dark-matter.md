@@ -121,9 +121,11 @@ gate steps that were passing *without running anything* are fixed.
 
 **What is left, none of it P11:**
 
-- **A smoke test that runs the Android head.** Still the only thing that lets I5's
-  freeze lift on evidence rather than by fiat. The head builds and CI builds it
-  (`dotnet-android.yml`); nothing has ever *started* it.
+- **The interaction half of the Android smoke test.** §3ap made the head *start*
+  under CI and proved it renders a real session — so "does it run at all" is
+  answered. I5's exit condition names a scripted create-group / send-message pass,
+  which startup does not cover; that is what is left before the freeze lifts on
+  evidence. The emulator, install and assertions already exist, so it is cheap.
 - **`remaining-work` §19** — `src/Scramble.Apple` is compiled by no gate at all.
   Either give it a `macos-latest` compile job or delete it as `Scramble.Native`
   was; it has now taken two edits that nothing verified.
@@ -2502,6 +2504,54 @@ app on hardware: what a real NIP-46 signer does with a `created_at` it did not
 choose, and with a kind granted only after pairing. Test doubles agree with our
 assumptions by construction. **The Android head was not compiled locally** — no
 Android SDK on this machine — so CI is the first build of it.
+
+### 3ap. The Android head runs — first time anyone has checked
+
+2026-09-22, commit `23b7d2d`. `dotnet-android.yml` proved the head *compiles*, and
+its own header said that was not enough. **Nothing had ever started it** — not CI,
+not this branch, not the pivot that created it in May. Avalonia-on-Android fails at
+startup, not at compile time.
+
+**It runs.** The first real launch renders the chat list with a device identity —
+`[Device] Android · 68ef4dbb online` — so storage, the Keystore-backed
+`ISecureStorage` and engine construction all come up. Not a splash screen.
+
+`scripts/android-smoke.ps1` asserts four things, and **each one is there because
+the obvious check was tried first and turned out to be worthless:**
+
+| Assertion | The check it replaced |
+|---|---|
+| the process is alive after a 30s settle | liveness at t+0 — the app starts, draws, and can be killed a second later |
+| our activity is the resumed one | nothing — a dead app leaves the *launcher* resumed, which is indistinguishable from a pass if you only ask whether the command succeeded |
+| no `FATAL EXCEPTION` | — |
+| **not killed by the lowmemorykiller** | nothing, and this is the one that matters |
+
+**The LMK case is not hypothetical, it is what happened.** On the default `Pixel_9`
+AVD (`hw.ramSize = 2048`) the app reached a **visible window** and was then killed:
+`lowmemorykiller: Kill 'app.scramble.chat' … reason: min watermark is breached and
+swap is low`. No exception. No failing command. A dead process and nothing to
+explain it — the app looked broken when the *emulator* was too small. The script
+names that case explicitly; CI boots with `-memory 6144`.
+
+**What is emphatically not the assertion: `am start -W`.** It printed `Status: ok`
+for a launch whose process was already dead, and `Status: timeout` for the run that
+actually worked — a Debug Mono build on a software renderer does not report a first
+frame inside `am`'s window. It is logged and never gated on. Also not a signal: the
+`monodroid-assembly: … failed to load bundled assembly` flood, which is normal for a
+Debug/FastDev build and reads like a catastrophe.
+
+**Mutation-checked.** Force-stopping the app during the settle window turns the run
+red, both liveness checks fire, and the launcher is named as what is on screen
+instead. That failing run's own log reads `am start said: Status: ok` — the
+argument for the whole design, in one line.
+
+#### I5 is not lifted by this, and the workflow header now says so
+
+I5's exit condition names **a scripted create-group / send-message pass**. Startup
+exercises storage and the Keystore; it does not exercise the protocol. What this
+closes is "does it run at all", which was the open question and is now answered with
+evidence rather than by fiat. The interaction pass is still owed — and it is now
+cheap, because the emulator, the install and the assertions already exist.
 
 ### 3ao. The follow-up sweep — and three gates that were passing without running
 

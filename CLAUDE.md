@@ -216,6 +216,15 @@ dotnet test tests/Scramble.Diagnostics/ --filter "Category=Integration|Category=
 $env:JAVA_HOME='C:\work\jdk'
 dotnet build src\Scramble.Mobile.Android\Scramble.Mobile.Android.csproj `
   -p:AndroidSdkDirectory='C:\work\android-sdk' -p:JavaSdkDirectory='C:\work\jdk'
+
+# Does the Android head actually RUN? Building it does not answer that --
+# Avalonia-on-Android fails at startup, not at compile time. Boot an emulator
+# first, then run the smoke test against it. -memory is not optional: at the
+# Pixel_9 default of 2048 MB the app reaches a visible window and is then killed
+# by the lowmemorykiller, which looks like a crash with no exception.
+& "$env:ANDROID_SDK_ROOT\emulator\emulator.exe" -avd Pixel_9 `
+  -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -memory 6144
+./scripts/android-smoke.ps1
 ```
 
 ## Documentation index

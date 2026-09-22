@@ -1128,3 +1128,36 @@ exactly the kind of claim §3ao spent a commit correcting.
 
 Pairs naturally with the Android smoke test that I5's freeze is waiting on:
 once a device or emulator is in the loop, both become checkable at once.
+
+---
+
+## 21. The Android smoke test needs its interaction half (2026-09-22)
+
+`23b7d2d` (handoff §3ap) gets the shipped head onto an emulator in CI and checks it
+starts, stays up, owns the screen, logs no fatal exception and is not killed for
+memory. That answers "does it run at all", which nobody had ever asked.
+
+**I5's freeze-exit condition asks for more than that:** "an equivalent smoke test
+green in CI", which the tracking note spells out as a scripted create-group /
+send-message pass. Startup exercises `StorageService`, the Keystore-backed
+`ISecureStorage` and `DarkMatterMlsServiceFactory.Create`. It does not exercise a
+single protocol path.
+
+**What to add**, in the same `smoke` job, after the existing assertions:
+
+1. Point the app at the ephemeral relay the integration gate already runs
+   (`docker-compose.test.yml`, `nostr-relay`) — on an emulator that is
+   `10.0.2.2:7777`, not `127.0.0.1`.
+2. Drive the UI with `adb shell input` / `uiautomator dump`, or expose a debug
+   intent on the head that creates a group and sends one message.
+3. Assert the message appears in the chat list, and that logcat carries no
+   `MlsIngestRefusedException`.
+
+Option 2 is the one to prefer. UI coordinate-driving is the flakiest thing in any
+Android suite, and a debug-only intent is both stabler and closer to what is
+actually being tested — that the engine works on the device, not that a button is
+at a particular pixel.
+
+**Cheap now.** The emulator boot, the KVM setup, the install, the screenshot
+artifact and the four startup assertions are all in place; this adds steps to a
+working job rather than building one.
