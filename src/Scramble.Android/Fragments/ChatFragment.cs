@@ -100,7 +100,7 @@ public class ChatFragment : Fragment
         var sendButton = view.FindViewById<FloatingActionButton>(Resource.Id.send_button)!;
         var uploadStatus = view.FindViewById<TextView>(Resource.Id.upload_status)!;
         var outOfSyncBanner = view.FindViewById<LinearLayout>(Resource.Id.out_of_sync_banner)!;
-        var resyncButton = view.FindViewById<Android.Widget.Button>(Resource.Id.resync_button)!;
+        var resyncButton = view.FindViewById<global::Android.Widget.Button>(Resource.Id.resync_button)!;
         var resyncPendingText = view.FindViewById<TextView>(Resource.Id.resync_pending_text)!;
         var recordingIndicator = view.FindViewById<LinearLayout>(Resource.Id.recording_indicator)!;
         var recordingDuration = view.FindViewById<TextView>(Resource.Id.recording_duration)!;

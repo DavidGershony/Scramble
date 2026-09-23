@@ -9,6 +9,7 @@ using Google.Android.Material.BottomNavigation;
 using Google.Android.Material.Dialog;
 using Scramble.Android.Fragments;
 using Scramble.Android.Services;
+using ReactiveUI.Builder;
 using Scramble.Core.Configuration;
 using Scramble.Core.Logging;
 using Scramble.Core.Services;
@@ -77,9 +78,28 @@ public class MainActivity : AppCompatActivity, IActivatableView
             ChatViewModel.AudioPlaybackService = audioPlayback;
             ChatViewModel.MediaUploadService = blossomUpload;
 
+            // ReactiveUI needs its platform registrations before ANY ViewModel is
+            // constructed. Without this the static initialiser of
+            // ReactiveNotifyPropertyChangedMixin throws the moment LoginViewModel's
+            // constructor calls WhenAnyValue, and the app dies on launch with a
+            // TypeInitializationException.
+            //
+            // It is needed now and was not before: ReactiveUI 23.x moved from
+            // assembly-scanning auto-registration to an explicit builder, and this
+            // head was frozen before that migration. The Avalonia heads get the
+            // equivalent for free from Avalonia's UseReactiveUI().
+            RxAppBuilder.CreateReactiveUIBuilder()
+                .WithAndroidX()
+                .BuildApp();
+
             // Create ShellViewModel (manages login → service creation → MainViewModel lifecycle)
             _shellViewModel = new ShellViewModel(nostrService, secureStorage, clipboard, qrCodeGenerator, launcher);
-            _shellViewModel.MlsServiceFactory = storage => new ManagedMlsService(storage);
+            // The Dark Matter engine, wired exactly as Scramble.Mobile.Android and
+            // Scramble.Desktop wire it. ManagedMlsService was one of the two legacy
+            // marmot-cs backends deleted in P11 step 5; the factory is now the single
+            // place that decides how the store is built, and it fails closed without
+            // an ISecureStorage rather than silently leaving MLS state unencrypted.
+            _shellViewModel.MlsServiceFactory = DarkMatterMlsServiceFactory.Create;
             _servicesInitialized = true;
         }
 

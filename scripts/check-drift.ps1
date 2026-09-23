@@ -3,9 +3,12 @@
 #
 # Rule L — legacy-Android drift protection.
 #   `src/Scramble.Android/**` is the obsolete Views/Fragments head (see
-#   `src/Scramble.Android/OBSOLETE.md`). It isn't shipped and isn't compiled
-#   by CI. Modifications there almost always indicate a contributor working
-#   on the wrong head. Fails a PR that touches any file under that path.
+#   `src/Scramble.Android/README.md`). NOTE (2026-09-23): that head was revived
+#   and now ships as Scramble-native-<version>.apk, built on every PR -- so the
+#   original rationale ("isn't shipped, isn't compiled by CI") no longer holds.
+#   The rule is kept until someone decides whether to retire it or repurpose it
+#   toward the live concern, which is feature drift between the two Android
+#   heads rather than "don't touch this one". See CLAUDE.md I1-L.
 #   Escape trailer: `Legacy-Android-Change: <reason>` (deletion of the folder,
 #   final cleanup work, etc.)
 #
@@ -98,7 +101,7 @@ if ($legacyHits.Count -gt 0) {
         Write-Host ""
         Write-Host "check-drift: RULE L VIOLATION — legacy Android touched" -ForegroundColor Red
         Write-Host ""
-        Write-Host "  src/Scramble.Android/** is obsolete (see src/Scramble.Android/OBSOLETE.md)." -ForegroundColor Yellow
+        Write-Host "  src/Scramble.Android/** is the native Android head (see src/Scramble.Android/README.md)." -ForegroundColor Yellow
         Write-Host "  You changed:" -ForegroundColor Yellow
         $legacyHits | ForEach-Object { Write-Host "    $_" }
         Write-Host ""

@@ -15,15 +15,19 @@ Shared logic lives in:
 
 **Any feature that touches the UI must be implemented in both `Scramble.Mobile.Android` and `Scramble.UI`.**
 
-### Abandoned: `src/Scramble.Android`
+### Revived: `src/Scramble.Android` (native Android head)
 
-`src/Scramble.Android` is a legacy native Android head (fragment-based, Android Views).
-It is **not** shipped: the publish workflow builds only `Scramble.Mobile.Android`, the
-desktop test suite excludes it, and the desktop CI workflow does not compile it. **Do
-not port new features into it.** Do not treat it as the "Android target" the parity
-rule above refers to.
+`src/Scramble.Android` is the **native** Android head — Android Views and Fragments in
+C#, driving the same `Scramble.Presentation` ViewModels and `Scramble.Core` services as
+every other head. Abandoned in the 2026-05-11 pivot; **revived 2026-09-23**, when it
+turned out to be three compile errors away from building against the Dark Matter engine.
 
-See `src/Scramble.Android/OBSOLETE.md` for the full deprecation notice.
+It now **ships**: built on every PR by `dotnet-android.yml`, released by `publish.yml`
+as `Scramble-native-<version>.apk` beside the Avalonia head's `Scramble-<version>.apk`.
+Both share ApplicationId `app.scramble.chat` and the release key, so one replaces the
+other in place and the profile survives.
+
+See `src/Scramble.Android/README.md`.
 
 ---
 
@@ -42,6 +46,14 @@ Two sub-rules, both enforced by `.github/workflows/drift.yml` running
 `src/Scramble.Android/**`.
 - **Escape:** `Legacy-Android-Change: <reason>` trailer on any commit in the
   range (for the rare intentional touch — folder removal, final cleanup).
+- **⚠ This rule's premise expired on 2026-09-23 and it needs a decision.** It
+  was written because that head "isn't shipped and isn't compiled by CI".
+  Both halves are now false: it ships as `Scramble-native-<version>.apk` and is
+  compiled on every PR. As written, every future commit to a shipped head needs
+  an escape trailer, which is backwards. Either retire I1-L, or repurpose it —
+  the still-live concern is not "don't touch it" but "don't let the two Android
+  heads drift apart in features". Until that is decided the rule stands as
+  written and the trailer is required.
 
 **I1-M (Mobile shell purity).** No PR may **add** a new `.axaml` file under
 `src/Scramble.Mobile.Android/**`. Modifications to existing view files
@@ -234,7 +246,8 @@ dotnet build src\Scramble.Mobile.Android\Scramble.Mobile.Android.csproj `
 - `docs/ci-setup.md` — branch-protection configuration for the required
   status checks.
 - `AGENTS.md` — agent-specific notes (unchanged).
-- `src/Scramble.Android/OBSOLETE.md` — legacy-head deprecation notice.
+- `src/Scramble.Android/README.md` — the native Android head: what it is,
+  why it came back, and what it still lacks.
 - `ai-tasks/remaining-work-2026-09.md` — what is left on the Dark Matter
   migration, in dependency order.
 - `ai-tasks/` — per-feature planning docs. Completed ones under

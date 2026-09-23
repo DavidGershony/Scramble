@@ -45,3 +45,7 @@ nul
 # Test runner output
 TestResults/
 *.trx
+
+# Local publish output (APKs, self-contained desktop builds). CI publishes to
+# its own workspace; nothing here belongs in git.
+/publish/

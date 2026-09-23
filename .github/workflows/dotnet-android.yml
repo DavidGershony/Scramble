@@ -81,6 +81,18 @@ jobs:
           dotnet build src/Scramble.Mobile.Android/Scramble.Mobile.Android.csproj
           --no-restore --configuration Debug
 
+      # The native head ships too, from the same tag, so it gets the same
+      # compile gate. It spent two months abandoned and drifted exactly three
+      # compile errors behind the engine cutover before anyone looked; the
+      # errors were one-liners, but nothing was watching. This is what watches.
+      - name: Restore native Android head
+        run: dotnet restore src/Scramble.Android/Scramble.Android.csproj
+
+      - name: Build native Android head
+        run: >
+          dotnet build src/Scramble.Android/Scramble.Android.csproj
+          --no-restore --configuration Debug
+
   smoke:
 
     name: Android smoke (emulator)

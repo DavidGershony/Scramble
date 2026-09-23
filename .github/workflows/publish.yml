@@ -216,6 +216,66 @@ jobs:
               grep -E "Alias|SHA|Owner|Issuer|Valid" || true
           fi
 
+      # ── the native head ──────────────────────────────────────────────────
+      # Both Android heads ship from the same tag. They share an ApplicationId
+      # (app.scramble.chat) and are signed with the same key, so installing one
+      # over the other is an in-place reinstall that keeps the profile database
+      # -- the point being that you can switch UI without losing your account.
+      # They cannot be installed side by side for the same reason.
+      #
+      # Obtainium picks between them by asset name: Scramble-<v>.apk is the
+      # Avalonia head, Scramble-native-<v>.apk is this one.
+      - name: Build native Android APK
+        env:
+          ANDROID_SIGNING_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: >
+          dotnet publish src/Scramble.Android/Scramble.Android.csproj
+          --configuration Release
+          --framework net10.0-android
+          -p:ApplicationDisplayVersion=${{ steps.version.outputs.VERSION }}
+          -p:ApplicationVersion=${{ steps.version.outputs.VERSION_CODE }}
+          -p:AndroidSigningKeyStore=${{ github.workspace }}/scramble-release.keystore
+          -p:AndroidSigningKeyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          -p:AndroidSigningKeyPass=env:ANDROID_SIGNING_PASSWORD
+          -p:AndroidSigningStorePass=env:ANDROID_SIGNING_PASSWORD
+          -p:AndroidUseApkSigner=true
+          -p:AndroidPackageFormat=apk
+          --output ./publish/android-native
+
+      - name: Find and rename native APK
+        id: apk_native
+        run: |
+          # Same explicit signed-APK selection as the Avalonia head above: publish
+          # emits both `<id>.apk` and `<id>-Signed.apk`, and picking the unsigned
+          # one ships something that will not install (this happened in v0.6.49).
+          APK=$(find ./publish/android-native -name '*-Signed.apk' | head -1)
+          if [ -z "$APK" ]; then
+            echo "ERROR: No signed native APK (*-Signed.apk) found." >&2
+            ls -la ./publish/android-native >&2
+            exit 1
+          fi
+          echo "Using signed native APK: $APK"
+          VERSIONED_NAME="Scramble-native-${{ steps.version.outputs.VERSION }}.apk"
+          mv "$APK" "./publish/android-native/$VERSIONED_NAME"
+          echo "APK_PATH=./publish/android-native/$VERSIONED_NAME" >> "$GITHUB_OUTPUT"
+          echo "APK_NAME=$VERSIONED_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Verify native APK signing certificate
+        run: |
+          APK="${{ steps.apk_native.outputs.APK_PATH }}"
+          APKSIGNER=$(find /usr/local/lib/android/sdk/build-tools -name apksigner 2>/dev/null | sort -V | tail -1)
+          if [ -n "$APKSIGNER" ]; then
+            "$APKSIGNER" verify --print-certs "$APK"
+          else
+            echo "apksigner not found; skipping native APK certificate print" >&2
+          fi
+
+      - name: Upload native Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apk_native.outputs.APK_NAME }}
+          path: ${{ steps.apk_native.outputs.APK_PATH }}
+
       - name: Upload Android artifact
         uses: actions/upload-artifact@v4
         with:
