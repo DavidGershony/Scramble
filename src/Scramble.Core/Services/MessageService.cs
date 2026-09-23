@@ -1219,14 +1219,7 @@ public class MessageService : IMessageService, IDisposable
         if (chat.MlsGroupId == null)
             throw new InvalidOperationException("Cannot add member to non-MLS chat");
 
-        // Admin enforcement: only admins can add members.
-        // Empty admin list (legacy groups) allows any member to add — preserves backward compat.
-        var adminPubkeys = _mlsService.GetAdminPubkeys(chat.MlsGroupId);
-        if (adminPubkeys.Count > 0 &&
-            !adminPubkeys.Contains(_currentUser.PublicKeyHex.ToLowerInvariant()))
-        {
-            throw new InvalidOperationException("Only group admins can add members");
-        }
+        RequireLocalAdmin(chat, "add members");
 
         var groupIdHex = Convert.ToHexString(chat.MlsGroupId).ToLowerInvariant();
 
@@ -1591,14 +1584,7 @@ public class MessageService : IMessageService, IDisposable
         if (chat.MlsGroupId == null)
             throw new InvalidOperationException("Cannot remove member from non-MLS chat");
 
-        // Admin enforcement: only admins can remove members.
-        // Empty admin list (legacy groups) allows any member to remove — preserves backward compat.
-        var adminPubkeys = _mlsService.GetAdminPubkeys(chat.MlsGroupId);
-        if (adminPubkeys.Count > 0 &&
-            !adminPubkeys.Contains(_currentUser.PublicKeyHex.ToLowerInvariant()))
-        {
-            throw new InvalidOperationException("Only group admins can remove members");
-        }
+        RequireLocalAdmin(chat, "remove members");
 
         // MIP-03 §"Commit Message Race Conditions" — stage, publish, merge
         var commitData = await _mlsService.StageRemoveMemberAsync(chat.MlsGroupId, memberPublicKey);
@@ -1635,6 +1621,56 @@ public class MessageService : IMessageService, IDisposable
         }
     }
 
+
+    /// <summary>
+    /// Refuses a governance operation unless we are a listed admin of this group.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Fails closed, and that is a change.</b> The three call sites this replaces
+    /// each read <c>adminPubkeys.Count &gt; 0 &amp;&amp; !contains</c>, so an empty list
+    /// meant "anyone may". The justification was backward compatibility with legacy
+    /// groups — and legacy groups no longer exist: marmot-cs was deleted in P11 step 5,
+    /// the cutover abandoned its group state by decision, and every Dark Matter group
+    /// carries app-component 0x8003 from creation because
+    /// <c>AdminPolicy.Create</c> refuses an empty set.
+    /// </para>
+    /// <para>
+    /// So an empty read is no longer "an old group with no policy". It is "we could not
+    /// determine the policy" — a decode that failed, a session that is not open, a
+    /// component that is missing — and the safe answer to an unknown authority is no.
+    /// </para>
+    /// <para>
+    /// <b>What went wrong while it failed open.</b> Our peers already refuse an
+    /// unauthorised commit: <c>CommitAdmission.Require</c> runs before
+    /// <c>ProcessCommit</c> on every inbound handshake. We do not run it on our own
+    /// commits, so a member who slipped through this gate would stage, publish, see the
+    /// relay's OK and merge locally — while every peer dropped it. That is a
+    /// self-inflicted fork, and the only thing standing between a bad read and it is
+    /// this check.
+    /// </para>
+    /// <para>
+    /// This is the app layer's own gate and deliberately not a second copy of the
+    /// engine's rules: it answers "are we listed", nothing more. The engine remains the
+    /// authority on what a listed admin may actually commit.
+    /// </para>
+    /// </remarks>
+    private void RequireLocalAdmin(Chat chat, string operation)
+    {
+        var admins = _mlsService.GetAdminPubkeys(chat.MlsGroupId!);
+        if (admins.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"Cannot {operation}: the group's admin policy could not be read. Refusing rather "
+                + "than assuming permission — a commit our peers reject would fork this group.");
+        }
+
+        if (!admins.Contains(_currentUser!.PublicKeyHex.ToLowerInvariant()))
+        {
+            throw new InvalidOperationException($"Only group admins can {operation}");
+        }
+    }
+
     public async Task UpdateAdminPubkeysAsync(string chatId, List<string> adminPubkeysHex)
     {
         if (_currentUser == null)
@@ -1646,14 +1682,7 @@ public class MessageService : IMessageService, IDisposable
         if (chat.MlsGroupId == null)
             throw new InvalidOperationException("Cannot update admins for non-MLS chat");
 
-        // Only current admins can change the admin list.
-        // Empty admin list (legacy groups) allows any member — preserves backward compat.
-        var currentAdmins = _mlsService.GetAdminPubkeys(chat.MlsGroupId);
-        if (currentAdmins.Count > 0 &&
-            !currentAdmins.Contains(_currentUser.PublicKeyHex.ToLowerInvariant()))
-        {
-            throw new InvalidOperationException("Only group admins can update the admin list");
-        }
+        RequireLocalAdmin(chat, "update the admin list");
 
         // Normalize to lowercase
         var normalized = adminPubkeysHex.Select(pk => pk.ToLowerInvariant()).Distinct().ToList();
@@ -2621,12 +2650,19 @@ public class MessageService : IMessageService, IDisposable
             _logger.LogInformation("HandleGroupMessage: processed commit for group {GroupId}, epoch advanced",
                 groupIdHex[..Math.Min(16, groupIdHex.Length)]);
 
-            // Refresh admin list from MLS state — the commit may have included a
-            // GroupContextExtensions proposal that changed AdminPubkeys in the 0xF2EE extension.
+            // Refresh the admin list from MLS state — the commit may have carried an
+            // AppDataUpdate that rewrote app-component 0x8003, the admin policy.
+            //
+            // The `Count > 0` guard that used to be here meant a list could never be
+            // cleared: once populated it stayed, whatever the engine said afterwards.
+            // Combined with a UI that read "empty" as "everyone is admin", a stale
+            // non-empty list was the only thing keeping the UI honest, which is a bad
+            // thing to depend on. Both halves now fail closed, so an empty read is
+            // written through and denies.
             try
             {
                 var updatedAdmins = _mlsService.GetAdminPubkeys(chat.MlsGroupId!);
-                if (updatedAdmins.Count > 0 && !updatedAdmins.SequenceEqual(chat.AdminPublicKeys))
+                if (!updatedAdmins.SequenceEqual(chat.AdminPublicKeys))
                 {
                     _logger.LogInformation("HandleGroupMessage: admin list updated for group {GroupId}: [{Admins}]",
                         groupIdHex[..Math.Min(16, groupIdHex.Length)],

@@ -278,7 +278,13 @@ public sealed class BufferedReplayWiringTests : IDisposable
             .ReturnsAsync((string id) => _saved.Any(m => m.NostrEventId == id));
 
         _mls.Setup(m => m.InitializeAsync(It.IsAny<string>(), It.IsAny<string>())).Returns(Task.CompletedTask);
-        _mls.Setup(m => m.GetAdminPubkeys(It.IsAny<byte[]>())).Returns(new List<string>());
+        // This user IS an admin. The subject of these tests is rollback/replay
+        // behaviour, not authority, and an empty list now denies rather than permits
+        // -- MessageService.RequireLocalAdmin fails closed, because an empty read
+        // means "policy unreadable", not "no policy". Mocking empty here made these
+        // tests exercise a governance operation no peer would have accepted.
+        _mls.Setup(m => m.GetAdminPubkeys(It.IsAny<byte[]>()))
+            .Returns(new List<string> { new string('a', 64) });
         _mls.Setup(m => m.HasPendingCommit(It.IsAny<byte[]>())).Returns(() => _commitPending);
         _mls.Setup(m => m.StageRemoveMemberAsync(It.IsAny<byte[]>(), It.IsAny<string>()))
             .Callback(() => _commitPending = true)

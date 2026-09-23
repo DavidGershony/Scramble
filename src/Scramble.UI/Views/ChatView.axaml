@@ -535,13 +535,23 @@
                                                     </Button>
                                                 </StackPanel>
                                             </StackPanel>
-                                            <!-- Admin toggle (visible to admins, not on self) -->
+                                            <!-- Admin toggle: visible to admins, and never on yourself.
+                                                 The second half used to be the only half. The binding
+                                                 was !IsCurrentUser alone, so every member saw
+                                                 "Make Admin" beside every other member, and tapping it
+                                                 did nothing at all, silently, because
+                                                 ToggleAdminCommand returns early for non-admins. -->
                                             <Button Grid.Column="2" Classes="secondary"
                                                     Padding="8,4" FontSize="11"
                                                     VerticalAlignment="Center"
-                                                    IsVisible="{Binding !IsCurrentUser}"
                                                     Command="{Binding $parent[ItemsControl].DataContext.ToggleAdminCommand}"
                                                     CommandParameter="{Binding}">
+                                                <Button.IsVisible>
+                                                    <MultiBinding Converter="{x:Static BoolConverters.And}">
+                                                        <Binding Path="!IsCurrentUser" />
+                                                        <Binding Path="$parent[ItemsControl].DataContext.IsCurrentUserAdmin" />
+                                                    </MultiBinding>
+                                                </Button.IsVisible>
                                                 <Panel>
                                                     <TextBlock Text="Make Admin"
                                                                IsVisible="{Binding !IsAdmin}" />

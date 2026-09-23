@@ -482,10 +482,16 @@ public partial class ChatViewModel : ViewModelBase
         IsOutOfSync = chat.IsOutOfSync;
         IsResyncPending = chat.IsResyncPending;
         ParticipantCount = chat.ParticipantPublicKeys.Count;
-        // Admin check: if admin list exists, check membership; if empty (legacy group), allow all
+        // Fails closed: an empty admin list denies, it does not permit.
+        //
+        // This read "if empty (legacy group), allow all". Legacy groups are gone with
+        // marmot-cs, and every Dark Matter group carries app-component 0x8003 from
+        // creation, so an empty list here means the policy could not be read rather
+        // than that there isn't one. Permitting on an unknown authority offered
+        // governance actions the engine would refuse — and the engine refusing them
+        // AFTER we published is what forks a group.
         IsCurrentUserAdmin = IsGroup && _currentUserPublicKeyHex != null &&
-            (chat.AdminPublicKeys.Count == 0 ||
-             chat.AdminPublicKeys.Contains(_currentUserPublicKeyHex.ToLowerInvariant()));
+            chat.AdminPublicKeys.Contains(_currentUserPublicKeyHex.ToLowerInvariant());
         EditGroupName = chat.Name;
         GroupMembers.Clear();
         HasChat = true;

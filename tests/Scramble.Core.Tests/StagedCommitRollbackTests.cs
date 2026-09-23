@@ -74,9 +74,13 @@ public class StagedCommitRollbackTests : IDisposable
         _storageMock.Setup(s => s.SaveSettingAsync(It.IsAny<string>(), It.IsAny<string>())).Returns(Task.CompletedTask);
 
         _mlsMock.Setup(m => m.InitializeAsync(It.IsAny<string>(), It.IsAny<string>())).Returns(Task.CompletedTask);
-        // Empty admin list: legacy groups let any member act, so the admin gate is not what
-        // these tests are exercising.
-        _mlsMock.Setup(m => m.GetAdminPubkeys(It.IsAny<byte[]>())).Returns(new List<string>());
+        // This user IS an admin. The subject of these tests is rollback/replay
+        // behaviour, not authority, and an empty list now denies rather than permits
+        // -- MessageService.RequireLocalAdmin fails closed, because an empty read
+        // means "policy unreadable", not "no policy". Mocking empty here made these
+        // tests exercise a governance operation no peer would have accepted.
+        _mlsMock.Setup(m => m.GetAdminPubkeys(It.IsAny<byte[]>()))
+            .Returns(new List<string> { new string('a', 64) });
         _mlsMock.Setup(m => m.GetNostrGroupId(It.IsAny<byte[]>())).Returns(GroupId);
 
         _mlsMock.Setup(m => m.HasPendingCommit(It.IsAny<byte[]>())).Returns(() => _commitPending);
