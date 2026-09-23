@@ -131,7 +131,21 @@ jobs:
       - name: Start emulator and run the smoke test
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
+          # 36, matching the app's targetSdk, and the choice is load-bearing
+          # rather than housekeeping.
+          #
+          # Android enforces edge-to-edge only for apps targeting SDK 35+, and
+          # that enforcement is what makes systemBars.Top non-zero -- which is
+          # the entire precondition for the v0.7.0 defect that
+          # android-tap-alignment.ps1 exists to catch. On API 34 the window is
+          # already laid out below the status bar, the safe-area inset is 0, and
+          # the defect cannot occur. Measured, not assumed: on the API 34 runner
+          # the login tab strip sits at y=248, and on an API 37 device at the
+          # same 320x640/160dpi it sits at y=274 -- 26px lower, which is the
+          # status-bar height that API 34 never hands the app.
+          #
+          # So the alignment guard was running where there was nothing to align.
+          api-level: 36
           target: google_apis
           arch: x86_64
           # -memory is not a tuning knob here. At the Pixel_9 AVD's default of
