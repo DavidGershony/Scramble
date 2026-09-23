@@ -1139,7 +1139,7 @@ once a device or emulator is in the loop, both become checkable at once.
 
 ---
 
-## 21. The Android smoke test needs its interaction half (2026-09-22)
+## 21. The Android smoke test needs its interaction half — DONE 2026-09-23
 
 `23b7d2d` (handoff §3ap) gets the shipped head onto an emulator in CI and checks it
 starts, stays up, owns the screen, logs no fatal exception and is not killed for
@@ -1169,3 +1169,43 @@ at a particular pixel.
 **Cheap now.** The emulator boot, the KVM setup, the install, the screenshot
 artifact and the four startup assertions are all in place; this adds steps to a
 working job rather than building one.
+
+---
+
+**Done (2026-09-23), and by the UI rather than a debug intent.** The
+recommendation above was to expose a debug-only intent because
+coordinate-driving is the flakiest thing in an Android suite. That turned out
+not to be the trade-off on offer: Avalonia exposes its full visual tree to
+`uiautomator`, so `scripts/android-message-flow.ps1` addresses every control by
+**role** -- the tab strip is "three Buttons sharing a top edge", the chat row is
+"the first `ListBoxItem`", the send button is "the Button to the right of the
+message TextBox". No coordinate is written down; they are read from the tree at
+the moment of use. That is not coordinate-driving and it needs no production
+code added for testing.
+
+What it exercises on the device: a keypair generated and stored through the
+Keystore-backed `ISecureStorage`; `DarkMatterMlsServiceFactory.Create`, which
+**fails closed** without that storage, so reaching a chat list at all proves the
+real thing was wired; and an MLS group with a message encrypted, persisted and
+rendered back. It also fails if the engine logs an ingest refusal.
+
+**Three faults it surfaced while being written**, each invisible at one screen
+size or the other:
+
+1. Bounds captured before typing put the send tap into the keyboard -- the
+   message sits unsent while nothing reports an error. Every step re-reads
+   after the state changes.
+2. A control below the fold reports bounds **clipped** to the display, so
+   `bottom <= screenHeight` calls it visible, taps the edge and hits nothing.
+   At 320x640 the identity card overflows and "Continue" is off-screen; at
+   1080x2424 it fits and the fault cannot be seen. Visibility now requires the
+   control to be strictly inside, and scrolls when it is not.
+3. Injected taps get lost. A tap followed by a wait reports the *destination*
+   as missing rather than the tap as dropped. Each step now confirms its own
+   effect and re-taps up to three times.
+
+Verified twice at 320x640/160dpi (CI's screen) and at 1080x2424/420dpi.
+
+**I5 is not lifted by this alone.** The invariant asks for the smoke test green
+in CI *plus one week of stabilisation*. The first half is now met on evidence;
+the week is a calendar fact, not a test result.

@@ -158,17 +158,24 @@ jobs:
             -no-window -no-audio -no-boot-anim -no-snapshot
             -gpu swiftshader_indirect -memory 6144
           disable-animations: true
-          # Two checks, and the second exists because the first is not enough.
-          # android-smoke proves the app starts and stays up; it passed v0.7.0
-          # twice, a build in which every control responded to taps ~8.6mm above
-          # where it drew. Starting was never the property in question.
-          # android-tap-alignment taps a control and measures whether the redraw
-          # lands where the touch did. `&&` so a smoke failure stops there.
+          # Three checks, each answering what the one before it cannot.
+          #
+          #   android-smoke          does it start and stay up?
+          #   android-tap-alignment  does it react where it draws?
+          #   android-message-flow   does the engine work on a device?
+          #
+          # The first passed v0.7.0 twice -- a build in which every control
+          # responded to taps ~8.6mm above where it drew -- because starting was
+          # never the property in question. The second catches that, and touches
+          # no protocol path. The third creates an identity, opens a chat and
+          # sends a message, which is I5's freeze-exit condition.
+          # `&&` so the first failure stops the chain.
           script: >-
             pwsh -NoProfile -File ./scripts/android-smoke.ps1
             -Apk src/Scramble.Mobile.Android/bin/Release/net10.0-android/app.scramble.chat-Signed.apk
             -ScreenshotPath android-smoke.png
             && pwsh -NoProfile -File ./scripts/android-tap-alignment.ps1 -ArtifactDir .
+            && pwsh -NoProfile -File ./scripts/android-message-flow.ps1 -ArtifactDir .
 
       # On failure this is the fastest way to see what was on screen instead.
       # On failure these are the whole story: android-smoke.png is what was on
@@ -185,4 +192,6 @@ jobs:
             tap-after.png
             ui-before.xml
             ui-after.xml
+            flow-*.png
+            flow-*.xml
           if-no-files-found: warn
