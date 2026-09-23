@@ -19,7 +19,14 @@ public class AndroidSecureStorage : ISecureStorage
     private const int GcmIvLength = 12;
     private const int GcmTagLength = 128; // bits
 
-    private static readonly byte[] MagicPrefix = { 0xEE, 0xCC, 0x01, 0x00 };
+    // One definition, in Scramble.Core. This head kept a private copy while it was
+    // abandoned -- it was deliberately excluded from the consolidation in 8c596ae
+    // because I1-L forbade touching it and nothing compiled it. It ships again now,
+    // so the copy is a live hazard rather than dead weight: these four bytes are how
+    // Unprotect decides whether a value was ever protected, and the two Android heads
+    // share one profile database. A copy that drifted would make this head read the
+    // other's protected values as legacy plaintext and hand ciphertext back as data.
+    private static readonly byte[] MagicPrefix = SecureStorageFormat.MagicPrefix;
     private readonly ILogger<AndroidSecureStorage> _logger;
 
     public AndroidSecureStorage()
