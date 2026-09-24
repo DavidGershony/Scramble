@@ -76,6 +76,7 @@ public class SettingsFragment : Fragment
         var mip04Toggle = view.FindViewById<MaterialSwitch>(Resource.Id.mip04_toggle)!;
         var mip04Warning = view.FindViewById<TextView>(Resource.Id.mip04_dependency_warning)!;
         var blossomInput = view.FindViewById<TextInputEditText>(Resource.Id.blossom_server_input)!;
+        var blossomStatus = view.FindViewById<TextView>(Resource.Id.blossom_status)!;
 
         // Notification views
         var notifModeGroup = view.FindViewById<RadioGroup>(Resource.Id.notification_mode_group)!;
@@ -223,11 +224,26 @@ public class SettingsFragment : Fragment
         };
 
         // Blossom server URL — domain only, backend adds https://
+        //
+        // Assigning the property is NOT enough, and that was the bug: the only code
+        // that persists blossom_server_url and pushes the new URL into the live
+        // BlossomUploadService is SaveBlossomAsync, behind SaveBlossomCommand. Nothing
+        // in this head invoked it, so the field accepted a server, held it until the
+        // screen was left, and discarded it — uploads kept going to the default while
+        // the UI showed the server the user had chosen.
         blossomInput.Text = ViewModel.BlossomServerDomain;
         blossomInput.FocusChange += (s, e) =>
         {
-            if (!e.HasFocus && !string.IsNullOrWhiteSpace(blossomInput.Text))
-                ViewModel.BlossomServerDomain = blossomInput.Text!.Trim();
+            if (!e.HasFocus)
+                SaveBlossomServer(blossomInput);
+        };
+        // Done on the keyboard drops focus, which runs the save above. Routing it
+        // through focus rather than saving here keeps one save path, not two.
+        blossomInput.EditorAction += (s, e) =>
+        {
+            e.Handled = false;
+            if (e.ActionId == global::Android.Views.InputMethods.ImeAction.Done)
+                blossomInput.ClearFocus();
         };
 
         // Notification mode switching
@@ -432,6 +448,25 @@ public class SettingsFragment : Fragment
             })
             .DisposeWith(_disposables);
 
+        ViewModel.WhenAnyValue(x => x.BlossomStatus)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(status =>
+            {
+                blossomStatus.Text = status ?? "";
+                blossomStatus.Visibility = string.IsNullOrEmpty(status) ? ViewStates.Gone : ViewStates.Visible;
+            })
+            .DisposeWith(_disposables);
+
+        ViewModel.WhenAnyValue(x => x.BlossomStatusIsError)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(isError =>
+            {
+                blossomStatus.SetTextColor(isError
+                    ? global::Android.Graphics.Color.ParseColor("#FFEF4444")
+                    : global::Android.Graphics.Color.ParseColor("#FF10B981"));
+            })
+            .DisposeWith(_disposables);
+
         // Notification settings sync
         ViewModel.WhenAnyValue(x => x.NotificationServerNpub)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
@@ -578,6 +613,35 @@ public class SettingsFragment : Fragment
             })!
             .SetNegativeButton("Cancel", (s, e) => { })!
             .Show();
+    }
+
+    /// <summary>
+    /// Pushes the typed Blossom domain through <c>SaveBlossomCommand</c>.
+    /// </summary>
+    /// <remarks>
+    /// Assigning <c>BlossomServerDomain</c> alone changes nothing that outlives the
+    /// screen. The command is what validates the domain, writes
+    /// <c>blossom_server_url</c>, and updates the live upload service; the property is
+    /// only the text box's backing field.
+    /// </remarks>
+    private void SaveBlossomServer(TextInputEditText input)
+    {
+        var typed = input.Text?.Trim();
+
+        // Empty is not a request to save an empty server -- it is a user who cleared the
+        // box or never touched it. Put the stored value back rather than trying to
+        // validate nothing and showing "Invalid domain" at someone who typed nothing.
+        if (string.IsNullOrWhiteSpace(typed))
+        {
+            input.Text = ViewModel.BlossomServerDomain;
+            return;
+        }
+
+        if (string.Equals(typed, ViewModel.BlossomServerDomain, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        ViewModel.BlossomServerDomain = typed;
+        ViewModel.SaveBlossomCommand.Execute().Subscribe().DisposeWith(_disposables);
     }
 
     private void ShowLogViewerDialog()

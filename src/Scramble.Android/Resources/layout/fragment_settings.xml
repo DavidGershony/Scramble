@@ -380,16 +380,28 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="4dp"
-                        android:hint="https://blossom.nostr.build">
+                        android:hint="blossom.primal.net">
 
                         <com.google.android.material.textfield.TextInputEditText
                             android:id="@+id/blossom_server_input"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:inputType="textUri"
+                            android:imeOptions="actionDone"
                             android:fontFamily="monospace"
                             android:textSize="13sp" />
                     </com.google.android.material.textfield.TextInputLayout>
+
+                    <!-- Without this the save is silent in both directions: a valid
+                         domain gave no confirmation and a rejected one gave no reason,
+                         which is what let a field that never saved at all look fine. -->
+                    <TextView
+                        android:id="@+id/blossom_status"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textSize="12sp"
+                        android:layout_marginTop="2dp"
+                        android:visibility="gone" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
