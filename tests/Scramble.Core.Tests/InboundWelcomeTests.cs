@@ -45,6 +45,7 @@ public class InboundWelcomeTests : IDisposable
     private readonly Mock<IMlsService> _mlsMock = new();
     private readonly Subject<NostrEventReceived> _events = new();
     private readonly MessageService _sut;
+    private readonly List<PendingInvite> _inviteStore = new();
 
     /// <summary>A KeyPackage event id: 32 bytes of hex, as a relay carries it.</summary>
     private const string KeyPackageEventId =
@@ -70,7 +71,6 @@ public class InboundWelcomeTests : IDisposable
             CreatedAt = DateTime.UtcNow
         });
         _storageMock.Setup(s => s.GetAllChatsAsync()).ReturnsAsync(new List<Chat>());
-        _storageMock.Setup(s => s.GetPendingInvitesAsync()).ReturnsAsync(new List<PendingInvite>());
         _storageMock.Setup(s => s.IsWelcomeEventDismissedAsync(It.IsAny<string>())).ReturnsAsync(false);
         _storageMock.Setup(s => s.SavePendingInviteAsync(It.IsAny<PendingInvite>())).Returns(Task.CompletedTask);
         _storageMock.Setup(s => s.DismissWelcomeEventAsync(It.IsAny<string>())).Returns(Task.CompletedTask);
@@ -79,6 +79,23 @@ public class InboundWelcomeTests : IDisposable
         // Key material is present: what is under test is the rumor's shape, not
         // whether this device can open the Welcome.
         _mlsMock.Setup(m => m.CanProcessWelcomeAsync(It.IsAny<byte[]>())).ReturnsAsync(true);
+
+
+        // A pending-invite store that behaves like the real table rather than a stub.
+        // PendingInvites has a UNIQUE index on NostrEventId and the insert is
+        // INSERT OR IGNORE, so re-saving a welcome we already hold keeps the FIRST row
+        // and silently discards the newly minted Id. Code that saves and then reads
+        // back needs a double that does the same; an always-empty read is what let
+        // "Invite not found" reach a user's phone.
+        _storageMock.Setup(s => s.GetPendingInvitesAsync())
+            .ReturnsAsync(() => _inviteStore.ToList());
+        _storageMock.Setup(s => s.SavePendingInviteAsync(It.IsAny<PendingInvite>()))
+            .Callback<PendingInvite>(i =>
+            {
+                if (!_inviteStore.Any(e => e.NostrEventId == i.NostrEventId))
+                    _inviteStore.Add(i);
+            })
+            .Returns(Task.CompletedTask);
 
         _sut = new MessageService(_storageMock.Object, _nostrMock.Object, _mlsMock.Object);
     }
@@ -224,5 +241,75 @@ public class InboundWelcomeTests : IDisposable
         await DeliverAsync(Welcome(new List<string> { "e", KeyPackageEventId }));
 
         _storageMock.Verify(s => s.SavePendingInviteAsync(It.IsAny<PendingInvite>()), Times.Never);
+    }
+
+    // ------------------------------------------ re-delivery keeps one identity
+
+    /// <summary>
+    /// The same welcome arriving twice must surface the invite that is actually in
+    /// storage, not a second one with an id that exists nowhere.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Reported from a device on 2026-09-24: tapping Accept logged
+    /// <c>ArgumentException: Invite not found</c> from
+    /// <c>MessageService.AcceptInviteAsync</c>, one millisecond after the tap.
+    /// </para>
+    /// <para>
+    /// <b>The mechanism.</b> Every inbound welcome mints a fresh
+    /// <c>Guid.NewGuid()</c> for the invite. <c>PendingInvites</c> has a UNIQUE index
+    /// on <c>NostrEventId</c> and the insert is <c>INSERT OR IGNORE</c>, so the second
+    /// delivery of a welcome we already hold writes nothing and the row keeps its
+    /// ORIGINAL id — while the code went on to publish the in-memory object, whose id
+    /// had just been discarded. <c>AcceptInviteAsync</c> then looked that id up in
+    /// storage and found nothing.
+    /// </para>
+    /// <para>
+    /// Re-delivery is not exotic: the same welcome legitimately arrives from every
+    /// relay the inviter published it to, which is why
+    /// <c>ChatListViewModel.OnNewInvite</c> deduplicates on <c>NostrEventId</c>. That
+    /// dedup only helps while the list still holds the event, so the failure surfaced
+    /// after a refresh or on a cold start.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task TheSameWelcomeTwiceSurfacesTheStoredInviteNotASecondId()
+    {
+        var welcome = Welcome(
+            new() { "e", KeyPackageEventId },
+            new() { "relays", "wss://peer.example.com" });
+
+        // Both copies must be in flight at once. A sequential re-delivery is caught by
+        // the duplicate check on NostrEventId and returns before minting anything, so
+        // it cannot reach this bug -- the window is the await on the sender's profile,
+        // which sits BETWEEN that check and the insert. Two relays delivering the same
+        // welcome land in exactly that gap: both see no stored row, both mint an id,
+        // the first insert wins and the second is silently ignored by INSERT OR IGNORE.
+        var gate = new TaskCompletionSource();
+        _nostrMock.Setup(n => n.FetchUserMetadataAsync(It.IsAny<string>()))
+            .Returns(async () => { await gate.Task; return (UserMetadata?)null; });
+
+        var surfaced = new List<PendingInvite>();
+        using var sub = _sut.NewInvites.Subscribe(surfaced.Add);
+
+        await _sut.InitializeAsync();
+        _events.OnNext(welcome);
+        _events.OnNext(welcome);
+        await Task.Delay(100);       // both past the duplicate check, both waiting
+        gate.SetResult();            // release them into the insert together
+        await Task.Delay(400);
+
+        Assert.NotEmpty(surfaced);
+
+        // Whatever reached the UI must be acceptable, which means present in storage.
+        var stored = (await _storageMock.Object.GetPendingInvitesAsync()).ToList();
+        foreach (var invite in surfaced)
+        {
+            Assert.Contains(stored, i => i.Id == invite.Id);
+        }
+
+        // And re-delivery must not invent a second identity for one welcome.
+        Assert.Single(stored);
+        Assert.Single(surfaced.Select(i => i.Id).Distinct());
     }
 }

@@ -14,6 +14,7 @@ public class MessageServiceTests : IDisposable
     private readonly Mock<IMlsService> _mlsMock;
     private readonly Subject<NostrEventReceived> _eventsSubject;
     private readonly MessageService _sut;
+    private readonly List<PendingInvite> _inviteStore = new();
 
     private readonly User _currentUser = new()
     {
@@ -48,6 +49,23 @@ public class MessageServiceTests : IDisposable
         _mlsMock.Setup(m => m.GetAdminPubkeys(It.IsAny<byte[]>())).Returns(new List<string>());
         // Default: key material is available so welcome events are processed normally
         _mlsMock.Setup(m => m.CanProcessWelcomeAsync(It.IsAny<byte[]>())).ReturnsAsync(true);
+
+
+        // A pending-invite store that behaves like the real table rather than a stub.
+        // PendingInvites has a UNIQUE index on NostrEventId and the insert is
+        // INSERT OR IGNORE, so re-saving a welcome we already hold keeps the FIRST row
+        // and silently discards the newly minted Id. Code that saves and then reads
+        // back needs a double that does the same; an always-empty read is what let
+        // "Invite not found" reach a user's phone.
+        _storageMock.Setup(s => s.GetPendingInvitesAsync())
+            .ReturnsAsync(() => _inviteStore.ToList());
+        _storageMock.Setup(s => s.SavePendingInviteAsync(It.IsAny<PendingInvite>()))
+            .Callback<PendingInvite>(i =>
+            {
+                if (!_inviteStore.Any(e => e.NostrEventId == i.NostrEventId))
+                    _inviteStore.Add(i);
+            })
+            .Returns(Task.CompletedTask);
 
         _sut = new MessageService(_storageMock.Object, _nostrMock.Object, _mlsMock.Object);
     }
@@ -208,8 +226,8 @@ public class MessageServiceTests : IDisposable
         var eventId = "welcome-event-1".PadLeft(64, '0');
 
         _storageMock.Setup(s => s.IsWelcomeEventDismissedAsync(eventId)).ReturnsAsync(false);
-        _storageMock.Setup(s => s.GetPendingInvitesAsync()).ReturnsAsync(new List<PendingInvite>());
-        _storageMock.Setup(s => s.SavePendingInviteAsync(It.IsAny<PendingInvite>())).Returns(Task.CompletedTask);
+        // No local SavePendingInviteAsync stub: it would override the constructor's
+        // store-backed one, and this test reads the invite back through NewInvites.
         _nostrMock.Setup(n => n.FetchUserMetadataAsync(senderPubKey)).ReturnsAsync((UserMetadata?)null);
 
         var invites = new List<PendingInvite>();
@@ -1154,8 +1172,6 @@ public class MessageServiceTests : IDisposable
         var eventId = "welcome-relays".PadLeft(64, '0');
 
         _storageMock.Setup(s => s.IsWelcomeEventDismissedAsync(eventId)).ReturnsAsync(false);
-        _storageMock.Setup(s => s.GetPendingInvitesAsync()).ReturnsAsync(new List<PendingInvite>());
-        _storageMock.Setup(s => s.SavePendingInviteAsync(It.IsAny<PendingInvite>())).Returns(Task.CompletedTask);
         _nostrMock.Setup(n => n.FetchUserMetadataAsync(senderPubKey)).ReturnsAsync((UserMetadata?)null);
 
         // Act

@@ -22,6 +22,7 @@ public class SkippedInviteTests : IDisposable
     private readonly Mock<IMlsService> _mlsMock;
     private readonly Subject<NostrEventReceived> _eventsSubject;
     private readonly MessageService _sut;
+    private readonly List<PendingInvite> _inviteStore = new();
 
     private readonly User _currentUser = new()
     {
@@ -53,6 +54,23 @@ public class SkippedInviteTests : IDisposable
         _mlsMock.Setup(m => m.InitializeAsync(It.IsAny<string>(), It.IsAny<string>())).Returns(Task.CompletedTask);
         _mlsMock.Setup(m => m.GetAdminPubkeys(It.IsAny<byte[]>())).Returns(new List<string>());
 
+
+        // A pending-invite store that behaves like the real table rather than a stub.
+        // PendingInvites has a UNIQUE index on NostrEventId and the insert is
+        // INSERT OR IGNORE, so re-saving a welcome we already hold keeps the FIRST row
+        // and silently discards the newly minted Id. Code that saves and then reads
+        // back needs a double that does the same; an always-empty read is what let
+        // "Invite not found" reach a user's phone.
+        _storageMock.Setup(s => s.GetPendingInvitesAsync())
+            .ReturnsAsync(() => _inviteStore.ToList());
+        _storageMock.Setup(s => s.SavePendingInviteAsync(It.IsAny<PendingInvite>()))
+            .Callback<PendingInvite>(i =>
+            {
+                if (!_inviteStore.Any(e => e.NostrEventId == i.NostrEventId))
+                    _inviteStore.Add(i);
+            })
+            .Returns(Task.CompletedTask);
+
         _sut = new MessageService(_storageMock.Object, _nostrMock.Object, _mlsMock.Object);
     }
 
@@ -78,7 +96,6 @@ public class SkippedInviteTests : IDisposable
         var welcomeData = new byte[] { 0x01, 0x02 };
 
         _storageMock.Setup(s => s.IsWelcomeEventDismissedAsync(eventId)).ReturnsAsync(false);
-        _storageMock.Setup(s => s.GetPendingInvitesAsync()).ReturnsAsync(new List<PendingInvite>());
         _mlsMock.Setup(m => m.CanProcessWelcomeAsync(It.IsAny<byte[]>())).ReturnsAsync(false);
 
         var invites = new List<PendingInvite>();
@@ -121,8 +138,6 @@ public class SkippedInviteTests : IDisposable
         var welcomeData = new byte[] { 0x01, 0x02 };
 
         _storageMock.Setup(s => s.IsWelcomeEventDismissedAsync(eventId)).ReturnsAsync(false);
-        _storageMock.Setup(s => s.GetPendingInvitesAsync()).ReturnsAsync(new List<PendingInvite>());
-        _storageMock.Setup(s => s.SavePendingInviteAsync(It.IsAny<PendingInvite>())).Returns(Task.CompletedTask);
         _nostrMock.Setup(n => n.FetchUserMetadataAsync(senderPubKey)).ReturnsAsync((UserMetadata?)null);
         _mlsMock.Setup(m => m.CanProcessWelcomeAsync(It.IsAny<byte[]>())).ReturnsAsync(true);
 
@@ -170,8 +185,6 @@ public class SkippedInviteTests : IDisposable
         var senderPubKey = "ee".PadLeft(64, 'e');
 
         _storageMock.Setup(s => s.IsWelcomeEventDismissedAsync(eventId)).ReturnsAsync(false);
-        _storageMock.Setup(s => s.GetPendingInvitesAsync()).ReturnsAsync(new List<PendingInvite>());
-        _storageMock.Setup(s => s.SavePendingInviteAsync(It.IsAny<PendingInvite>())).Returns(Task.CompletedTask);
         _nostrMock.Setup(n => n.FetchUserMetadataAsync(senderPubKey)).ReturnsAsync((UserMetadata?)null);
         _mlsMock.Setup(m => m.CanProcessWelcomeAsync(It.IsAny<byte[]>()))
             .ThrowsAsync(new InvalidOperationException("MLS service not initialized"));

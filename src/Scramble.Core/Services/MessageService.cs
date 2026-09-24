@@ -2362,8 +2362,48 @@ public class MessageService : IMessageService, IDisposable
                 relayUrls.Count, string.Join(", ", relayUrls));
 
         await _storageService.SavePendingInviteAsync(invite);
-        _logger.LogInformation("Saved pending invite {InviteId} from {Sender}", invite.Id, nostrEvent.PublicKey[..Math.Min(16, nostrEvent.PublicKey.Length)]);
-        _newInvites.OnNext(invite);
+
+        // Emit what is actually in storage, which is not always what we just built.
+        //
+        // PendingInvites has a UNIQUE index on NostrEventId and the insert is
+        // INSERT OR IGNORE, so a welcome we have seen before keeps its ORIGINAL row
+        // and the Id we just minted is discarded without a word. Re-delivery is not an
+        // edge case here: the same welcome legitimately arrives from every relay the
+        // inviter published it to, and ChatListViewModel.OnNewInvite says so in its own
+        // dedup comment.
+        //
+        // Emitting the in-memory object anyway put an Id in front of the user that
+        // exists in no table. Its dedup only catches that while the list already holds
+        // the event; after a refresh, or before the first storage load finishes, the
+        // item is added and tapping Accept fails with "Invite not found" -- reported
+        // from a real device on 2026-09-24.
+        var persisted = (await _storageService.GetPendingInvitesAsync())
+            .FirstOrDefault(i => i.NostrEventId == invite.NostrEventId);
+
+        if (persisted is null)
+        {
+            // The row is not there at all. Nothing downstream can accept this, so say
+            // so here rather than handing the UI an invite that cannot be acted on.
+            _logger.LogError(
+                "HandleWelcome: pending invite for event {EventId} is not in storage after save; not surfacing it",
+                invite.NostrEventId[..Math.Min(16, invite.NostrEventId.Length)]);
+            return;
+        }
+
+        if (persisted.Id != invite.Id)
+        {
+            _logger.LogInformation(
+                "HandleWelcome: welcome {EventId} was already stored as invite {StoredId}; using that rather than the new id",
+                invite.NostrEventId[..Math.Min(16, invite.NostrEventId.Length)],
+                persisted.Id);
+        }
+        else
+        {
+            _logger.LogInformation("Saved pending invite {InviteId} from {Sender}", persisted.Id,
+                nostrEvent.PublicKey[..Math.Min(16, nostrEvent.PublicKey.Length)]);
+        }
+
+        _newInvites.OnNext(persisted);
     }
 
     /// <summary>
@@ -2873,9 +2913,23 @@ public class MessageService : IMessageService, IDisposable
     {
         _logger.LogInformation("Accepting invite {InviteId}", inviteId);
 
-        var invites = await _storageService.GetPendingInvitesAsync();
-        var invite = invites.FirstOrDefault(i => i.Id == inviteId)
-            ?? throw new ArgumentException("Invite not found", nameof(inviteId));
+        var invites = (await _storageService.GetPendingInvitesAsync()).ToList();
+        var invite = invites.FirstOrDefault(i => i.Id == inviteId);
+
+        if (invite is null)
+        {
+            // Say what IS there. "Invite not found" on its own cannot distinguish a
+            // UI holding an id that was never persisted from one that was accepted or
+            // dismissed a moment ago, and those want opposite fixes. Ids only -- the
+            // welcome bytes and the sender are not ours to put in a log.
+            _logger.LogError(
+                "AcceptInvite: {InviteId} is not in storage. {Count} invite(s) present: [{Ids}]",
+                inviteId,
+                invites.Count,
+                string.Join(", ", invites.Select(i => i.Id)));
+
+            throw new ArgumentException("Invite not found", nameof(inviteId));
+        }
 
         // Process MLS welcome — pass both welcome data and the kind-444 wrapper event ID
         _logger.LogInformation("AcceptInvite: processing welcome with wrapperEventId={EventId}",
