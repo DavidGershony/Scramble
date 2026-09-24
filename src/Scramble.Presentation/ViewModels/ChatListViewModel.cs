@@ -1809,6 +1809,35 @@ public partial class ChatListViewModel : ViewModelBase
             _logger.LogError(ex, "Failed to accept invite: {InviteId}", inviteVm.Id);
             StatusMessage = $"Failed to accept invite: {ex.Message}";
             inviteVm.IsAccepting = false;
+
+            // Re-read the list, because some failures REMOVE the invite.
+            //
+            // MessageService.AcceptInviteAsync auto-dismisses and deletes when the
+            // Welcome names a KeyPackage whose private key is gone -- that invite can
+            // never be accepted on this device, so it does not stay. Leaving the row on
+            // screen after that invited a second tap, which found nothing in storage
+            // and reported "Invite not found": a different and far more alarming
+            // message for the same underlying condition. Reported from a device on
+            // 2026-09-24, where it read as the app losing the invite rather than
+            // refusing it.
+            //
+            // Reloading rather than removing unconditionally, because most failures
+            // (a relay timeout, a publish that did not confirm) leave the invite
+            // perfectly valid and it should stay.
+            try
+            {
+                var remaining = await _messageService.GetPendingInvitesAsync();
+                PendingInvites.Clear();
+                foreach (var invite in remaining)
+                {
+                    PendingInvites.Add(new PendingInviteItemViewModel(invite));
+                }
+                PendingInviteCount = PendingInvites.Count;
+            }
+            catch (Exception reloadEx)
+            {
+                _logger.LogWarning(reloadEx, "Failed to reload invites after a failed accept");
+            }
         }
     }
 
