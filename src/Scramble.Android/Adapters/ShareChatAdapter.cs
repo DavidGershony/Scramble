@@ -70,7 +70,12 @@ public class ShareChatAdapter : RecyclerView.Adapter
         else if (holder is ChatViewHolder chatHolder && item is Chat chat)
         {
             chatHolder.Bind(chat);
-            chatHolder.ItemView.Click += (s, e) => ChatClick?.Invoke(this, chat);
+            // SetOnClickListener REPLACES the listener. `Click +=` ADDS one, and
+            // OnBindViewHolder runs again every time a recycled holder is reused, so the
+            // event form accumulated a handler per rebind and one tap fired the event
+            // once per rebind.
+            chatHolder.ItemView.SetOnClickListener(
+                new ActionClickListener(() => ChatClick?.Invoke(this, chat)));
         }
     }
 

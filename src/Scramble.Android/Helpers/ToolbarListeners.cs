@@ -23,6 +23,30 @@ public class ActionClickListener : Java.Lang.Object, View.IOnClickListener
 }
 
 /// <summary>
+/// Simple View.IOnLongClickListener that invokes an Action.
+/// </summary>
+/// <remarks>
+/// Exists so adapters can use <c>SetOnLongClickListener</c> instead of <c>LongClick +=</c>.
+/// The two are not equivalent inside <c>OnBindViewHolder</c>: setting replaces, adding
+/// accumulates, and a recycled holder is bound many times.
+/// </remarks>
+public class ActionLongClickListener : Java.Lang.Object, View.IOnLongClickListener
+{
+    private readonly Action _action;
+
+    public ActionLongClickListener(Action action)
+    {
+        _action = action;
+    }
+
+    public bool OnLongClick(View? v)
+    {
+        _action();
+        return true;
+    }
+}
+
+/// <summary>
 /// Simple Toolbar.IOnMenuItemClickListener that invokes a Func.
 /// Used for toolbar menu item clicks since C# events may not fire reliably on MaterialToolbar.
 /// </summary>

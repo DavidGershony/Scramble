@@ -33,7 +33,12 @@ public class RelayAdapter : RecyclerView.Adapter
         {
             var item = _items[position];
             relayHolder.Bind(item);
-            relayHolder.RemoveButton.Click += (s, e) => RemoveClick?.Invoke(this, item);
+            // SetOnClickListener REPLACES the listener. `Click +=` ADDS one, and
+            // OnBindViewHolder runs again every time a recycled holder is reused, so the
+            // event form accumulated a handler per rebind and one tap fired the event
+            // once per rebind.
+            relayHolder.RemoveButton.SetOnClickListener(
+                new ActionClickListener(() => RemoveClick?.Invoke(this, item)));
         }
     }
 

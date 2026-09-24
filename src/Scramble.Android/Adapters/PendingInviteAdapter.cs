@@ -33,8 +33,19 @@ public class PendingInviteAdapter : RecyclerView.Adapter
         {
             var item = _items[position];
             inviteHolder.Bind(item);
-            inviteHolder.AcceptButton.Click += (s, e) => AcceptClick?.Invoke(this, item);
-            inviteHolder.DeclineButton.Click += (s, e) => DeclineClick?.Invoke(this, item);
+            // SetOnClickListener REPLACES the listener. `Click +=` ADDS one, and
+            // OnBindViewHolder runs again every time a recycled holder is reused, so the
+            // event form accumulated a handler per rebind and one tap fired the event
+            // once per rebind.
+            //
+            // Worst here: a single Accept tap invoked AcceptInviteAsync once per rebind.
+            // The first call consumes and deletes the invite, so the rest throw
+            // "Invite not found" -- and concurrent accepts also race the read-then-insert
+            // guard that is supposed to keep one chat row per MLS group.
+            inviteHolder.AcceptButton.SetOnClickListener(
+                new ActionClickListener(() => AcceptClick?.Invoke(this, item)));
+            inviteHolder.DeclineButton.SetOnClickListener(
+                new ActionClickListener(() => DeclineClick?.Invoke(this, item)));
         }
     }
 

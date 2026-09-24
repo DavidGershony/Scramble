@@ -35,8 +35,18 @@ public class ChatListAdapter : RecyclerView.Adapter
         {
             var item = _items[position];
             chatHolder.Bind(item);
-            chatHolder.ItemView.Click += (s, e) => ItemClick?.Invoke(this, item);
-            chatHolder.ItemView.LongClick += (s, e) => ItemLongClick?.Invoke(this, item);
+            // SetOnClickListener REPLACES the listener. `Click +=` ADDS one, and
+            // OnBindViewHolder runs again every time a recycled holder is reused, so the
+            // event form accumulated a handler per rebind and one tap fired the event
+            // once per rebind.
+            //
+            // This one was visible: each duplicate tap ran NavigateToChat, pushing another
+            // "chat" entry onto the back stack, and both back affordances pop exactly one
+            // entry -- so leaving a chat took as many presses as the row had been rebound.
+            chatHolder.ItemView.SetOnClickListener(
+                new ActionClickListener(() => ItemClick?.Invoke(this, item)));
+            chatHolder.ItemView.SetOnLongClickListener(
+                new ActionLongClickListener(() => ItemLongClick?.Invoke(this, item)));
         }
     }
 

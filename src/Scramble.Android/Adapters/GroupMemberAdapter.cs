@@ -32,11 +32,15 @@ public class GroupMemberAdapter : RecyclerView.Adapter
         {
             var member = _items[position];
             memberHolder.Bind(member);
-            memberHolder.CopyButton.Click += (s, e) =>
+            // SetOnClickListener REPLACES the listener. `Click +=` ADDS one, and
+            // OnBindViewHolder runs again every time a recycled holder is reused, so the
+            // event form accumulated a handler per rebind and one tap fired the event
+            // once per rebind.
+            memberHolder.CopyButton.SetOnClickListener(new ActionClickListener(() =>
             {
                 var npubText = member.Npub ?? member.PublicKeyHex;
                 CopyNpubClick?.Invoke(this, npubText);
-            };
+            }));
         }
     }
 
