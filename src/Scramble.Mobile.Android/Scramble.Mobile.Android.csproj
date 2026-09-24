@@ -14,8 +14,8 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Scramble.Mobile.Android</RootNamespace>
     <ApplicationId>app.scramble.chat</ApplicationId>
-    <ApplicationVersion>7003</ApplicationVersion>
-    <ApplicationDisplayVersion>0.7.3</ApplicationDisplayVersion>
+    <ApplicationVersion>7004</ApplicationVersion>
+    <ApplicationDisplayVersion>0.7.4</ApplicationDisplayVersion>
     <AndroidPackageFormat>apk</AndroidPackageFormat>
     <AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>
   </PropertyGroup>
