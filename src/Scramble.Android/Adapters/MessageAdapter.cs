@@ -17,8 +17,6 @@ public class MessageAdapter : RecyclerView.Adapter
 {
     private const int ViewTypeSent = 0;
     private const int ViewTypeReceived = 1;
-    private const int MenuItemReply = 100;
-    private const int MenuItemCopyText = 101;
 
     private List<MessageViewModel> _items = new();
 
@@ -29,6 +27,16 @@ public class MessageAdapter : RecyclerView.Adapter
         _items = items;
         NotifyDataSetChanged();
     }
+
+    /// <summary>
+    /// The message at <paramref name="position"/>, or null if out of range.
+    /// </summary>
+    /// <remarks>
+    /// For the swipe-to-reply gesture: ItemTouchHelper reports a position, and the list
+    /// can have changed between the swipe starting and this being read.
+    /// </remarks>
+    public MessageViewModel? ItemAt(int position)
+        => position >= 0 && position < _items.Count ? _items[position] : null;
 
     public override int GetItemViewType(int position)
     {
@@ -215,6 +223,14 @@ public class MessageAdapter : RecyclerView.Adapter
 
     private static readonly string[] ReactionEmojis = { "\ud83d\udc4d", "\u2764\ufe0f", "\ud83d\ude02", "\ud83d\ude2e", "\ud83d\ude22", "\ud83d\udd25" };
 
+    // Parallel to ReactionEmojis by index. Kept adjacent so the two cannot drift apart
+    // silently -- a mismatch would send the wrong reaction rather than fail.
+    private static readonly int[] ReactionItemIds =
+    {
+        Resource.Id.reaction_0, Resource.Id.reaction_1, Resource.Id.reaction_2,
+        Resource.Id.reaction_3, Resource.Id.reaction_4, Resource.Id.reaction_5,
+    };
+
     private static void BindReactions(View itemView, MessageViewModel item, CompositeDisposable disposables)
     {
         var reactionsDisplay = itemView.FindViewById<TextView>(Resource.Id.reactions_display);
@@ -248,38 +264,79 @@ public class MessageAdapter : RecyclerView.Adapter
     /// </summary>
     public static Action<MessageViewModel>? OnReplyRequested { get; set; }
 
+    /// <summary>
+    /// Shows the horizontal reaction bar above a message.
+    /// </summary>
+    /// <remarks>
+    /// Was a vertical PopupMenu listing Reply, Copy text and then the six emoji as
+    /// separate rows. On a phone the emoji fell below the fold, so reacting needed a
+    /// scroll inside the menu and the feature read as absent. A single row shows every
+    /// option at once.
+    /// </remarks>
     private static void ShowReactionPicker(View anchor, MessageViewModel item)
     {
         var context = anchor.Context;
         if (context == null) return;
 
-        var popup = new AndroidX.AppCompat.Widget.PopupMenu(context, anchor);
-        var menuOrder = 0;
-        // Reply option
-        popup.Menu?.Add(0, MenuItemReply, menuOrder++, "\u21a9 Reply");
-        var hasCopyableText = !string.IsNullOrWhiteSpace(item.Content);
-        if (hasCopyableText)
-            popup.Menu?.Add(0, MenuItemCopyText, menuOrder++, "\ud83d\udccb Copy text");
+        var bar = LayoutInflater.From(context)!.Inflate(Resource.Layout.view_reaction_bar, null)!;
+
+        var popup = new PopupWindow(bar,
+            ViewGroup.LayoutParams.WrapContent,
+            ViewGroup.LayoutParams.WrapContent,
+            focusable: true)
+        {
+            // Without a background the window swallows nothing and an outside tap cannot
+            // dismiss it, leaving the bar stranded over the conversation.
+            OutsideTouchable = true,
+            Elevation = 12f
+        };
+        popup.SetBackgroundDrawable(new global::Android.Graphics.Drawables.ColorDrawable(
+            global::Android.Graphics.Color.Transparent));
+
         for (var i = 0; i < ReactionEmojis.Length; i++)
         {
-            popup.Menu?.Add(0, i, menuOrder++, ReactionEmojis[i]);
+            var emoji = ReactionEmojis[i];
+            var id = ReactionItemIds[i];
+            bar.FindViewById<TextView>(id)?.SetOnClickListener(new ActionClickListener(() =>
+            {
+                item.ReactCommand?.Execute(emoji).Subscribe();
+                popup.Dismiss();
+            }));
         }
-        popup.MenuItemClick += (s, e) =>
-        {
-            if (e.Item!.ItemId == MenuItemReply)
+
+        bar.FindViewById<TextView>(Resource.Id.reaction_reply)?
+            .SetOnClickListener(new ActionClickListener(() =>
             {
                 OnReplyRequested?.Invoke(item);
-                return;
-            }
-            if (e.Item.ItemId == MenuItemCopyText)
+                popup.Dismiss();
+            }));
+
+        var copyView = bar.FindViewById<TextView>(Resource.Id.reaction_copy);
+        if (copyView != null)
+        {
+            // A message with no text -- a bare image or voice note -- has nothing to copy.
+            if (string.IsNullOrWhiteSpace(item.Content))
             {
-                CopyTextToClipboard(context, item.Content);
-                return;
+                copyView.Visibility = ViewStates.Gone;
             }
-            var emoji = ReactionEmojis[e.Item.ItemId];
-            item.ReactCommand?.Execute(emoji).Subscribe();
-        };
-        popup.Show();
+            else
+            {
+                copyView.SetOnClickListener(new ActionClickListener(() =>
+                {
+                    CopyTextToClipboard(context, item.Content);
+                    popup.Dismiss();
+                }));
+            }
+        }
+
+        // Measure so the bar can be placed ABOVE the message rather than over it.
+        bar.Measure(View.MeasureSpec.MakeMeasureSpec(0, MeasureSpecMode.Unspecified),
+                    View.MeasureSpec.MakeMeasureSpec(0, MeasureSpecMode.Unspecified));
+        var barHeight = bar.MeasuredHeight;
+
+        // Android clamps a drop-down that would land off-screen, so a message at the very
+        // top of the list gets the bar below it instead of half outside the window.
+        popup.ShowAsDropDown(anchor, 0, -(anchor.Height + barHeight), GravityFlags.Start);
     }
 
     private static void CopyTextToClipboard(Context context, string? text)

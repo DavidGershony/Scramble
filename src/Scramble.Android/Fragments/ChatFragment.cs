@@ -66,6 +66,43 @@ public class ChatFragment : Fragment
         RequireActivity().OnBackPressedDispatcher.AddCallback(this, callback);
     }
 
+    /// <summary>
+    /// Swipe-right-to-reply on a message row.
+    /// </summary>
+    private sealed class SwipeToReplyCallback : ItemTouchHelper.SimpleCallback
+    {
+        private readonly MessageAdapter _adapter;
+
+        public SwipeToReplyCallback(MessageAdapter adapter)
+            : base(0, ItemTouchHelper.Right)
+        {
+            _adapter = adapter;
+        }
+
+        public override bool OnMove(RecyclerView recyclerView,
+            RecyclerView.ViewHolder viewHolder, RecyclerView.ViewHolder target) => false;
+
+        public override void OnSwiped(RecyclerView.ViewHolder viewHolder, int direction)
+        {
+            var position = viewHolder.BindingAdapterPosition;
+            var item = _adapter.ItemAt(position);
+            if (item != null)
+                MessageAdapter.OnReplyRequested?.Invoke(item);
+
+            // Put the row back. Nothing was deleted -- a swipe here is a gesture, not a
+            // dismissal -- and without this the message stays translated off-screen.
+            if (position >= 0)
+                _adapter.NotifyItemChanged(position);
+        }
+
+        // A quarter of the width, so the swipe reads as a nudge rather than a drag across
+        // the screen, and a raised escape velocity so a fast vertical scroll that drifts
+        // sideways does not fire a reply.
+        public override float GetSwipeThreshold(RecyclerView.ViewHolder viewHolder) => 0.25f;
+
+        public override float GetSwipeEscapeVelocity(float defaultValue) => defaultValue * 4f;
+    }
+
     private sealed class ChatFragmentBackPressedCallback : AndroidX.Activity.OnBackPressedCallback
     {
         private readonly ChatFragment _fragment;
@@ -134,6 +171,11 @@ public class ChatFragment : Fragment
 
         _adapter = new MessageAdapter();
         recyclerView.SetAdapter(_adapter);
+
+        // Swipe a message right to reply, as in WhatsApp. Reply is still on the
+        // long-press bar: this is the fast path, not the only path, because a gesture
+        // gives no hint that it exists.
+        new ItemTouchHelper(new SwipeToReplyCallback(_adapter)).AttachToRecyclerView(recyclerView);
 
         // Load older messages when scrolling to the top
         recyclerView.AddOnScrollListener(new LoadOlderScrollListener(_layoutManager, () =>

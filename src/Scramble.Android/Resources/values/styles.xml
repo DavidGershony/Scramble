@@ -158,4 +158,17 @@
         <item name="android:navigationBarColor">#FF000000</item>
         <item name="android:windowBackground">#FF000000</item>
     </style>
+    <!-- One tappable glyph in the message long-press reaction bar. Sized for a
+         finger: 44dp is above the 40dp minimum and lets eight of them sit in a row
+         on a 411dp-wide phone without scrolling, which was the whole point. -->
+    <style name="ReactionBarItem" parent="">
+        <item name="android:layout_width">44dp</item>
+        <item name="android:layout_height">44dp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:textSize">20sp</item>
+        <item name="android:background">?attr/selectableItemBackgroundBorderless</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+    </style>
+
 </resources>
