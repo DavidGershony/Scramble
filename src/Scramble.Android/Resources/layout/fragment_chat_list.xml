@@ -147,6 +147,16 @@
                 android:textColor="?attr/colorOnSurfaceVariant" />
 
             <com.google.android.material.button.MaterialButton
+                android:id="@+id/skipped_invites_retry"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:text="Retry"
+                android:textSize="12sp"
+                android:minWidth="0dp"
+                android:paddingHorizontal="10dp"
+                android:layout_marginEnd="4dp" />
+
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/skipped_invites_dismiss"
                 android:layout_width="wrap_content"
                 android:layout_height="32dp"

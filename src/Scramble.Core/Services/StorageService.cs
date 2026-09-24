@@ -1533,6 +1533,20 @@ public class StorageService : IStorageService
         await command.ExecuteNonQueryAsync();
     }
 
+    /// <inheritdoc />
+    public async Task<int> ClearDismissedWelcomeEventsAsync()
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM DismissedWelcomeEvents";
+        var removed = await command.ExecuteNonQueryAsync();
+
+        _logger.LogInformation("Cleared {Count} dismissed welcome event(s)", removed);
+        return removed;
+    }
+
     public async Task<IEnumerable<PendingInvite>> GetPendingInvitesAsync()
     {
         var invites = new List<PendingInvite>();

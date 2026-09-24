@@ -140,6 +140,18 @@ public partial class ChatListViewModel : ViewModelBase
     public ReactiveCommand<PendingInviteItemViewModel, Unit> AcceptInviteCommand { get; }
     public ReactiveCommand<PendingInviteItemViewModel, Unit> DeclineInviteCommand { get; }
     public ReactiveCommand<Unit, Unit> RescanInvitesCommand { get; }
+
+    /// <summary>
+    /// Reconsiders invites that were dismissed, then rescans.
+    /// </summary>
+    /// <remarks>
+    /// An ordinary rescan cannot see them: dismissal is checked by both the live
+    /// welcome handler and the rescan itself, and the only other way out needs a chat
+    /// that a pending invite has not got. Without this, an invite auto-dismissed for
+    /// missing key material — or one left unacceptable by a stale id — is gone for
+    /// good, and the only workaround is asking the sender to invite you again.
+    /// </remarks>
+    public ReactiveCommand<Unit, Unit> RetryDismissedInvitesCommand { get; }
     [Reactive] public partial bool IsRescanningInvites { get; set; }
     public ReactiveCommand<Unit, Unit> AddBotCommand { get; }
     public ReactiveCommand<Unit, Unit> CreateBotChatCommand { get; }
@@ -400,6 +412,7 @@ public partial class ChatListViewModel : ViewModelBase
 
         var canRescan = this.WhenAnyValue(x => x.IsRescanningInvites, scanning => !scanning);
         RescanInvitesCommand = ReactiveCommand.CreateFromTask(RescanInvitesAsync, canRescan);
+        RetryDismissedInvitesCommand = ReactiveCommand.CreateFromTask(RetryDismissedInvitesAsync, canRescan);
 
         var participantsChanged = Observable.FromEventPattern<NotifyCollectionChangedEventHandler, NotifyCollectionChangedEventArgs>(
                 h => NewChatParticipants.CollectionChanged += h,
@@ -1827,6 +1840,50 @@ public partial class ChatListViewModel : ViewModelBase
         _logger.LogInformation("Dismissing skipped invite notice (count was {Count})", SkippedInviteCount);
         await _storageService.ResetSkippedInviteCountAsync();
         SkippedInviteCount = 0;
+    }
+
+    private async Task RetryDismissedInvitesAsync()
+    {
+        _logger.LogInformation("Retrying dismissed invites...");
+
+        IsRescanningInvites = true;
+        StatusMessage = "Reconsidering dismissed invites...";
+
+        try
+        {
+            var cleared = await _messageService.RetryDismissedInvitesAsync();
+
+            var invites = await _messageService.GetPendingInvitesAsync();
+            PendingInvites.Clear();
+            foreach (var invite in invites)
+            {
+                PendingInvites.Add(new PendingInviteItemViewModel(invite));
+            }
+            PendingInviteCount = PendingInvites.Count;
+            SkippedInviteCount = 0;
+
+            // Report both numbers: "no invites found" after forgetting nothing means
+            // something different from the same words after forgetting four.
+            StatusMessage = cleared == 0
+                ? "No dismissed invites to reconsider"
+                : $"Reconsidered {cleared} dismissed invite(s), {PendingInviteCount} pending";
+
+            _logger.LogInformation(
+                "Retry complete: forgot {Cleared} dismissal(s), {Count} invite(s) pending",
+                cleared, PendingInviteCount);
+
+            await Task.Delay(3000);
+            StatusMessage = null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to retry dismissed invites");
+            StatusMessage = $"Retry failed: {ex.Message}";
+        }
+        finally
+        {
+            IsRescanningInvites = false;
+        }
     }
 
     private async Task RescanInvitesAsync()

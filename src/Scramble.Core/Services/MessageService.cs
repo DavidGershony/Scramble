@@ -3258,6 +3258,20 @@ public class MessageService : IMessageService, IDisposable
             processed);
     }
 
+    /// <inheritdoc />
+    public async Task<int> RetryDismissedInvitesAsync()
+    {
+        var cleared = await _storageService.ClearDismissedWelcomeEventsAsync();
+        _logger.LogInformation("RetryDismissedInvites: forgot {Count} dismissal(s), rescanning", cleared);
+
+        // The skipped counter counts what was auto-dismissed, so it has to go with them
+        // or the notice keeps claiming invites were skipped that we just reconsidered.
+        await _storageService.ResetSkippedInviteCountAsync();
+
+        await RescanInvitesAsync();
+        return cleared;
+    }
+
     public async Task RescanInvitesAsync()
     {
         if (_currentUser == null || string.IsNullOrEmpty(_currentUser.PublicKeyHex))

@@ -213,7 +213,7 @@
                 Background="{DynamicResource SurfaceSecondaryBrush}"
                 Padding="12,8"
                 IsVisible="{Binding SkippedInviteCount}">
-            <Grid ColumnDefinitions="*,Auto">
+            <Grid ColumnDefinitions="*,Auto,Auto">
                 <TextBlock Grid.Column="0"
                            Classes="secondary" FontSize="12"
                            VerticalAlignment="Center"
@@ -224,7 +224,20 @@
                         </MultiBinding>
                     </TextBlock.Text>
                 </TextBlock>
+                <!-- Retry, because Dismiss was the only way out of a notice about
+                     invites the app had ALREADY dismissed for you. A skipped invite is
+                     unreachable afterwards: the dismissal is checked by both the live
+                     handler and the rescan, and the only other escape needs a chat that
+                     a pending invite does not have. Asking the sender to invite you
+                     again was the entire workaround. -->
                 <Button Grid.Column="1"
+                        Classes="secondary"
+                        Content="Retry"
+                        FontSize="11"
+                        Padding="8,4"
+                        Margin="8,0,0,0"
+                        Command="{Binding RetryDismissedInvitesCommand}" />
+                <Button Grid.Column="2"
                         Classes="secondary"
                         Content="Dismiss"
                         FontSize="11"

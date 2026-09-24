@@ -248,6 +248,28 @@ public interface IMessageService
     Task RescanInvitesAsync();
 
     /// <summary>
+    /// Reconsiders every welcome previously dismissed, then rescans.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For the case where an invite was auto-dismissed and the user has no way back to
+    /// it: missing key material at the time, a failure during accept, or a stale list
+    /// that produced "Invite not found". Dismissal is checked by both the live handler
+    /// and the rescan, so without this such a welcome is invisible for good.
+    /// </para>
+    /// <para>
+    /// This deliberately forgets ALL dismissals rather than only the automatic ones,
+    /// because the table does not record why — it holds an id and a timestamp. An
+    /// invite the user declined on purpose will therefore reappear once. That is the
+    /// honest trade for making the unrecoverable case recoverable, and it is a
+    /// user-initiated action rather than something that happens on its own. A welcome
+    /// already accepted is re-examined and dismissed again by the normal path.
+    /// </para>
+    /// </remarks>
+    /// <returns>How many dismissals were forgotten.</returns>
+    Task<int> RetryDismissedInvitesAsync();
+
+    /// <summary>
     /// Reset a group's MLS state and delete the chat, allowing re-join via welcome rescan.
     /// </summary>
     Task ResetGroupAsync(string chatId);

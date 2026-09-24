@@ -93,6 +93,7 @@ public class ChatListFragment : Fragment
         // Skipped invites notice views
         var skippedNotice = view.FindViewById<LinearLayout>(Resource.Id.skipped_invites_notice)!;
         var skippedText = view.FindViewById<TextView>(Resource.Id.skipped_invites_text)!;
+        var skippedRetry = view.FindViewById<MaterialButton>(Resource.Id.skipped_invites_retry)!;
         var skippedDismiss = view.FindViewById<MaterialButton>(Resource.Id.skipped_invites_dismiss)!;
 
         // Profile avatar (left side of toolbar) — shows user image or default icon
@@ -289,6 +290,13 @@ public class ChatListFragment : Fragment
                     : $"{count} group invites received — encryption keys not available on this device";
             })
             .DisposeWith(_disposables);
+
+        // Retry, because Dismiss was the only way out of a notice about invites the app
+        // had already dismissed for you. Once dismissed they are unreachable: both the
+        // live welcome handler and the rescan skip them, and the only other escape
+        // needs a chat that a pending invite has not got.
+        skippedRetry.Click += (s, e) =>
+            ViewModel.RetryDismissedInvitesCommand.Execute().Subscribe().DisposeWith(_disposables);
 
         skippedDismiss.Click += (s, e) =>
             ViewModel.DismissSkippedInviteNoticeCommand.Execute().Subscribe().DisposeWith(_disposables);

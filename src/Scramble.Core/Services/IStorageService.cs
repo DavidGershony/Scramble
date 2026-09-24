@@ -94,6 +94,18 @@ public interface IStorageService
     // Welcome event management
     Task UndismissWelcomeEventAsync(string nostrEventId);
 
+    /// <summary>
+    /// Forgets every dismissed welcome, so a rescan considers them all again.
+    /// </summary>
+    /// <remarks>
+    /// Dismissal is otherwise permanent and invisible: it is checked by both the live
+    /// welcome handler and <c>RescanInvitesAsync</c>, and the only existing way out is
+    /// <c>ResetGroup</c>, which needs a chat that a pending invite by definition does
+    /// not have. An invite auto-dismissed for missing key material therefore could
+    /// never be reconsidered, even once the KeyPackage it wanted was back.
+    /// </remarks>
+    Task<int> ClearDismissedWelcomeEventsAsync();
+
     // App settings (key-value store)
     Task<string?> GetSettingAsync(string key);
     Task SaveSettingAsync(string key, string value);
