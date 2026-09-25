@@ -16,6 +16,15 @@ on:
 env:
   DOTNET_NUGET_SIGNATURE_VERIFICATION: false
 
+  # Whether the Avalonia Android head is RELEASED. 'false' stops it being built,
+  # signed and attached to the release; the native head ships alone.
+  #
+  # It is still compiled on every PR by dotnet-android.yml and still multi-targets
+  # the shared views, so this does not let it rot -- it only stops publishing it.
+  # Flip to 'true' to ship both APKs again; nothing else needs changing, because
+  # the release job attaches whatever APK artifacts exist.
+  PUBLISH_AVALONIA_ANDROID: 'false'
+
 jobs:
   # Gate: run the test suite before building any release artifacts.
   # Mirrors the test step from dotnet-desktop.yml so a tag push cannot
@@ -161,6 +170,7 @@ jobs:
         run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > ${{ github.workspace }}/scramble-release.keystore
 
       - name: Build Android APK
+        if: env.PUBLISH_AVALONIA_ANDROID == 'true'
         env:
           ANDROID_SIGNING_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: >
@@ -178,6 +188,7 @@ jobs:
           --output ./publish/android
 
       - name: Find and rename APK
+        if: env.PUBLISH_AVALONIA_ANDROID == 'true'
         id: apk
         run: |
           # Always pick the signed APK explicitly. dotnet publish produces both
@@ -201,6 +212,7 @@ jobs:
           echo "APK_NAME=$VERSIONED_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Verify APK signing certificate
+        if: env.PUBLISH_AVALONIA_ANDROID == 'true'
         run: |
           APK="${{ steps.apk.outputs.APK_PATH }}"
           echo "=== APK signing certificate (for cross-release consistency check) ==="
@@ -277,6 +289,7 @@ jobs:
           path: ${{ steps.apk_native.outputs.APK_PATH }}
 
       - name: Upload Android artifact
+        if: env.PUBLISH_AVALONIA_ANDROID == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.apk.outputs.APK_NAME }}

@@ -23,9 +23,20 @@ every other head. Abandoned in the 2026-05-11 pivot; **revived 2026-09-23**, whe
 turned out to be three compile errors away from building against the Dark Matter engine.
 
 It now **ships**: built on every PR by `dotnet-android.yml`, released by `publish.yml`
-as `Scramble-native-<version>.apk` beside the Avalonia head's `Scramble-<version>.apk`.
-Both share ApplicationId `app.scramble.chat` and the release key, so one replaces the
-other in place and the profile survives.
+as `Scramble-native-<version>.apk`.
+
+**As of 2026-09-25 it is the only Android head released.** `publish.yml` gates the
+Avalonia Android APK behind `PUBLISH_AVALONIA_ANDROID`, currently `'false'`, so
+`Scramble-<version>.apk` is no longer built, signed or attached to a release. The
+head is **not** abandoned — `dotnet-android.yml` still compiles it on every PR and it
+still multi-targets the shared views, so the parity rule above continues to apply and
+it cannot rot. Flip that flag to `'true'` to ship both APKs again; nothing else needs
+changing, because the release job attaches whatever APK artifacts exist.
+
+Both heads share ApplicationId `app.scramble.chat` and the release key, so one
+replaces the other in place and the profile survives — which is why only one can be
+installed at a time, and why dropping one from the release does not strand anyone: the
+native APK installs straight over an existing Avalonia install.
 
 See `src/Scramble.Android/README.md`.
 

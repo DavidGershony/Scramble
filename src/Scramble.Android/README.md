@@ -5,20 +5,30 @@ Fragments, written in C#, driving the same `Scramble.Presentation` ReactiveUI
 ViewModels and the same `Scramble.Core` services as every other head. It is not
 a separate app — only a separate view layer.
 
-**It ships.** As of 2026-09-23 it is built on every PR (`dotnet-android.yml`)
-and released alongside the Avalonia head (`publish.yml`).
+**It ships, and since 2026-09-25 it is the only Android head that does.** Built on
+every PR (`dotnet-android.yml`) and released by `publish.yml`. The Avalonia Android
+APK is gated off behind `PUBLISH_AVALONIA_ANDROID` in that workflow.
 
 ## Two Android heads, one app id
 
-| Head | APK asset | UI |
-|---|---|---|
-| `src/Scramble.Mobile.Android` | `Scramble-<version>.apk` | Avalonia, shared with desktop |
-| `src/Scramble.Android` | `Scramble-native-<version>.apk` | native Android Views |
+| Head | APK asset | UI | Released? |
+|---|---|---|---|
+| `src/Scramble.Mobile.Android` | `Scramble-<version>.apk` | Avalonia, shared with desktop | **no**, gated off since 2026-09-25 |
+| `src/Scramble.Android` | `Scramble-native-<version>.apk` | native Android Views | yes |
+
+The Avalonia head is still built on every PR and still receives shared view changes.
+Only its release is paused.
 
 Both use ApplicationId `app.scramble.chat` and are signed with the same release
 key, so **installing one replaces the other in place and the profile database
-survives the switch**. They cannot be installed side by side. In Obtainium,
-choose which build you track by filtering on the asset name.
+survives the switch**. They cannot be installed side by side.
+
+That shared identity is why pausing the Avalonia release strands nobody: the native
+APK installs straight over an existing Avalonia install and keeps the account, chats
+and history. While the gate is off there is only one APK per release, so an Obtainium
+filter on the asset name has nothing to choose between — anyone previously tracking
+`Scramble-<version>.apk` will stop seeing updates and needs to track
+`Scramble-native-<version>.apk` instead.
 
 ## Why it came back
 
