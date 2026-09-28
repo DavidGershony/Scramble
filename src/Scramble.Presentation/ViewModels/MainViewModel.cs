@@ -917,27 +917,28 @@ public partial class MainViewModel : ViewModelBase
             var archivedChats = await _storageService.GetArchivedChatsAsync();
             var allGroupChats = chats.Concat(archivedChats);
 
-            var groupIds = allGroupChats
+            // Each group carries its OWN horizon. This used to take the maximum
+            // LastActivityAt across every group chat and hand that single value down for
+            // all of them, so the busiest conversation set the cutoff for the rest: a
+            // group joined recently whose messages predated that cutoff never had them
+            // requested from the relay, and the chat simply looked empty. A chat with no
+            // activity yet gets a null horizon, meaning "send everything", rather than
+            // inheriting someone else's window.
+            var groupSubscriptions = allGroupChats
                 .Where(c => (c.Type == ChatType.Group || c.Type == ChatType.DeviceSync)
                          && c.MlsGroupId != null && c.MlsGroupId.Length > 0)
-                .Select(c => c.NostrGroupId != null && c.NostrGroupId.Length > 0
-                    ? Convert.ToHexString(c.NostrGroupId).ToLowerInvariant()
-                    : Convert.ToHexString(c.MlsGroupId!).ToLowerInvariant())
-                .Distinct()
+                .Select(c => (
+                    GroupId: c.NostrGroupId != null && c.NostrGroupId.Length > 0
+                        ? Convert.ToHexString(c.NostrGroupId).ToLowerInvariant()
+                        : Convert.ToHexString(c.MlsGroupId!).ToLowerInvariant(),
+                    Since: c.LastActivityAt > DateTime.MinValue
+                        ? new DateTimeOffset(c.LastActivityAt, TimeSpan.Zero).AddMinutes(-5)
+                        : (DateTimeOffset?)null))
                 .ToList();
 
-            if (groupIds.Count > 0)
+            if (groupSubscriptions.Count > 0)
             {
-                var latestActivity = chats
-                    .Where(c => (c.Type == ChatType.Group || c.Type == ChatType.DeviceSync)
-                             && c.MlsGroupId != null)
-                    .Select(c => c.LastActivityAt)
-                    .DefaultIfEmpty(DateTime.MinValue)
-                    .Max();
-                DateTimeOffset? since = latestActivity > DateTime.MinValue
-                    ? new DateTimeOffset(latestActivity, TimeSpan.Zero).AddMinutes(-5)
-                    : null;
-                subscriptionTasks.Add(_nostrService.SubscribeToGroupMessagesAsync(groupIds, since));
+                subscriptionTasks.Add(_nostrService.SubscribeToGroupMessagesAsync(groupSubscriptions));
             }
 
             // 4b. Ensure group chat relays are connected (normal relays, not bot-only)

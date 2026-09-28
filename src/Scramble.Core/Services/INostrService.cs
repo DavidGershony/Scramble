@@ -293,6 +293,17 @@ public interface INostrService
     /// </summary>
     Task SubscribeToGroupMessagesAsync(IEnumerable<string> groupIds, DateTimeOffset? since = null);
 
+    /// <summary>
+    /// Subscribes to kind-445 messages, each group carrying its own <c>since</c> horizon.
+    /// </summary>
+    /// <remarks>
+    /// Prefer this over the single-horizon overload whenever more than one group is
+    /// involved. Passing one horizon for a batch lets the busiest chat set the cutoff for
+    /// all of them, so a newly joined group's earlier messages are never requested and the
+    /// group looks empty. A null horizon for a group means "send everything".
+    /// </remarks>
+    Task SubscribeToGroupMessagesAsync(IReadOnlyList<(string GroupId, DateTimeOffset? Since)> groups);
+
 
     /// <summary>
     /// Observable stream of Welcome messages (kind 444).

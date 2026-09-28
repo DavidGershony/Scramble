@@ -241,4 +241,107 @@ public class NostrServiceTests
         Assert.False(statusUpdates[0].IsConnected);
     }
 
+
+    // --------------------------------------- per-group `since` on kind-445 filters
+    //
+    // A newly joined group is quiet and its messages predate a busy chat's last
+    // activity. MainViewModel hands one `since` -- max(LastActivityAt) - 5min -- for
+    // every group at once, and the service applies it to all of them, so the new
+    // group's messages are never requested from the relay. They are not lost; they
+    // were never asked for. Reported as "accepted the invite, see no messages".
+
+    private static Dictionary<string, object> FilterFor(
+        List<Dictionary<string, object>> filters, string groupId) =>
+        filters.Single(f => ((string[])f["#h"]).Contains(groupId));
+
+    [Fact]
+    public void GroupMessageFilters_GiveEachGroupItsOwnSince()
+    {
+        var older = DateTimeOffset.FromUnixTimeSeconds(1_700_000_000);
+        var newer = DateTimeOffset.FromUnixTimeSeconds(1_800_000_000);
+
+        var filters = NostrService.BuildGroupMessageFilters(new[]
+        {
+            ("aaa", (DateTimeOffset?)older),
+            ("bbb", (DateTimeOffset?)newer),
+        });
+
+        Assert.Equal(older.ToUnixTimeSeconds(), FilterFor(filters, "aaa")["since"]);
+        Assert.Equal(newer.ToUnixTimeSeconds(), FilterFor(filters, "bbb")["since"]);
+    }
+
+    [Fact]
+    public void GroupMessageFilters_DoNotBoundAGroupThatAskedForNoHorizon()
+    {
+        // A null Since means "I have no history, send everything". Inheriting another
+        // group's window silently turns that into a bounded request, which is the
+        // form of this bug that loses the most.
+        var filters = NostrService.BuildGroupMessageFilters(new[]
+        {
+            ("fresh", (DateTimeOffset?)null),
+            ("busy", (DateTimeOffset?)DateTimeOffset.FromUnixTimeSeconds(1_800_000_000)),
+        });
+
+        Assert.False(FilterFor(filters, "fresh").ContainsKey("since"));
+    }
+
+    [Fact]
+    public void GroupMessageFilters_ShareOneFilterWhenTheHorizonMatches()
+    {
+        // Correctness must not cost a subscription per group: equal horizons coalesce.
+        var same = DateTimeOffset.FromUnixTimeSeconds(1_750_000_000);
+
+        var filters = NostrService.BuildGroupMessageFilters(new[]
+        {
+            ("one", (DateTimeOffset?)same),
+            ("two", (DateTimeOffset?)same),
+        });
+
+        var only = Assert.Single(filters);
+        Assert.Equal(new[] { "one", "two" }, (string[])only["#h"]);
+        Assert.Equal(same.ToUnixTimeSeconds(), only["since"]);
+    }
+
+    [Fact]
+    public void GroupMessageFilters_AlwaysRequestKind445()
+    {
+        var filters = NostrService.BuildGroupMessageFilters(new[]
+        {
+            ("x", (DateTimeOffset?)null),
+            ("y", (DateTimeOffset?)DateTimeOffset.FromUnixTimeSeconds(1_800_000_000)),
+        });
+
+        Assert.All(filters, f => Assert.Equal(new[] { 445 }, (int[])f["kinds"]));
+    }
+
+    [Fact]
+    public void GroupMessageFilters_TakeTheWidestHorizonForARepeatedGroup()
+    {
+        // Asking for too much history is recoverable; silently asking for too little is
+        // the bug this whole change is about.
+        var older = DateTimeOffset.FromUnixTimeSeconds(1_700_000_000);
+        var newer = DateTimeOffset.FromUnixTimeSeconds(1_800_000_000);
+
+        var filters = NostrService.BuildGroupMessageFilters(new[]
+        {
+            ("dup", (DateTimeOffset?)newer),
+            ("dup", (DateTimeOffset?)older),
+        });
+
+        var only = Assert.Single(filters);
+        Assert.Equal(new[] { "dup" }, (string[])only["#h"]);
+        Assert.Equal(older.ToUnixTimeSeconds(), only["since"]);
+    }
+
+    [Fact]
+    public void GroupMessageFilters_LetNullBeatAnyHorizonForARepeatedGroup()
+    {
+        var filters = NostrService.BuildGroupMessageFilters(new[]
+        {
+            ("dup", (DateTimeOffset?)DateTimeOffset.FromUnixTimeSeconds(1_800_000_000)),
+            ("dup", (DateTimeOffset?)null),
+        });
+
+        Assert.False(Assert.Single(filters).ContainsKey("since"));
+    }
 }

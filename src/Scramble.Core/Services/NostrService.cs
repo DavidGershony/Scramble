@@ -33,7 +33,11 @@ public class NostrService : INostrService, IDisposable
     private readonly ConcurrentDictionary<string, byte> _connectedRelays = new();
     private readonly ConcurrentDictionary<string, NostrRelayConnection> _relayConnections = new();
     private readonly ConcurrentDictionary<string, IDisposable> _relayMessageSubscriptions = new();
-    private readonly ConcurrentDictionary<string, byte> _subscribedGroupIds = new();
+    // Group id -> that group's own `since` horizon (null meaning "send everything").
+    // Per-group deliberately: a single shared horizon let the busiest chat set the cutoff
+    // for every group, and the reconnect path below rebuilds from this, so storing one
+    // value would put the bug back on every reconnect.
+    private readonly ConcurrentDictionary<string, DateTimeOffset?> _subscribedGroupIds = new();
     private readonly ConcurrentDictionary<string, byte> _recentlyProcessedEventIds = new();
     private readonly ILogger<NostrRelayConnection> _connectionLogger = LoggingConfiguration.CreateLogger<NostrRelayConnection>();
     private readonly NostrConnectionProvider _connectionProvider = new();
@@ -130,7 +134,6 @@ public class NostrService : INostrService, IDisposable
         => _botOnlyRelays.ContainsKey(relayUrl.TrimEnd('/'));
     private const int RateLimitBackoffSeconds = 60;
     private const int MaxInitialConnectBackoffSeconds = 60;
-    private DateTimeOffset? _groupMessagesSince;
     private DateTimeOffset? _welcomeMessagesSince;
     private string? _subscribedUserPubKey;
     private string? _subscribedUserPrivKey;
@@ -609,27 +612,25 @@ public class NostrService : INostrService, IDisposable
             // Register Group subscription (kind 445)
             if (_subscribedGroupIds.Count > 0 && connection.IsConnected)
             {
-                var subId = $"group_{Guid.NewGuid():N}"[..16];
-                var filter = new Dictionary<string, object>
-                {
-                    { "kinds", new[] { 445 } },
-                    { "#h", _subscribedGroupIds.Keys.ToArray() }
-                };
+                // Same per-group horizons as the initial subscribe. Rebuilding this by
+                // hand with one shared `since` is what made the fix evaporate on
+                // reconnect, which on a phone is most of the time.
+                var reconnectFilters = BuildGroupMessageFilters(
+                    _subscribedGroupIds.Select(kv => (kv.Key, kv.Value)).ToList());
 
-                if (_groupMessagesSince.HasValue)
+                foreach (var filter in reconnectFilters)
                 {
-                    filter["since"] = _groupMessagesSince.Value.ToUnixTimeSeconds();
+                    var subId = $"group_{Guid.NewGuid():N}"[..16];
+                    var filterJson = JsonSerializer.Serialize(filter);
+                    await connection.RegisterSubscriptionAsync(subId, filterJson);
+
+                    // Track in provider for H2 filter validation
+                    var parsedFilter = ParsedFilter.FromJson(filterJson);
+                    _connectionProvider.TrackSubscription(subId, parsedFilter, new[] { connection.RelayUrl });
                 }
 
-                var filterJson = JsonSerializer.Serialize(filter);
-                await connection.RegisterSubscriptionAsync(subId, filterJson);
-
-                // Track in provider for H2 filter validation
-                var parsedFilter = ParsedFilter.FromJson(filterJson);
-                _connectionProvider.TrackSubscription(subId, parsedFilter, new[] { connection.RelayUrl });
-
-                _logger.LogInformation("Registered Group subscription ({Count} groups) on {RelayUrl}",
-                    _subscribedGroupIds.Count, connection.RelayUrl);
+                _logger.LogInformation("Registered Group subscription ({Count} groups, {Filters} horizon(s)) on {RelayUrl}",
+                    _subscribedGroupIds.Count, reconnectFilters.Count, connection.RelayUrl);
             }
         }
         catch (Exception ex)
@@ -1503,8 +1504,20 @@ public class NostrService : INostrService, IDisposable
         }
     }
 
-    public async Task SubscribeToGroupMessagesAsync(IEnumerable<string> groupIds, DateTimeOffset? since = null)
+    public Task SubscribeToGroupMessagesAsync(IEnumerable<string> groupIds, DateTimeOffset? since = null)
+        => SubscribeToGroupMessagesAsync(groupIds.Select(g => (GroupId: g, Since: since)).ToList());
+
+    /// <inheritdoc />
+    public async Task SubscribeToGroupMessagesAsync(IReadOnlyList<(string GroupId, DateTimeOffset? Since)> groups)
     {
+        var groupIds = groups.Select(g => g.GroupId);
+        var sinceByGroup = groups
+            .GroupBy(g => g.GroupId, StringComparer.Ordinal)
+            .ToDictionary(
+                g => g.Key,
+                g => g.Any(e => e.Since == null) ? null : (DateTimeOffset?)g.Min(e => e.Since!.Value),
+                StringComparer.Ordinal);
+
         // Filter out invalid group IDs (max 64 hex chars = 32 bytes, typical for MLS group IDs)
         var groupList = groupIds
             .Where(id =>
@@ -1526,42 +1539,93 @@ public class NostrService : INostrService, IDisposable
 
         foreach (var groupId in groupList)
         {
-            _subscribedGroupIds.TryAdd(groupId, 0);
+            var groupSince = sinceByGroup[groupId];
+
+            // Widest horizon wins if this group is already subscribed with another one:
+            // re-requesting history is recoverable, missing it silently is not.
+            _subscribedGroupIds.AddOrUpdate(
+                groupId,
+                groupSince,
+                (_, existing) => existing == null || groupSince == null
+                    ? null
+                    : (DateTimeOffset?)(groupSince < existing ? groupSince.Value : existing.Value));
         }
 
-        if (since.HasValue)
+        var filters = BuildGroupMessageFilters(
+            groupList.Select(g => (GroupId: g, Since: sinceByGroup[g])).ToList());
+
+        foreach (var filter in filters)
         {
-            _groupMessagesSince = since;
-        }
+            var filterJson = JsonSerializer.Serialize(filter);
+            _logger.LogDebug("Sending Group subscription filter: {Filter}", filterJson);
 
-        var filter = new Dictionary<string, object>
-        {
-            { "kinds", new[] { 445 } },
-            { "#h", groupList.ToArray() }
-        };
+            var parsedFilter = ParsedFilter.FromJson(filterJson);
 
-        if (since.HasValue)
-        {
-            filter["since"] = since.Value.ToUnixTimeSeconds();
-        }
-
-        var filterJson = JsonSerializer.Serialize(filter);
-        _logger.LogDebug("Sending Group subscription filter: {Filter}", filterJson);
-
-        var parsedFilter = ParsedFilter.FromJson(filterJson);
-
-        // Register on all connected relays (skip bot-only and outbox relays — group subs don't belong there)
-        foreach (var (relayUrl, connection) in _relayConnections)
-        {
-            if (IsBotOnlyRelay(relayUrl) || IsOutboxRelay(relayUrl)) continue;
-            if (connection.IsConnected)
+            // Register on all connected relays (skip bot-only and outbox relays — group subs don't belong there)
+            foreach (var (relayUrl, connection) in _relayConnections)
             {
-                var subId = $"group_{Guid.NewGuid():N}"[..16];
-                await connection.RegisterSubscriptionAsync(subId, filterJson);
-                _connectionProvider.TrackSubscription(subId, parsedFilter, new[] { relayUrl });
-                _logger.LogDebug("Registered Group subscription on {RelayUrl}", relayUrl);
+                if (IsBotOnlyRelay(relayUrl) || IsOutboxRelay(relayUrl)) continue;
+                if (connection.IsConnected)
+                {
+                    var subId = $"group_{Guid.NewGuid():N}"[..16];
+                    await connection.RegisterSubscriptionAsync(subId, filterJson);
+                    _connectionProvider.TrackSubscription(subId, parsedFilter, new[] { relayUrl });
+                    _logger.LogDebug("Registered Group subscription on {RelayUrl}", relayUrl);
+                }
             }
         }
+    }
+
+    /// <summary>
+    /// Builds the kind-445 relay filters for a set of groups, each with its own
+    /// <c>since</c> horizon.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// One filter per distinct horizon, not one filter for everything. A single shared
+    /// <c>since</c> meant the busiest chat set the cutoff for every group: a newly
+    /// joined group whose messages predated that cutoff never had them requested, which
+    /// read to the user as accepting an invite and finding the group empty. Groups that
+    /// share a horizon still share a filter, so this costs no extra subscriptions in the
+    /// common case.
+    /// </para>
+    /// <para>
+    /// A null horizon means "send everything" and must never inherit someone else's
+    /// window -- that is the form of the bug that dropped the most. Where one group is
+    /// listed more than once, the widest horizon wins (null widest of all): asking for
+    /// too much is recoverable, silently asking for too little is not.
+    /// </para>
+    /// </remarks>
+    internal static List<Dictionary<string, object>> BuildGroupMessageFilters(
+        IReadOnlyList<(string GroupId, DateTimeOffset? Since)> groups)
+    {
+        // Collapse duplicates first, widest horizon winning, so a group listed twice
+        // cannot end up with the narrower of its two windows.
+        var widest = groups
+            .GroupBy(g => g.GroupId, StringComparer.Ordinal)
+            .Select(g => (
+                GroupId: g.Key,
+                Since: g.Any(e => e.Since == null)
+                    ? (DateTimeOffset?)null
+                    : g.Min(e => e.Since!.Value)))
+            .ToList();
+
+        return widest
+            .GroupBy(g => g.Since)
+            .Select(bucket =>
+            {
+                var filter = new Dictionary<string, object>
+                {
+                    { "kinds", new[] { 445 } },
+                    { "#h", bucket.Select(g => g.GroupId).ToArray() }
+                };
+
+                if (bucket.Key.HasValue)
+                    filter["since"] = bucket.Key.Value.ToUnixTimeSeconds();
+
+                return filter;
+            })
+            .ToList();
     }
 
     /// <summary>
