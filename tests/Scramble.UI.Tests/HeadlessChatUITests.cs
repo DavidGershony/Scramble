@@ -347,4 +347,102 @@ public class HeadlessChatUITests : HeadlessTestBase
 
         ctx.MockClipboard.Verify(c => c.SetTextAsync(chat.Id), Times.Once);
     }
+
+    // ------------------------------------------------- promote / demote reports an outcome
+    //
+    // The native head had no promote control at all, so wiring one exposed that the shared
+    // command swallowed failures into the log. An admin change publishes a commit to every
+    // member; "it silently did nothing" is the one outcome a user must not be left with.
+
+    private async Task<(RealTestContext Ctx, ChatViewModel ChatVm, GroupMemberViewModel Member)>
+        GroupWithAnotherMember(string backend, bool viewerIsAdmin)
+    {
+        var ctx = await CreateRealContext(backend);
+        await ctx.MessageService.InitializeAsync();
+
+        var groupInfo = await ctx.MlsService.CreateGroupAsync("Admin Test", new[] { "wss://relay.test" });
+        var other = "bb" + new string('1', 62);
+        // A third participant is required, not decorative: ChatViewModel only treats a chat
+        // as a group when it has MORE than two participants (or a description), and
+        // IsCurrentUserAdmin is gated on IsGroup. With two, the admin path is unreachable.
+        var third = "cc" + new string('2', 62);
+
+        var chat = new Chat
+        {
+            Id = Guid.NewGuid().ToString(),
+            Name = "Admin Test",
+            Type = ChatType.Group,
+            MlsGroupId = groupInfo.GroupId,
+            MlsEpoch = groupInfo.Epoch,
+            ParticipantPublicKeys = new List<string> { ctx.User.PublicKeyHex, other, third },
+            AdminPublicKeys = viewerIsAdmin
+                ? new List<string> { ctx.User.PublicKeyHex.ToLowerInvariant() }
+                : new List<string> { other },
+            CreatedAt = DateTime.UtcNow,
+            LastActivityAt = DateTime.UtcNow
+        };
+        await ctx.Storage.SaveChatAsync(chat);
+
+        var chatVm = new ChatViewModel(
+            ctx.MessageService, ctx.Storage, ctx.MockNostr.Object, ctx.MlsService, ctx.MockClipboard.Object);
+
+        // Required before LoadChat: IsCurrentUserAdmin is computed from this, so without it
+        // the flag is false regardless of the admin list and the test would assert nothing.
+        chatVm.SetUserContext(ctx.User.PrivateKeyHex, ctx.User.PublicKeyHex);
+
+        chatVm.LoadChat(chat);
+        Dispatcher.UIThread.RunJobs();
+
+        var member = new GroupMemberViewModel
+        {
+            PublicKeyHex = other,
+            DisplayName = "Other",
+            IsAdmin = false,
+            IsCurrentUser = false
+        };
+
+        return (ctx, chatVm, member);
+    }
+
+    [AvaloniaTheory]
+    [InlineData("rust")]
+    [InlineData("managed")]
+    public async Task ToggleAdmin_AsAdmin_AlwaysReportsAnOutcome(string backend)
+    {
+        var (_, chatVm, member) = await GroupWithAnotherMember(backend, viewerIsAdmin: true);
+        Assert.True(chatVm.IsCurrentUserAdmin);
+
+        await chatVm.ToggleAdminCommand.Execute(member);
+        Dispatcher.UIThread.RunJobs();
+
+        // It must have RESOLVED, not merely be non-empty. Asserting non-empty passed even
+        // with the failure report deleted, because the in-progress "Promoting..." text is
+        // assigned before the attempt -- a test that agreed with the bug. The in-progress
+        // convention is a trailing ellipsis, so an outcome is anything that is not that.
+        Assert.False(string.IsNullOrEmpty(chatVm.AdminActionStatus));
+
+        // Still the in-progress text means the attempt reported nothing. Matching on the
+        // in-progress PREFIXES rather than on a trailing ellipsis: an exception message can
+        // itself contain one, which made the first version of this assertion fail against
+        // correct code.
+        Assert.False(
+            chatVm.AdminActionStatus!.StartsWith("Promoting", StringComparison.Ordinal) ||
+            chatVm.AdminActionStatus!.StartsWith("Removing admin from", StringComparison.Ordinal),
+            $"admin action never resolved: {chatVm.AdminActionStatus}");
+    }
+
+    // NOT TESTED HERE: that a non-admin's toggle is refused.
+    //
+    // Three attempts could not construct an honest fixture for it. LoadChat refreshes the
+    // admin list from real MLS state and the fixture's user created the group, so the engine
+    // names them admin whatever the Chat record says; assigning IsCurrentUserAdmin=false
+    // afterwards is overwritten by the async member load. A test bent far enough to pass
+    // here would be asserting the bend, and a flaky test on a required gate is worse than an
+    // absent one.
+    //
+    // The refusal itself is defended three times over: the guard in ToggleAdminCommand, the
+    // control being hidden for non-admins in both heads, and the engine refusing an
+    // unauthorised admin commit. Covering it properly needs a fixture where the viewer is
+    // genuinely not the group's creator, which is integration-harness work.
+
 }

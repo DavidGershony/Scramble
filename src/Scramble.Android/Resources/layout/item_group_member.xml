@@ -85,6 +85,25 @@
             android:maxLines="1" />
     </LinearLayout>
 
+    <!--
+      Promote / demote. Hidden unless the viewer is an admin and the row is somebody
+      else. The engine refuses an unauthorised admin commit anyway, and offering a
+      control that cannot work is how the Avalonia head used to show "Make Admin" to
+      everyone.
+    -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/member_admin_toggle"
+        android:layout_width="wrap_content"
+        android:layout_height="32dp"
+        android:textSize="11sp"
+        android:minWidth="0dp"
+        android:insetTop="0dp"
+        android:insetBottom="0dp"
+        android:paddingHorizontal="10dp"
+        android:text="Make admin"
+        android:visibility="gone"
+        style="@style/Widget.Material3.Button.TextButton" />
+
     <!-- Copy npub button -->
     <ImageButton
         android:id="@+id/member_copy_npub"

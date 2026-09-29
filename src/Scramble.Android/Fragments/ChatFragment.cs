@@ -729,6 +729,36 @@ public class ChatFragment : Fragment
         // Set up member list
         var memberAdapter = new Adapters.GroupMemberAdapter();
         memberAdapter.CopyNpubClick += (s, npubText) => CopyToClipboard("npub", npubText);
+
+        // Promote / demote. The control is hidden for non-admins and on your own row; this
+        // is the shared command the Avalonia head has always used, which the native head
+        // simply never invoked.
+        memberAdapter.CanManageAdmins = ViewModel.IsCurrentUserAdmin;
+        memberAdapter.AdminToggleClick += (s, member) =>
+        {
+            // Rebind on completion so the button label flips. The adapter holds its own
+            // list, so mutating IsAdmin on the view model alone leaves the row reading
+            // "Make admin" for somebody who is now one.
+            ViewModel.ToggleAdminCommand.Execute(member)
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(_ =>
+                {
+                    memberAdapter.CanManageAdmins = ViewModel.IsCurrentUserAdmin;
+                    memberAdapter.UpdateItems(ViewModel.GroupMembers.ToList());
+                })
+                .DisposeWith(_disposables);
+        };
+
+        // An admin change publishes a commit to every member, so its outcome has to be
+        // visible. It previously only reached the log.
+        ViewModel.WhenAnyValue(x => x.AdminActionStatus)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(status =>
+            {
+                if (!string.IsNullOrEmpty(status) && Activity != null)
+                    Toast.MakeText(Activity, status, ToastLength.Short)?.Show();
+            })
+            .DisposeWith(_disposables);
         membersRecycler.SetLayoutManager(new LinearLayoutManager(Context));
         membersRecycler.SetAdapter(memberAdapter);
 

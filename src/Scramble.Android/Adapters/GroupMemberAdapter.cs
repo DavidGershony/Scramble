@@ -11,6 +11,19 @@ public class GroupMemberAdapter : RecyclerView.Adapter
 
     public event EventHandler<string>? CopyNpubClick;
 
+    /// <summary>Raised when the viewer asks to promote or demote a member.</summary>
+    public event EventHandler<GroupMemberViewModel>? AdminToggleClick;
+
+    /// <summary>
+    /// Whether the viewer may change the admin list. Set before UpdateItems.
+    /// </summary>
+    /// <remarks>
+    /// Gates the control's visibility rather than letting it fail: the engine refuses an
+    /// admin commit from a non-admin, and a commit our peers reject after we published is
+    /// what forks a group.
+    /// </remarks>
+    public bool CanManageAdmins { get; set; }
+
     public override int ItemCount => _items.Count;
 
     public void UpdateItems(List<GroupMemberViewModel> items)
@@ -41,6 +54,26 @@ public class GroupMemberAdapter : RecyclerView.Adapter
                 var npubText = member.Npub ?? member.PublicKeyHex;
                 CopyNpubClick?.Invoke(this, npubText);
             }));
+
+            // Never offer it on your own row: demoting yourself through this control would
+            // publish a commit removing your own authority, with no way back if you are the
+            // only admin. Self-demotion is a deliberate act and belongs elsewhere.
+            var showToggle = CanManageAdmins && !member.IsCurrentUser;
+            memberHolder.AdminToggle.Visibility = showToggle ? ViewStates.Visible : ViewStates.Gone;
+
+            if (showToggle)
+            {
+                memberHolder.AdminToggle.Text = member.IsAdmin ? "Remove admin" : "Make admin";
+
+                // SetOnClickListener, not `Click +=`. It matters more here than anywhere
+                // else in this adapter: a handler accumulated across rebinds would fire
+                // twice on one tap, and promote-then-demote publishes two governance
+                // commits and lands back where it started.
+                memberHolder.AdminToggle.SetOnClickListener(new ActionClickListener(() =>
+                {
+                    AdminToggleClick?.Invoke(this, member);
+                }));
+            }
         }
     }
 
@@ -53,9 +86,12 @@ public class GroupMemberAdapter : RecyclerView.Adapter
         private readonly TextView _youBadge;
         private readonly TextView _npub;
         public readonly ImageButton CopyButton;
+        public readonly Google.Android.Material.Button.MaterialButton AdminToggle;
 
         public MemberViewHolder(View itemView) : base(itemView)
         {
+            AdminToggle = itemView.FindViewById<Google.Android.Material.Button.MaterialButton>(
+                Resource.Id.member_admin_toggle)!;
             _initial = itemView.FindViewById<TextView>(Resource.Id.member_initial)!;
             _avatar = itemView.FindViewById<ImageView>(Resource.Id.member_avatar)!;
             _name = itemView.FindViewById<TextView>(Resource.Id.member_name)!;

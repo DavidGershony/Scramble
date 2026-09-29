@@ -96,6 +96,16 @@ public partial class ChatViewModel : ViewModelBase
     /// <summary>The last history-fetch result, as a line to show the user.</summary>
     [Reactive] public partial string? HistoryFetchStatus { get; set; }
 
+    /// <summary>
+    /// The outcome of the last promote/demote, as a line to show the user.
+    /// </summary>
+    /// <remarks>
+    /// A failed admin change used to only reach the log. It is a governance action that
+    /// publishes a commit to every member, so "it silently did nothing" is the one outcome
+    /// the user must not be left guessing about.
+    /// </remarks>
+    [Reactive] public partial string? AdminActionStatus { get; set; }
+
     /// <summary>True while a history fetch is waiting on the relay.</summary>
     [Reactive] public partial bool IsFetchingHistory { get; set; }
     [Reactive] public partial string EditGroupName { get; set; } = string.Empty;
@@ -420,20 +430,46 @@ public partial class ChatViewModel : ViewModelBase
                 newAdmins.Remove(targetPk);
             }
 
+            AdminActionStatus = promoting
+                ? $"Promoting {member.DisplayName}..."
+                : $"Removing admin from {member.DisplayName}...";
+
             try
             {
                 // Stage + publish + merge via MLS GroupContextExtensions proposal
                 await _messageService.UpdateAdminPubkeysAsync(_currentChat.Id, newAdmins);
                 member.IsAdmin = promoting;
 
-                // Send system message to notify group
+                // Keep the chat's own copy in step. Without this, IsCurrentUserAdmin and
+                // the next admin list built from _currentChat are computed from state one
+                // change behind, so a second toggle would undo the first.
+                _currentChat.AdminPublicKeys = newAdmins;
+
                 var action = promoting ? "promoted to admin" : "removed from admin";
+                AdminActionStatus = $"{member.DisplayName} was {action}.";
+
+                // Send system message to notify group
                 await _messageService.SendMessageAsync(_currentChat.Id,
                     $"[System] {member.DisplayName} was {action}");
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "ToggleAdmin: failed to update admin list via MLS");
+                AdminActionStatus = $"Could not change admin: {ex.Message}";
+            }
+            finally
+            {
+                // The status must never be left mid-flight. A ReactiveCommand body can end
+                // without either branch above having assigned -- an exception raised outside
+                // the try is routed to ThrownExceptions and the awaiting caller still sees a
+                // completed command -- which left the UI reading "Promoting..." forever.
+                // Found by a test asserting the outcome RESOLVED rather than merely existed.
+                if (AdminActionStatus != null &&
+                    (AdminActionStatus.StartsWith("Promoting", StringComparison.Ordinal) ||
+                     AdminActionStatus.StartsWith("Removing admin from", StringComparison.Ordinal)))
+                {
+                    AdminActionStatus = "Admin change did not complete. Nothing was published.";
+                }
             }
         });
 
