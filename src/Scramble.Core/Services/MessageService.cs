@@ -3272,6 +3272,87 @@ public class MessageService : IMessageService, IDisposable
         return cleared;
     }
 
+    /// <inheritdoc />
+    public async Task<HistoryFetchReport> FetchMissingMessagesAsync(string chatId, TimeSpan? wait = null)
+    {
+        var waitFor = wait ?? TimeSpan.FromSeconds(10);
+
+        var chat = await _storageService.GetChatAsync(chatId);
+        if (chat == null)
+            return new HistoryFetchReport { Error = "That chat no longer exists." };
+
+        if (chat.MlsGroupId == null || chat.MlsGroupId.Length == 0)
+            return new HistoryFetchReport { Error = "This is not a group chat, so it has no group history to fetch." };
+
+        var addresses = _mlsService.GetNostrGroupIdHistory(chat.MlsGroupId);
+        var current = _mlsService.GetNostrGroupId(chat.MlsGroupId);
+
+        // Fall back to whatever the chat has if the index is empty: better to re-ask the
+        // one address we know than to refuse because the index has nothing to add.
+        if (addresses.Count == 0)
+        {
+            if (current != null) addresses.Add(current);
+            else if (chat.NostrGroupId is { Length: > 0 }) addresses.Add(chat.NostrGroupId);
+        }
+
+        if (addresses.Count == 0)
+            return new HistoryFetchReport { Error = "This group has no routing address, so nothing can be requested for it." };
+
+        var stored = chat.NostrGroupId is { Length: > 0 }
+            ? Convert.ToHexString(chat.NostrGroupId).ToLowerInvariant()
+            : null;
+        var currentHex = current != null ? Convert.ToHexString(current).ToLowerInvariant() : null;
+        var stale = currentHex != null && stored != null && !string.Equals(stored, currentHex, StringComparison.Ordinal);
+
+        // Repair the stored address while we are here. Leaving it stale would mean the
+        // next ordinary subscription goes back to asking the wrong place.
+        if (stale && current != null)
+        {
+            _logger.LogWarning(
+                "FetchMissingMessages: chat {ChatId} had a stale routing address ({Stored} -> {Current})",
+                chatId, stored, currentHex);
+            chat.NostrGroupId = current;
+            await _storageService.SaveChatAsync(chat);
+            _chatUpdates.OnNext(chat);
+        }
+
+        var before = await _storageService.CountMessagesForChatAsync(chatId);
+        var epoch = chat.MlsEpoch;
+
+        var hexAddresses = addresses
+            .Select(a => Convert.ToHexString(a).ToLowerInvariant())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        _logger.LogInformation(
+            "FetchMissingMessages: chat {ChatId}, {Count} address(es), no horizon",
+            chatId, hexAddresses.Count);
+
+        // No horizon, deliberately: this path exists because a horizon excluded something.
+        await _nostrService.SubscribeToGroupMessagesAsync(
+            hexAddresses.Select(a => (GroupId: a, Since: (DateTimeOffset?)null)).ToList());
+
+        var started = DateTimeOffset.UtcNow;
+        await Task.Delay(waitFor);
+        var waited = DateTimeOffset.UtcNow - started;
+
+        var after = await _storageService.CountMessagesForChatAsync(chatId);
+
+        var report = new HistoryFetchReport
+        {
+            KnownAddresses = hexAddresses,
+            PreviouslySubscribedAddress = stored,
+            StoredAddressWasStale = stale,
+            MessagesBefore = before,
+            MessagesAfter = after,
+            Epoch = epoch,
+            Waited = waited
+        };
+
+        _logger.LogInformation("FetchMissingMessages: {Summary}", report.Summary);
+        return report;
+    }
+
     public async Task RescanInvitesAsync()
     {
         if (_currentUser == null || string.IsNullOrEmpty(_currentUser.PublicKeyHex))

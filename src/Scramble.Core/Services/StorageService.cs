@@ -814,6 +814,20 @@ public class StorageService : IStorageService
         return result;
     }
 
+    /// <inheritdoc />
+    public async Task<int> CountMessagesForChatAsync(string chatId)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync();
+
+        var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM Messages WHERE ChatId = @ChatId AND IsDeleted = 0";
+        command.Parameters.AddWithValue("@ChatId", chatId);
+
+        var result = await command.ExecuteScalarAsync();
+        return Convert.ToInt32(result ?? 0);
+    }
+
     public async Task<IEnumerable<Message>> GetMessagesForChatAsync(string chatId, int limit = 50, int offset = 0)
     {
         var messages = new List<Message>();

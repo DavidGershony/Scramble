@@ -92,6 +92,12 @@ public partial class ChatViewModel : ViewModelBase
     public ObservableCollection<GroupMemberViewModel> GroupMembers { get; } = new();
     [Reactive] public partial bool IsLoadingMembers { get; set; }
     [Reactive] public partial bool IsCurrentUserAdmin { get; set; }
+
+    /// <summary>The last history-fetch result, as a line to show the user.</summary>
+    [Reactive] public partial string? HistoryFetchStatus { get; set; }
+
+    /// <summary>True while a history fetch is waiting on the relay.</summary>
+    [Reactive] public partial bool IsFetchingHistory { get; set; }
     [Reactive] public partial string EditGroupName { get; set; } = string.Empty;
 
     // Load older messages
@@ -123,6 +129,16 @@ public partial class ChatViewModel : ViewModelBase
     public ReactiveCommand<Unit, Unit> LoadMoreCommand { get; }
     public ReactiveCommand<Unit, Unit> LoadOlderMessagesCommand { get; }
     public ReactiveCommand<Unit, Unit> ShowChatInfoCommand { get; }
+
+    /// <summary>
+    /// Re-requests this group's whole history from the relay, on demand.
+    /// </summary>
+    /// <remarks>
+    /// Manual by design: it asks for everything across every routing address the group
+    /// has used, which is far too expensive to do on its own. The user triggers it when
+    /// they believe a group should have messages that are not showing.
+    /// </remarks>
+    public ReactiveCommand<Unit, Unit> FetchMissingMessagesCommand { get; }
     public ReactiveCommand<Unit, Unit> ToggleMetadataPanelCommand { get; }
     public ReactiveCommand<Unit, Unit> ShowInviteDialogCommand { get; }
     public ReactiveCommand<Unit, Unit> CloseInviteDialogCommand { get; }
@@ -229,6 +245,40 @@ public partial class ChatViewModel : ViewModelBase
             x => x.HasChat,
             (canLoad, loading, hasChat) => canLoad && !loading && hasChat);
         LoadOlderMessagesCommand = ReactiveCommand.CreateFromTask(LoadOlderMessagesFromRelayAsync, canLoadOlder);
+
+        FetchMissingMessagesCommand = ReactiveCommand.CreateFromTask(async () =>
+        {
+            if (string.IsNullOrEmpty(ChatId)) return;
+
+            IsFetchingHistory = true;
+            HistoryFetchStatus = "Asking the relay for this group's history...";
+
+            try
+            {
+                var report = await _messageService.FetchMissingMessagesAsync(ChatId);
+                HistoryFetchStatus = report.Summary;
+
+                // Reload only if something arrived: redrawing an unchanged conversation
+                // makes a no-op look like an action, which is the confusion this whole
+                // feature exists to remove.
+                if (report.Gained > 0)
+                {
+                    // Same request-id discipline as LoadChat: a reload racing a chat switch
+                    // must be discardable, or recovered history lands in the wrong window.
+                    var requestId = Interlocked.Increment(ref _messageLoadRequestId);
+                    await LoadMessagesAsync(ChatId, requestId);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "FetchMissingMessages failed for chat {ChatId}", ChatId);
+                HistoryFetchStatus = $"Could not fetch history: {ex.Message}";
+            }
+            finally
+            {
+                IsFetchingHistory = false;
+            }
+        });
 
         ShowChatInfoCommand = ReactiveCommand.CreateFromTask(async () =>
         {

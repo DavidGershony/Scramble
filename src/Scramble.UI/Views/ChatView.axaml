@@ -481,6 +481,22 @@
                             </StackPanel>
                         </StackPanel>
 
+                        <!-- Manual history recovery. A joined group can look empty because
+                             the routing address we stored is no longer where the group
+                             publishes, because the horizon we asked within excluded
+                             everything, or because there is genuinely nothing. This asks for
+                             all of it and reports which. Not automatic: it requests whole
+                             conversations across every address the group has used. -->
+                        <StackPanel Spacing="8" IsVisible="{Binding IsGroup}">
+                            <Button Content="Fetch missing messages"
+                                    Command="{Binding FetchMissingMessagesCommand}"
+                                    IsEnabled="{Binding !IsFetchingHistory}"
+                                    Classes="secondary" HorizontalAlignment="Stretch" />
+                            <TextBlock Text="{Binding HistoryFetchStatus}"
+                                       IsVisible="{Binding HistoryFetchStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                       Classes="muted" FontSize="11" TextWrapping="Wrap" />
+                        </StackPanel>
+
                         <!-- Group Members Section -->
                         <StackPanel Spacing="12" IsVisible="{Binding IsGroup}">
                             <TextBlock Text="Members" Classes="muted" FontSize="12" FontWeight="SemiBold" />

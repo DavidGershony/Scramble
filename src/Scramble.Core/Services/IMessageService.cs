@@ -248,6 +248,30 @@ public interface IMessageService
     Task RescanInvitesAsync();
 
     /// <summary>
+    /// Re-requests a group's full history from the relay, across every routing address
+    /// it has ever used, and reports what happened.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Manual on purpose. Doing this on every startup would re-fetch whole conversations
+    /// forever, so it is a thing the user asks for when they believe a group should have
+    /// messages in it.
+    /// </para>
+    /// <para>
+    /// Two independent reasons a joined group can look empty, and this addresses both by
+    /// asking rather than guessing: the address the app had stored may no longer be where
+    /// the group publishes, and the horizon it asked within may have excluded everything.
+    /// It subscribes to every known address with no horizon at all.
+    /// </para>
+    /// <para>
+    /// It cannot conjure messages from epochs before the account joined — MLS keys each
+    /// epoch separately and there is no key to try. The report says so rather than leaving
+    /// the user to infer it from a count that did not move.
+    /// </para>
+    /// </remarks>
+    Task<HistoryFetchReport> FetchMissingMessagesAsync(string chatId, TimeSpan? wait = null);
+
+    /// <summary>
     /// Reconsiders every welcome previously dismissed, then rescans.
     /// </summary>
     /// <remarks>

@@ -719,6 +719,8 @@ public class ChatFragment : Fragment
         var participants = dialogView.FindViewById<TextView>(Resource.Id.group_info_participants)!;
         var inviteButton = dialogView.FindViewById<MaterialButton>(Resource.Id.group_invite_button)!;
         var copyLinkButton = dialogView.FindViewById<MaterialButton>(Resource.Id.group_copy_link_button)!;
+        var fetchHistoryButton = dialogView.FindViewById<MaterialButton>(Resource.Id.group_fetch_history_button)!;
+        var fetchHistoryStatus = dialogView.FindViewById<TextView>(Resource.Id.group_fetch_history_status)!;
         var membersRecycler = dialogView.FindViewById<RecyclerView>(Resource.Id.group_members_recycler)!;
 
         groupName.Text = ViewModel.ChatName;
@@ -776,6 +778,32 @@ public class ChatFragment : Fragment
                 : ViewModel.ChatId;
             CopyToClipboard("group id", link);
         };
+
+        // The report is the feature, not a nicety: without it a recovery that found nothing
+        // and a recovery that was never asked the right question look the same.
+        ViewModel.WhenAnyValue(x => x.HistoryFetchStatus)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(status =>
+            {
+                fetchHistoryStatus.Text = status ?? "";
+                fetchHistoryStatus.Visibility = string.IsNullOrEmpty(status)
+                    ? ViewStates.Gone : ViewStates.Visible;
+            })
+            .DisposeWith(_disposables);
+
+        ViewModel.WhenAnyValue(x => x.IsFetchingHistory)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(busy =>
+            {
+                fetchHistoryButton.Enabled = !busy;
+                fetchHistoryButton.Text = busy ? "Fetching..." : "Fetch missing messages";
+            })
+            .DisposeWith(_disposables);
+
+        fetchHistoryButton.SetOnClickListener(new ActionClickListener(() =>
+        {
+            ViewModel.FetchMissingMessagesCommand.Execute().Subscribe().DisposeWith(_disposables);
+        }));
     }
 
     private void ShowInviteMemberDialog()

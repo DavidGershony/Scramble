@@ -47,6 +47,33 @@
             style="@style/Widget.Material3.Button.TextButton" />
     </LinearLayout>
 
+    <!--
+      Manual history recovery. A joined group can look empty for reasons that are
+      indistinguishable from the outside: the routing address the app stored may no longer
+      be where the group publishes, the horizon it asked within may have excluded
+      everything, or there may genuinely be nothing. This asks for all of it and then says
+      which of those it was.
+
+      Deliberately not automatic: it requests entire conversations across every address the
+      group has used, which is not something to do on a timer.
+    -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/group_fetch_history_button"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Fetch missing messages"
+        android:layout_marginTop="12dp"
+        style="@style/Widget.Material3.Button.OutlinedButton" />
+
+    <TextView
+        android:id="@+id/group_fetch_history_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="12sp"
+        android:textColor="?attr/colorOnSurfaceVariant"
+        android:layout_marginTop="6dp"
+        android:visibility="gone" />
+
     <!-- Members section -->
     <TextView
         android:layout_width="match_parent"

@@ -30,6 +30,16 @@ public interface IStorageService
     Task<Message?> GetMessageAsync(string messageId);
     Task<Dictionary<string, Message>> GetLastMessagePerChatAsync();
     Task<IEnumerable<Message>> GetMessagesForChatAsync(string chatId, int limit = 50, int offset = 0);
+
+    /// <summary>
+    /// How many undeleted messages the chat holds.
+    /// </summary>
+    /// <remarks>
+    /// A count rather than a page of rows: the history fetch compares before against
+    /// after, and materialising a whole conversation twice to learn a number is waste on
+    /// the one path whose whole purpose is to pull a lot of history.
+    /// </remarks>
+    Task<int> CountMessagesForChatAsync(string chatId);
     Task SaveMessageAsync(Message message);
     Task UpdateMessageStatusAsync(string messageId, MessageStatus status);
     Task UpdateMessageChatIdAsync(string messageId, string newChatId);

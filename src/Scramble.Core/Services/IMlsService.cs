@@ -216,6 +216,23 @@ public interface IMlsService
     byte[]? GetNostrGroupId(byte[] groupId);
 
     /// <summary>
+    /// Every routing address the group has ever used, current first.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A group's <c>h</c>-tag address rotates, and the engine records one per epoch. A
+    /// message published before a rotation carries the address that was current then, so
+    /// asking the relay only for today's address silently omits everything older -- which
+    /// is not a decryption problem, it is never having requested them.
+    /// </para>
+    /// <para>
+    /// Returned as raw bytes rather than engine records so nothing protocol-specific
+    /// crosses into the app layer. Empty if the group has no routing component.
+    /// </para>
+    /// </remarks>
+    List<byte[]> GetNostrGroupIdHistory(byte[] groupId);
+
+    /// <summary>
     /// Returns the admin public keys (as lowercase hex strings) from the 0xF2EE extension for a group.
     /// Returns an empty list if the extension is missing or has no admins.
     /// </summary>

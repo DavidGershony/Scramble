@@ -471,6 +471,21 @@ public sealed class DarkMatterMlsService : IMlsService, IDisposable
     }
 
     /// <inheritdoc />
+    public List<byte[]> GetNostrGroupIdHistory(byte[] groupId)
+    {
+        ArgumentNullException.ThrowIfNull(groupId);
+
+        return Blocking(async () =>
+        {
+            // The index is the authority here, not the live group: the live group only
+            // knows the address it uses now, while the index retains the retired ones
+            // precisely so history stays reachable.
+            var records = await _storage.ListRoutingAsync(new GroupId(groupId));
+            return records.Select(r => r.TransportGroupId).ToList();
+        });
+    }
+
+    /// <inheritdoc />
     public List<string> GetAdminPubkeys(byte[] groupId)
     {
         ArgumentNullException.ThrowIfNull(groupId);
