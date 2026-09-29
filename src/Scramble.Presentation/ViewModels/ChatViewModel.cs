@@ -286,11 +286,18 @@ public partial class ChatViewModel : ViewModelBase
 
         CopyGroupLinkCommand = ReactiveCommand.CreateFromTask(async () =>
         {
-            if (string.IsNullOrEmpty(GroupInviteLink)) return;
+            // Fall back to the chat id rather than returning silently. Whatever goes
+            // wrong here, the user pressed a button and is owed an outcome.
+            var link = !string.IsNullOrEmpty(GroupInviteLink) ? GroupInviteLink : ChatId;
+            if (string.IsNullOrEmpty(link))
+            {
+                InviteError = "Nothing to copy: this chat has no id yet.";
+                return;
+            }
 
             try
             {
-                await _clipboard.SetTextAsync(GroupInviteLink);
+                await _clipboard.SetTextAsync(link);
                 InviteSuccess = "Group ID copied to clipboard!";
                 await Task.Delay(2000);
                 if (ShowInviteDialog) InviteSuccess = null;
@@ -493,6 +500,13 @@ public partial class ChatViewModel : ViewModelBase
         IsCurrentUserAdmin = IsGroup && _currentUserPublicKeyHex != null &&
             chat.AdminPublicKeys.Contains(_currentUserPublicKeyHex.ToLowerInvariant());
         EditGroupName = chat.Name;
+
+        // Set here rather than only in ShowInviteDialogCommand. The group-info sheet's
+        // Copy button invokes CopyGroupLinkCommand without ever opening the invite
+        // dialog, so this was still empty and the command took its empty-guard early
+        // return -- a button that did nothing and said nothing.
+        GroupInviteLink = chat.Id;
+
         GroupMembers.Clear();
         HasChat = true;
 

@@ -316,4 +316,35 @@ public class HeadlessChatUITests : HeadlessTestBase
         Assert.NotNull(chatVm.InviteError);
         Assert.DoesNotContain(inviteePubKey, chat.ParticipantPublicKeys);
     }
+
+    // ------------------------------------------- copying the group id from the info sheet
+    //
+    // The group-info sheet's Copy button reached CopyGroupLinkCommand without opening the
+    // invite dialog. GroupInviteLink was only ever assigned inside
+    // ShowInviteDialogCommand, so it was empty and the command took its empty-guard early
+    // return: a button that did nothing and reported nothing. Reported from the phone.
+
+    [AvaloniaTheory]
+    [InlineData("rust")]
+    [InlineData("managed")]
+    public async Task GroupInviteLink_IsAvailableWithoutOpeningTheInviteDialog(string backend)
+    {
+        var (_, chat, chatVm) = await CreateChatWithViewModel(backend);
+
+        // Deliberately NOT executing ShowInviteDialogCommand: the info sheet does not.
+        Assert.Equal(chat.Id, chatVm.GroupInviteLink);
+    }
+
+    [AvaloniaTheory]
+    [InlineData("rust")]
+    [InlineData("managed")]
+    public async Task CopyGroupLink_ReachesTheClipboardWithoutTheInviteDialog(string backend)
+    {
+        var (ctx, chat, chatVm) = await CreateChatWithViewModel(backend);
+
+        await chatVm.CopyGroupLinkCommand.Execute();
+        Dispatcher.UIThread.RunJobs();
+
+        ctx.MockClipboard.Verify(c => c.SetTextAsync(chat.Id), Times.Once);
+    }
 }

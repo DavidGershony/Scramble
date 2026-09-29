@@ -761,9 +761,20 @@ public class ChatFragment : Fragment
             ShowInviteMemberDialog();
         };
 
+        // Copy through the fragment's own helper, as the member rows in this sheet
+        // already do, rather than through CopyGroupLinkCommand. Two reasons it did not
+        // work from here: the command's link is only populated when the invite DIALOG is
+        // opened, which this sheet does not do, so it took an empty-guard early return;
+        // and its outcome goes to InviteSuccess/InviteError, which are bound in that
+        // dialog and not here, so success and failure looked identical -- nothing.
+        // The invite dialog's own copy button (further down) is unaffected and still
+        // uses the command, where both of those hold.
         copyLinkButton.Click += (s, e) =>
         {
-            ViewModel.CopyGroupLinkCommand.Execute().Subscribe().DisposeWith(_disposables);
+            var link = !string.IsNullOrEmpty(ViewModel.GroupInviteLink)
+                ? ViewModel.GroupInviteLink
+                : ViewModel.ChatId;
+            CopyToClipboard("group id", link);
         };
     }
 
