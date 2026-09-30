@@ -3492,6 +3492,33 @@ public class NostrService : INostrService, IDisposable
     {
         _logger.LogInformation("Publishing event kind {Kind} to {Count} relays", kind, _relayConnections.Count);
 
+        var (eventId, eventMessage) = await SignForPublishAsync(kind, content, tags, privateKeyHex);
+
+        return await TransmitSignedEventAsync(eventId, kind, eventMessage);
+    }
+
+    /// <summary>
+    /// Signs an event and returns its id and wire message, without sending it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Split out from <see cref="PublishEventAsync"/> so an id can be known
+    /// before a relay sees the event.</b> A Nostr event id is a SHA-256 over the
+    /// serialized event, so it is fully determined at signing time — and for a
+    /// kind-30443 KeyPackage that matters, because the device has to bind that id
+    /// to the private material it kept before anybody can fetch the KeyPackage
+    /// and invite us with it. See the <c>bindBeforeSend</c> parameter on
+    /// <see cref="PublishKeyPackageAsync"/>.
+    /// </para>
+    /// <para>
+    /// Nothing observable changes by calling this rather than publishing
+    /// directly: the two halves were always sequential inside one method, and
+    /// this is the same code with a name.
+    /// </para>
+    /// </remarks>
+    private async Task<(string EventId, string EventMessage)> SignForPublishAsync(
+        int kind, string content, List<List<string>> tags, string? privateKeyHex)
+    {
         string eventMessage;
         string eventId;
 
@@ -3599,6 +3626,20 @@ public class NostrService : INostrService, IDisposable
                 "Please log in with a private key or connect an external signer like Amber.");
         }
 
+        return (eventId, eventMessage);
+    }
+
+    /// <summary>
+    /// Sends an already-signed event to every eligible relay and waits for an OK.
+    /// </summary>
+    /// <remarks>
+    /// The second half of <see cref="PublishEventAsync"/>. Everything from here
+    /// on is transport: nothing about the event can change, and the id is already
+    /// fixed by its signature.
+    /// </remarks>
+    private async Task<string> TransmitSignedEventAsync(
+        string eventId, int kind, string eventMessage)
+    {
         var eventBytes = Encoding.UTF8.GetBytes(eventMessage);
         _logger.LogDebug("Publishing event {EventId} to relays", eventId);
 
