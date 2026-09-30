@@ -1220,22 +1220,26 @@ public partial class SettingsViewModel : ViewModelBase
             var keyPackage = await _mlsService.GenerateKeyPackageAsync();
             _logger.LogInformation("Generated key package with {DataLength} bytes", keyPackage.Data.Length);
 
-            // Publish to Nostr relays with MDK-provided tags
+            // Publish to Nostr relays with MDK-provided tags.
+            //
+            // Recording and binding happen inside the callback, which runs after
+            // the event is signed and before any relay is sent it. They used to
+            // run after this call returned, which left a window where the relay
+            // served a KeyPackage this device could not resolve by its event id
+            // -- a Welcome naming it was refused and the invite dismissed. See
+            // INostrService.PublishKeyPackageAsync.
             KeyPackageStatus = "Publishing to relays...";
-            var eventId = await _nostrService.PublishKeyPackageAsync(keyPackage.Data, PrivateKeyHex, keyPackage.NostrTags);
+            var eventId = await _nostrService.PublishKeyPackageAsync(
+                keyPackage.Data, PrivateKeyHex, keyPackage.NostrTags,
+                async id =>
+                {
+                    keyPackage.NostrEventId = id;
+                    keyPackage.RelayUrls = _nostrService.ConnectedRelayUrls.ToList();
+                    await _storageService.SaveKeyPackageAsync(keyPackage);
+                    await _mlsService.MarkKeyPackagePublishedAsync(keyPackage, id);
+                });
+
             _logger.LogInformation("Published key package with event ID: {EventId} using {TagCount} MDK tags", eventId, keyPackage.NostrTags.Count);
-
-            // Record which relays the key package was published to
-            keyPackage.NostrEventId = eventId;
-            keyPackage.RelayUrls = _nostrService.ConnectedRelayUrls.ToList();
-
-            // Save key package locally
-            await _storageService.SaveKeyPackageAsync(keyPackage);
-
-            // And bind the engine's own record to the event id, so a Welcome
-            // naming this KeyPackage can be resolved to its private material.
-            // No-op on the legacy backends.
-            await _mlsService.MarkKeyPackagePublishedAsync(keyPackage, eventId);
 
             KeyPackageStatus = $"Key package published successfully!\nEvent ID: {eventId[..16]}...";
             KeyPackageSuccess = true;

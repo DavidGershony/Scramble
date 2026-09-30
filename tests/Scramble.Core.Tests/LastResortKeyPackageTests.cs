@@ -270,7 +270,7 @@ public class LastResortKeyPackageTests : IAsyncLifetime
         // the wire requires: AcceptInvite checks the group's relays against the
         // connected ones, and an unstubbed property hands it null.
         mock.Setup(n => n.ConnectedRelayUrls).Returns(new List<string> { "wss://test.relay" });
-        mock.Setup(n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>()))
+        mock.Setup(n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>(), It.IsAny<Func<string, Task>?>()))
             .ReturnsAsync(() => Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"));
         mock.Setup(n => n.PublishWelcomeAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
             .ReturnsAsync(() => "fakewelcome_" + Guid.NewGuid().ToString("N"));

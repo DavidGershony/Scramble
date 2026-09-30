@@ -170,7 +170,7 @@ public class DummyKeyPackageTests : IDisposable
         await InitializeServiceAsync();
 
         _nostrMock.Setup(n => n.PublishKeyPackageAsync(
-                It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>()))
+                It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>(), It.IsAny<Func<string, Task>?>()))
             .ReturnsAsync("event-id-dummy");
 
         // Act
@@ -178,7 +178,7 @@ public class DummyKeyPackageTests : IDisposable
 
         // Assert: exactly DummyKeyPackageCount calls
         _nostrMock.Verify(
-            n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>()),
+            n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>(), It.IsAny<Func<string, Task>?>()),
             Times.Exactly(MessageService.DummyKeyPackageCount));
     }
 
@@ -190,8 +190,8 @@ public class DummyKeyPackageTests : IDisposable
 
         var publishedDTags = new List<string>();
         _nostrMock.Setup(n => n.PublishKeyPackageAsync(
-                It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>()))
-            .Callback<byte[], string, List<List<string>>?>((_, _, tags) =>
+                It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>(), It.IsAny<Func<string, Task>?>()))
+            .Callback<byte[], string, List<List<string>>?, Func<string, Task>?>((_, _, tags, _) =>
             {
                 var dTag = tags?.FirstOrDefault(t => t.Count >= 2 && t[0] == "d");
                 if (dTag != null) publishedDTags.Add(dTag[1]);
@@ -218,8 +218,8 @@ public class DummyKeyPackageTests : IDisposable
 
         var publishedTagSets = new List<List<List<string>>>();
         _nostrMock.Setup(n => n.PublishKeyPackageAsync(
-                It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>()))
-            .Callback<byte[], string, List<List<string>>?>((_, _, tags) =>
+                It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>(), It.IsAny<Func<string, Task>?>()))
+            .Callback<byte[], string, List<List<string>>?, Func<string, Task>?>((_, _, tags, _) =>
             {
                 if (tags != null) publishedTagSets.Add(tags);
             })
@@ -246,8 +246,8 @@ public class DummyKeyPackageTests : IDisposable
 
         var publishedRelayTags = new List<List<string>>();
         _nostrMock.Setup(n => n.PublishKeyPackageAsync(
-                It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>()))
-            .Callback<byte[], string, List<List<string>>?>((_, _, tags) =>
+                It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>(), It.IsAny<Func<string, Task>?>()))
+            .Callback<byte[], string, List<List<string>>?, Func<string, Task>?>((_, _, tags, _) =>
             {
                 var relayTag = tags?.FirstOrDefault(t => t.Count >= 1 && t[0] == "relays");
                 if (relayTag != null) publishedRelayTags.Add(relayTag);
@@ -275,8 +275,8 @@ public class DummyKeyPackageTests : IDisposable
 
         var publishedData = new List<byte[]>();
         _nostrMock.Setup(n => n.PublishKeyPackageAsync(
-                It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>()))
-            .Callback<byte[], string, List<List<string>>?>((data, _, _) =>
+                It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>(), It.IsAny<Func<string, Task>?>()))
+            .Callback<byte[], string, List<List<string>>?, Func<string, Task>?>((data, _, _, _) =>
             {
                 publishedData.Add(data.ToArray());
             })
@@ -303,8 +303,8 @@ public class DummyKeyPackageTests : IDisposable
 
         var passedKeys = new List<string>();
         _nostrMock.Setup(n => n.PublishKeyPackageAsync(
-                It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>()))
-            .Callback<byte[], string, List<List<string>>?>((_, key, _) =>
+                It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>(), It.IsAny<Func<string, Task>?>()))
+            .Callback<byte[], string, List<List<string>>?, Func<string, Task>?>((_, key, _, _) =>
             {
                 passedKeys.Add(key);
             })
@@ -341,7 +341,7 @@ public class DummyKeyPackageTests : IDisposable
 
         // Assert: no KeyPackages published
         _nostrMock.Verify(
-            n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>()),
+            n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>(), It.IsAny<Func<string, Task>?>()),
             Times.Never);
     }
 
@@ -356,7 +356,7 @@ public class DummyKeyPackageTests : IDisposable
 
         // Assert: no KeyPackages published
         _nostrMock.Verify(
-            n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>()),
+            n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>(), It.IsAny<Func<string, Task>?>()),
             Times.Never);
     }
 
@@ -384,7 +384,7 @@ public class DummyKeyPackageTests : IDisposable
 
         int callCount = 0;
         _nostrMock.Setup(n => n.PublishKeyPackageAsync(
-                It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>()))
+                It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>(), It.IsAny<Func<string, Task>?>()))
             .ReturnsAsync(() =>
             {
                 callCount++;
@@ -397,7 +397,7 @@ public class DummyKeyPackageTests : IDisposable
 
         // Assert: all DummyKeyPackageCount attempts were made (not short-circuited)
         _nostrMock.Verify(
-            n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>()),
+            n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>(), It.IsAny<Func<string, Task>?>()),
             Times.Exactly(MessageService.DummyKeyPackageCount));
     }
 

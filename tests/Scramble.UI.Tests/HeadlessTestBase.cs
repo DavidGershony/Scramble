@@ -99,7 +99,7 @@ public abstract class HeadlessTestBase : IDisposable
         mockNostr.Setup(n => n.FetchRelayListAsync(It.IsAny<string>())).ReturnsAsync(new List<RelayPreference>());
         mockNostr.Setup(n => n.PublishRelayListAsync(It.IsAny<List<RelayPreference>>(), It.IsAny<string?>()))
             .ReturnsAsync(() => "fakenip65_" + Guid.NewGuid().ToString("N"));
-        mockNostr.Setup(n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>()))
+        mockNostr.Setup(n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>?>(), It.IsAny<Func<string, Task>?>()))
             .ReturnsAsync(() => Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N"));
         mockNostr.Setup(n => n.PublishWelcomeAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
             .ReturnsAsync(() => "fakewelcome_" + Guid.NewGuid().ToString("N"));

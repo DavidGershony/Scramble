@@ -3106,18 +3106,28 @@ public class MessageService : IMessageService, IDisposable
             _logger.LogInformation("AutoPublishKP: no unused KeyPackages remaining, generating and publishing a new one");
 
             var keyPackage = await _mlsService.GenerateKeyPackageAsync();
-            var eventId = await _nostrService.PublishKeyPackageAsync(
-                keyPackage.Data, _currentUser.PrivateKeyHex, keyPackage.NostrTags);
-            keyPackage.NostrEventId = eventId;
-            keyPackage.RelayUrls = _nostrService.ConnectedRelayUrls.ToList();
-            await _storageService.SaveKeyPackageAsync(keyPackage);
 
-            // Binds the engine's own record to the event id, so a Welcome naming
-            // this KeyPackage resolves to its private material. Without it the
-            // engine can only find the material by trying every stored
-            // KeyPackage, which still opens the Welcome but no longer proves the
-            // inviter used one of ours. No-op on the legacy backends.
-            await _mlsService.MarkKeyPackagePublishedAsync(keyPackage, eventId);
+            // Stored and bound BEFORE the event reaches a relay, not after.
+            //
+            // This all used to run after the publish returned, which left the
+            // KeyPackage fetchable by an inviter and unresolvable by us: the
+            // Welcome named it, the engine had no record of the id, and the
+            // invite was refused and dismissed for good. The peer is told the
+            // private key is no longer available, which is not what happened.
+            //
+            // The binding is what proves the inviter used one of ours. Without
+            // it the engine can only find the material by trying every stored
+            // KeyPackage, which still opens the Welcome but proves nothing.
+            // No-op on the legacy backends.
+            var eventId = await _nostrService.PublishKeyPackageAsync(
+                keyPackage.Data, _currentUser.PrivateKeyHex, keyPackage.NostrTags,
+                async id =>
+                {
+                    keyPackage.NostrEventId = id;
+                    keyPackage.RelayUrls = _nostrService.ConnectedRelayUrls.ToList();
+                    await _storageService.SaveKeyPackageAsync(keyPackage);
+                    await _mlsService.MarkKeyPackagePublishedAsync(keyPackage, id);
+                });
 
             _logger.LogInformation("AutoPublishKP: published new KeyPackage {EventId}", eventId[..Math.Min(16, eventId.Length)]);
         }

@@ -1659,7 +1659,11 @@ public class NostrService : INostrService, IDisposable
             .Select(t => t.ToList())
             .ToList();
 
-    public async Task<string> PublishKeyPackageAsync(byte[] keyPackageData, string? privateKeyHex, List<List<string>>? mdkTags = null)
+    public async Task<string> PublishKeyPackageAsync(
+        byte[] keyPackageData,
+        string? privateKeyHex,
+        List<List<string>>? mdkTags = null,
+        Func<string, Task>? bindBeforeSend = null)
     {
         if (mdkTags == null || mdkTags.Count == 0)
         {
@@ -1694,7 +1698,29 @@ public class NostrService : INostrService, IDisposable
             _logger.LogDebug("KP Tag: [{Tags}]", string.Join(", ", tag));
         }
 
-        var eventId = await PublishEventAsync(30443, Convert.ToBase64String(keyPackageData), tags, privateKeyHex);
+        // Signed first, so the id exists before anything can fetch the event.
+        var (eventId, eventMessage) = await SignForPublishAsync(
+            30443, Convert.ToBase64String(keyPackageData), tags, privateKeyHex);
+
+        // The binding, while the KeyPackage is still undiscoverable.
+        //
+        // Publishing used to come first and the caller bound afterwards, which
+        // left a window in which the relay would serve a KeyPackage this device
+        // could not resolve: a Welcome naming it was refused, and the invite was
+        // dismissed for good. The window is a relay round-trip plus two local
+        // writes -- small, and reached often enough that the headless relay
+        // tests hit it on most runs.
+        //
+        // Deliberately NOT caught. If the binding fails, nothing is published:
+        // a KeyPackage nobody can invite us with is strictly better than one
+        // that looks invitable and is not, because the second costs a peer their
+        // invite and tells them the key is gone.
+        if (bindBeforeSend is not null)
+        {
+            await bindBeforeSend(eventId);
+        }
+
+        await TransmitSignedEventAsync(eventId, 30443, eventMessage);
 
         if (!LastPublishOkResult.accepted)
         {
@@ -3490,8 +3516,6 @@ public class NostrService : INostrService, IDisposable
 
     private async Task<string> PublishEventAsync(int kind, string content, List<List<string>> tags, string? privateKeyHex)
     {
-        _logger.LogInformation("Publishing event kind {Kind} to {Count} relays", kind, _relayConnections.Count);
-
         var (eventId, eventMessage) = await SignForPublishAsync(kind, content, tags, privateKeyHex);
 
         return await TransmitSignedEventAsync(eventId, kind, eventMessage);
@@ -3640,6 +3664,13 @@ public class NostrService : INostrService, IDisposable
     private async Task<string> TransmitSignedEventAsync(
         string eventId, int kind, string eventMessage)
     {
+        // Logged here rather than in PublishEventAsync, which is no longer the
+        // only way in: PublishKeyPackageAsync signs and transmits separately so
+        // it can bind first, and leaving the line upstream would have lost it
+        // for kind 30443 -- the one publish whose sequencing is now interesting.
+        // It also belongs here on the merits, being about relays.
+        _logger.LogInformation("Publishing event kind {Kind} to {Count} relays", kind, _relayConnections.Count);
+
         var eventBytes = Encoding.UTF8.GetBytes(eventMessage);
         _logger.LogDebug("Publishing event {EventId} to relays", eventId);
 

@@ -58,7 +58,8 @@ public class HeadlessSettingsTests : HeadlessTestBase
         ctx.MockNostr.Verify(n => n.PublishKeyPackageAsync(
             It.Is<byte[]>(data => data.Length > 0),
             It.IsAny<string>(),
-            It.IsAny<List<List<string>>?>()), Times.AtLeastOnce);
+            It.IsAny<List<List<string>>?>(),
+            It.IsAny<Func<string, Task>?>()), Times.AtLeastOnce);
     }
 
     [AvaloniaTheory]
