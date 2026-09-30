@@ -231,7 +231,7 @@ public class KeyPackagePublishSignerTests
     {
         var nostrMock = new Mock<INostrService>();
         nostrMock.Setup(n => n.PublishKeyPackageAsync(
-                It.IsAny<byte[]>(), It.IsAny<string?>(), It.IsAny<List<List<string>>>()))
+                It.IsAny<byte[]>(), It.IsAny<string?>(), It.IsAny<List<List<string>>>(), It.IsAny<Func<string, Task>?>()))
             .ThrowsAsync(new InvalidOperationException(
                 "Cannot publish event: no private key and no external signer connected. " +
                 "Please log in with a private key or connect an external signer like Amber."));

@@ -148,7 +148,37 @@ public interface INostrService
     /// <param name="keyPackageData">Base64-encoded KeyPackage content bytes.</param>
     /// <param name="privateKeyHex">Sender's private key (null when using external signer).</param>
     /// <param name="mdkTags">Optional MDK-provided tags for MIP-00 compliance.</param>
-    Task<string> PublishKeyPackageAsync(byte[] keyPackageData, string? privateKeyHex, List<List<string>>? mdkTags = null);
+    /// <param name="bindBeforeSend">
+    /// Called with the event id once the event is signed and <b>before</b> any
+    /// relay is sent it. Pass this whenever the KeyPackage needs to be
+    /// resolvable by its event id — which is every real publish.
+    /// <para>
+    /// <b>Why the ordering is a parameter and not left to the caller.</b> A
+    /// Welcome names the KeyPackage it consumed by this id, and the joining
+    /// device resolves it to the private material it kept. Binding after the
+    /// publish returns leaves a window in which the relay will serve a
+    /// KeyPackage the device cannot resolve: the Welcome is refused, and the
+    /// invite is dismissed permanently. Doing it here makes the window
+    /// unreachable rather than merely small — the event does not exist anywhere
+    /// but in memory until this has returned.
+    /// </para>
+    /// <para>
+    /// Exceptions propagate and nothing is published. That is the intended
+    /// failure mode: a KeyPackage nobody can invite us with is better than one
+    /// that looks invitable and is not.
+    /// </para>
+    /// <para>
+    /// Null is for a publish with deliberately nothing to bind — see
+    /// <c>MessageService.PublishDummyKeyPackagesAsync</c>, whose events are
+    /// random bytes published to mask device count and are never resolvable by
+    /// design.
+    /// </para>
+    /// </param>
+    Task<string> PublishKeyPackageAsync(
+        byte[] keyPackageData,
+        string? privateKeyHex,
+        List<List<string>>? mdkTags = null,
+        Func<string, Task>? bindBeforeSend = null);
 
     /// <summary>
     /// Publish a Welcome message (kind 444).

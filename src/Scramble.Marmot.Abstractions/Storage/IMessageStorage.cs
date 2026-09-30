@@ -27,6 +27,54 @@ public interface IMessageStorage
     Task<bool> HasTransportSeenAsync(string transportId, CancellationToken ct = default);
 
     /// <summary>
+    /// Keeps an envelope that no key we hold will open, so a later epoch can try
+    /// it again. Replaces any row with the same transport id.
+    /// </summary>
+    /// <remarks>
+    /// See <see cref="HeldEnvelope"/> for why this cannot be a
+    /// <see cref="MessageRecord"/>: there are no MLS bytes to key one by until
+    /// the envelope peels.
+    /// </remarks>
+    Task PutHeldEnvelopeAsync(HeldEnvelope envelope, CancellationToken ct = default);
+
+    /// <summary>
+    /// Looks a held envelope up by its transport id, or null if none is held.
+    /// </summary>
+    /// <remarks>
+    /// So a re-hold can keep what the stored row knew. The same envelope
+    /// arriving twice — a relay redelivering it, or a replay pass failing to
+    /// peel it again — must not reset when it was first held, because that is
+    /// what bounds how long it is kept.
+    /// </remarks>
+    Task<HeldEnvelope?> GetHeldEnvelopeAsync(string transportId, CancellationToken ct = default);
+
+    /// <summary>
+    /// The envelopes a group is holding, oldest first.
+    /// </summary>
+    /// <remarks>
+    /// Oldest first because that is the order they arrived in and the only order
+    /// available: where an envelope belongs in the group's history is inside
+    /// bytes nothing has read.
+    /// </remarks>
+    Task<IReadOnlyList<HeldEnvelope>> ListHeldEnvelopesAsync(
+        GroupId groupId,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Forgets a held envelope — because it peeled, or because it was given up
+    /// on. A transport id that is not held is not an error.
+    /// </summary>
+    Task DeleteHeldEnvelopeAsync(string transportId, CancellationToken ct = default);
+
+    /// <summary>How many envelopes a group is holding.</summary>
+    /// <remarks>
+    /// Separate from <see cref="ListHeldEnvelopesAsync"/> so the cap that bounds
+    /// the store can be enforced without loading every envelope body to count
+    /// them.
+    /// </remarks>
+    Task<int> CountHeldEnvelopesAsync(GroupId groupId, CancellationToken ct = default);
+
+    /// <summary>
     /// Marks every <b>delivered</b> record produced after <paramref name="epoch"/>
     /// as <see cref="MessageRecordState.EpochInvalidated"/> after a fork
     /// rollback. Records are retained, not deleted, so the loss stays

@@ -19,6 +19,7 @@ internal static class MarmotSqliteMigrations
         (8, "Epoch states", V008),
         (9, "Commit publish attempts", V009),
         (10, "Durable live group state", V010),
+        (11, "Held transport envelopes", V011),
     };
 
     public static void Apply(SqliteConnection connection, string tablePrefix)
@@ -392,6 +393,60 @@ internal static class MarmotSqliteMigrations
                 tip_committer BLOB    NOT NULL,
                 created_at    TEXT    NOT NULL
             );");
+    }
+
+    private static void V011(SqliteConnection connection, string tp)
+    {
+        // Envelopes addressed to one of our groups that no key we hold opens.
+        //
+        // They cannot live in `messages`, and that is not a layering
+        // preference. Every row there is keyed by a content id derived from MLS
+        // bytes, and an envelope that will not peel has none -- so there is no
+        // id to write, and the only identifier it has is the transport id the
+        // relay gave it. Hence a table of its own, keyed by that.
+        //
+        // The case it exists for is an epoch we have not reached yet. A kind-445
+        // envelope is sealed under the exporter secret of the epoch it was sent
+        // in, and a member who never commits is behind by construction: another
+        // member's commit moves the group without them, so a message sent at the
+        // new epoch wants a key they cannot derive until that commit arrives.
+        // Before this table the engine answered TransportDeferred -- which
+        // promises the bytes were kept -- and kept nothing, so the replay that
+        // promise refers to had an empty store to read and the message was
+        // already lost. The mirror case, an epoch we have LEFT, is covered by
+        // retained transport keys and never reaches here.
+        //
+        // No epoch on the message itself, unlike `messages.source_epoch`. That
+        // column is read off the wire, and on this path nothing has been read:
+        // the signature verified and the routing tag matched, and that is all we
+        // know. held_at_epoch is where *we* stood, which is what bounds
+        // retention, and it is deliberately not called source_epoch -- they are
+        // different facts and conflating them would file every held envelope as
+        // forking from wherever we happened to be.
+        //
+        // last_attempt_epoch is nullable for the same reason it is on
+        // `messages`: null means never tried since it was held, which is not
+        // attempted at epoch zero.
+        //
+        // No foreign key to `groups`. The routing index can name an address a
+        // group used before a row for it exists, and an envelope refused for a
+        // group we are no longer in is dropped by the reader rather than by the
+        // schema -- which is where the decision belongs, because "removed" is a
+        // column and not an absence.
+        Execute(connection, $@"
+            CREATE TABLE {tp}held_envelopes (
+                transport_id       TEXT    NOT NULL PRIMARY KEY,
+                group_id           BLOB    NOT NULL,
+                envelope           BLOB    NOT NULL,
+                held_at_epoch      INTEGER NOT NULL,
+                attempts           INTEGER NOT NULL DEFAULT 0,
+                last_attempt_epoch INTEGER NULL,
+                created_at         TEXT    NOT NULL,
+                updated_at         TEXT    NOT NULL
+            );
+
+            CREATE INDEX idx_{tp}held_envelopes_group
+                ON {tp}held_envelopes (group_id, created_at);");
     }
 
     private static void Execute(SqliteConnection connection, string sql)

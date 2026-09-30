@@ -143,6 +143,15 @@ public sealed class SecureMarmotStorageProviderTests : IDisposable
         id          transport_seen.transport_id
         meta        transport_seen.seen_at
 
+        id          held_envelopes.transport_id
+        id          held_envelopes.group_id
+        protected   held_envelopes.envelope
+        meta        held_envelopes.held_at_epoch
+        meta        held_envelopes.attempts
+        meta        held_envelopes.last_attempt_epoch
+        meta        held_envelopes.created_at
+        meta        held_envelopes.updated_at
+
         id          outbound_intents.id
         id          outbound_intents.group_id
         meta        outbound_intents.kind
@@ -233,6 +242,9 @@ public sealed class SecureMarmotStorageProviderTests : IDisposable
         id          MessageRecord.GroupId
         protected   MessageRecord.Wire
 
+        id          HeldEnvelope.GroupId
+        protected   HeldEnvelope.Envelope
+
         id          QueuedOutboundIntent.Id
         id          QueuedOutboundIntent.GroupId
         protected   QueuedOutboundIntent.Payload
@@ -270,6 +282,7 @@ public sealed class SecureMarmotStorageProviderTests : IDisposable
 
     private const string LiveStateNeedle = "SCRAMBLE-NEEDLE-groups-live-state-ratchet-and-leaf-keys";
     private const string MessageWireNeedle = "SCRAMBLE-NEEDLE-messages-wire-application-plaintext";
+    private const string HeldEnvelopeNeedle = "SCRAMBLE-NEEDLE-held-envelopes-unpeelable-transport-envelope";
     private const string WelcomeWireNeedle = "SCRAMBLE-NEEDLE-welcomes-wire-group-secrets";
     private const string IntentPayloadNeedle = "SCRAMBLE-NEEDLE-outbound-intent-payload-unsent-message";
     private const string PrivateMaterialNeedle = "SCRAMBLE-NEEDLE-key-package-private-init-key";
@@ -283,6 +296,7 @@ public sealed class SecureMarmotStorageProviderTests : IDisposable
     {
         ("groups.live_state", LiveStateNeedle),
         ("messages.wire", MessageWireNeedle),
+        ("held_envelopes.envelope", HeldEnvelopeNeedle),
         ("welcomes.wire", WelcomeWireNeedle),
         ("outbound_intents.payload", IntentPayloadNeedle),
         ("key_packages.private_material", PrivateMaterialNeedle),
@@ -570,6 +584,7 @@ public sealed class SecureMarmotStorageProviderTests : IDisposable
         {
             ["groups.live_state"] = "GroupRecord.LiveState",
             ["messages.wire"] = "MessageRecord.Wire",
+            ["held_envelopes.envelope"] = "HeldEnvelope.Envelope",
             ["outbound_intents.payload"] = "QueuedOutboundIntent.Payload",
             ["welcomes.wire"] = "WelcomeRecord.Wire",
             ["key_packages.private_material"] = "KeyPackageRecord.PrivateMaterial",
@@ -721,6 +736,10 @@ public sealed class SecureMarmotStorageProviderTests : IDisposable
         await store.PutGroupAsync(GroupWithLiveState());
         await store.PutMessageAsync(MessageWithWire());
         await store.PutTransportSeenAsync("transport-1");
+
+        await store.PutHeldEnvelopeAsync(new HeldEnvelope(
+            "held-transport-1", Group1, Utf8Bytes(HeldEnvelopeNeedle),
+            new EpochId(4), DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch));
 
         await store.PutIntentAsync(new QueuedOutboundIntent(
             Intent1, Group1, "message", Utf8Bytes(IntentPayloadNeedle),

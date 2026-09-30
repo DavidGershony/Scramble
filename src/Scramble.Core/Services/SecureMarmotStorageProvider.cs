@@ -178,6 +178,12 @@ public sealed class SecureMarmotStorageProvider : IMarmotStorageProvider, IDispo
     private MessageRecord RevealMessage(MessageRecord m) =>
         m with { Wire = Reveal(m.Wire, "MessageRecord.Wire") };
 
+    private HeldEnvelope ProtectHeld(HeldEnvelope e) =>
+        e with { Envelope = Protect(e.Envelope) };
+
+    private HeldEnvelope RevealHeld(HeldEnvelope e) =>
+        e with { Envelope = Reveal(e.Envelope, "HeldEnvelope.Envelope") };
+
     private WelcomeRecord ProtectWelcome(WelcomeRecord w) =>
         w with { Wire = Protect(w.Wire) };
 
@@ -262,6 +268,27 @@ public sealed class SecureMarmotStorageProvider : IMarmotStorageProvider, IDispo
 
     public Task<bool> HasTransportSeenAsync(string transportId, CancellationToken ct = default) =>
         _inner.HasTransportSeenAsync(transportId, ct);
+
+    public Task PutHeldEnvelopeAsync(HeldEnvelope envelope, CancellationToken ct = default) =>
+        _inner.PutHeldEnvelopeAsync(ProtectHeld(envelope), ct);
+
+    public async Task<HeldEnvelope?> GetHeldEnvelopeAsync(
+        string transportId, CancellationToken ct = default)
+    {
+        var e = await _inner.GetHeldEnvelopeAsync(transportId, ct).ConfigureAwait(false);
+        return e is null ? null : RevealHeld(e);
+    }
+
+    public async Task<IReadOnlyList<HeldEnvelope>> ListHeldEnvelopesAsync(
+        GroupId groupId, CancellationToken ct = default) =>
+        (await _inner.ListHeldEnvelopesAsync(groupId, ct).ConfigureAwait(false))
+            .Select(RevealHeld).ToList();
+
+    public Task DeleteHeldEnvelopeAsync(string transportId, CancellationToken ct = default) =>
+        _inner.DeleteHeldEnvelopeAsync(transportId, ct);
+
+    public Task<int> CountHeldEnvelopesAsync(GroupId groupId, CancellationToken ct = default) =>
+        _inner.CountHeldEnvelopesAsync(groupId, ct);
 
     public Task InvalidateAfterEpochAsync(
         GroupId groupId, EpochId epoch, CancellationToken ct = default) =>

@@ -189,6 +189,84 @@ public sealed partial class SqliteMarmotStorageProvider : IMarmotStorageProvider
         return await cmd.ExecuteScalarAsync(ct) is not null;
     }
 
+    // -- Held envelopes --
+
+    public async Task PutHeldEnvelopeAsync(HeldEnvelope envelope, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(envelope);
+
+        await using var cmd = Command($@"
+            INSERT OR REPLACE INTO {_tp}held_envelopes
+                (transport_id, group_id, envelope, held_at_epoch, attempts, last_attempt_epoch, created_at, updated_at)
+            VALUES (@id, @group, @envelope, @held, @attempts, @lastAttempt, @created, @updated);");
+        cmd.Parameters.AddWithValue("@id", envelope.TransportId);
+        cmd.Parameters.AddWithValue("@group", envelope.GroupId.Value);
+        cmd.Parameters.AddWithValue("@envelope", envelope.Envelope);
+        cmd.Parameters.AddWithValue("@held", (long)envelope.HeldAtEpoch.Value);
+        cmd.Parameters.AddWithValue("@attempts", envelope.Attempts);
+        cmd.Parameters.AddWithValue(
+            "@lastAttempt",
+            envelope.LastAttemptEpoch is { } attempt ? (long)attempt.Value : DBNull.Value);
+        cmd.Parameters.AddWithValue("@created", Iso(envelope.CreatedAt));
+        cmd.Parameters.AddWithValue("@updated", Iso(envelope.UpdatedAt));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<HeldEnvelope?> GetHeldEnvelopeAsync(
+        string transportId, CancellationToken ct = default)
+    {
+        await using var cmd = Command(
+            $"SELECT * FROM {_tp}held_envelopes WHERE transport_id = @id;");
+        cmd.Parameters.AddWithValue("@id", transportId);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? ReadHeldEnvelope(reader) : null;
+    }
+
+    public async Task<IReadOnlyList<HeldEnvelope>> ListHeldEnvelopesAsync(
+        GroupId groupId, CancellationToken ct = default)
+    {
+        await using var cmd = Command(
+            $"SELECT * FROM {_tp}held_envelopes WHERE group_id = @group ORDER BY created_at;");
+        cmd.Parameters.AddWithValue("@group", groupId.Value);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+
+        var results = new List<HeldEnvelope>();
+        while (await reader.ReadAsync(ct))
+            results.Add(ReadHeldEnvelope(reader));
+        return results;
+    }
+
+    public async Task DeleteHeldEnvelopeAsync(string transportId, CancellationToken ct = default)
+    {
+        await using var cmd = Command(
+            $"DELETE FROM {_tp}held_envelopes WHERE transport_id = @id;");
+        cmd.Parameters.AddWithValue("@id", transportId);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<int> CountHeldEnvelopesAsync(GroupId groupId, CancellationToken ct = default)
+    {
+        await using var cmd = Command(
+            $"SELECT COUNT(*) FROM {_tp}held_envelopes WHERE group_id = @group;");
+        cmd.Parameters.AddWithValue("@group", groupId.Value);
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync(ct));
+    }
+
+    private static HeldEnvelope ReadHeldEnvelope(IDataRecord r) =>
+        new(
+            GetString(r, "transport_id")!,
+            new GroupId(Blob(r, "group_id")),
+            Blob(r, "envelope"),
+            new EpochId((ulong)GetInt64(r, "held_at_epoch")),
+            DateTimeOffset.Parse(GetString(r, "created_at")!),
+            DateTimeOffset.Parse(GetString(r, "updated_at")!))
+        {
+            Attempts = (int)GetInt64(r, "attempts"),
+            LastAttemptEpoch = IsNull(r, "last_attempt_epoch")
+                ? null
+                : new EpochId((ulong)GetInt64(r, "last_attempt_epoch")),
+        };
+
     public async Task InvalidateAfterEpochAsync(
         GroupId groupId, EpochId epoch, CancellationToken ct = default)
     {

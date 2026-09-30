@@ -622,11 +622,7 @@ public class FullE2EGroupInteropTests : IAsyncLifetime
     /// commit. Without the drain, Bob advances an epoch and the held message stays held.
     /// </para>
     /// </remarks>
-    [Fact(Skip =
-        "LIVE REPRODUCTION of an unfixed defect -- see ai-tasks/buffered-replay-not-draining-2026-09-30.md. " +
-        "It fails, correctly: a message held at an epoch we cannot yet read is still not delivered after the " +
-        "commit that makes it readable. Skipped so the required gate stays honest rather than red, NOT because " +
-        "it is wrong. Remove the Skip as the first step of fixing this, and it should go green.")]
+    [Fact]
     public async Task AMemberWhoNeverCommitsStillReceivesWhatAnothersCommitUnlocked()
     {
         _output.WriteLine("═══════════════════════════════════════════════════════════");

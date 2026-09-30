@@ -1,7 +1,8 @@
 # Held messages are never delivered to a member who does not commit
 
-**Status: unfixed.** One necessary part landed (`35e7217`); it is not sufficient.
-A failing reproduction is committed and skipped.
+**Status: fixed, 2026-09-30.** Two necessary parts, landed separately:
+`35e7217` (drain on somebody else's commit) and the held-envelope store below.
+The relay-level reproduction is un-skipped and green.
 
 ## The report
 
@@ -14,150 +15,226 @@ A user was invited by a White Noise client into two groups and accepted both.
 
 All members are visible in both groups. One relay, operator-controlled.
 
-The control case matters as much as the failure: a third group that the **user
-created from Scramble**, containing two White Noise clients, works perfectly.
-Their own summary was exact:
+The control case mattered as much as the failure: a third group that the user
+**created from Scramble**, containing two White Noise clients, worked perfectly.
+Their own summary was exact, and turned out to be the mechanism:
 
 > if we are not the initiator or the instigator then nothing happens
 
-## What is actually happening
+## The root cause
 
-Members being visible rules out most of the obvious theories. Member identities
-come out of the `ratchet_tree` extension inside the Welcome, so both Welcomes —
-including one for a 45-member group — arrived, fit through the relay, and decoded
-completely. **This is not a size problem, and not a Welcome problem.**
+**A kind-445 envelope sealed under an epoch the device has not yet reached was
+dropped with no durable record at all.**
 
-An application message that arrives before the device holds the epoch that can
-read it comes back `IngestOutcome.Buffered`. Confirmed in the logs, from the
-reproduction:
+`MarmotSession.ReceiveAsync` peels an envelope against `RetainedTransportKeys`,
+which holds the **live** epoch's exporter secret plus the **past** epochs kept in
+the archive. A *future* epoch's secret cannot be derived — the commit has to be
+applied first, and MLS destroys each epoch's exporter secret on purpose. So the
+peel failed, and the method returned `IngestOutcome.TransportDeferred` **without
+ever calling ingest** — and ingest is the only thing that writes a
+`MessageRecord`.
+
+`TransportDeferred` promises the bytes were kept and will be tried again. On that
+path the promise was false. The engine's own documentation admitted it:
+
+> **What is not covered, and cannot be.** An envelope sealed under an epoch we
+> have not yet reached opens under no key we hold, and nothing here keeps the
+> envelope … That case is left to the relay redelivering.
+
+That is why `35e7217` was necessary and could never be sufficient: **the drain
+fired against an empty store.** It is also why the symptom read as "the engine
+does not hand the message over" — there was nothing to hand over.
+
+A passive member is behind **by construction**: every other member's commit moves
+the group without them. So every message sent at the new epoch hit this path,
+which is exactly "if we are not the instigator then nothing happens".
+
+### And the fallback could not save it either
+
+The engine left recovery to "the relay redelivering".
+`NostrService.OnNostrEventReceived` drops any event whose id is already in
+`_recentlyProcessedEventIds`, **before** routing it — so the one recovery the
+engine leaned on was suppressed a layer up. The asymmetry is visible in that
+method: the gift-wrap buffer-full path deliberately calls
+`_recentlyProcessedEventIds.TryRemove` "so the event can be retried"; the
+kind-445 path had no equivalent.
+
+Two independent holes, and together airtight. **Not fixed by touching the dedup
+cache** — with the envelope now held durably, redelivery is no longer the
+recovery path and the cache is free to do its job.
+
+## What landed
+
+### 1. A durable held-envelope store
+
+- `HeldEnvelope` (`Scramble.Marmot.Abstractions/Storage/`) — keyed by transport
+  id, because an envelope that will not peel has no MLS bytes and therefore no
+  content-derived `MessageId`. That is the whole reason it cannot be a
+  `MessageRecord`.
+- Migration `V011`, table `held_envelopes`. `envelope` is a BLOB classified
+  `protected`, so it rides the same at-rest path as `messages.wire`; the census
+  in `SecureMarmotStorageProviderTests` is updated in the same commit.
+- `held_at_epoch` is where **we** stood, deliberately not named `source_epoch`:
+  nothing has read the envelope, so there is no sent-at epoch to record.
+
+### 2. `MarmotSession` holds and retries
+
+- `HoldAsync` keeps a retryable peel failure, but only with an **authenticated**
+  transport id (`PeelFailedException.TransportId`) and only for an address one of
+  our retained epochs actually used.
+- `ReplayHeldEnvelopesAsync` runs **before** the message replay, because a held
+  envelope can peel into a commit and applying it is what makes the MLS-held
+  records readable in the same pass.
+- It **sweeps again whenever the epoch moved**. One sweep is not enough: a
+  message refused early in a sweep can be readable by the end of it, and a
+  passive member has no guaranteed next drain.
+- A re-hold keeps the stored row's provenance and bumps only the counters — the
+  same shape, and the same reason, as `MessageIngest.PreserveAsync`.
+
+### 3. Bounds, because a routing id is public
+
+Anyone can publish a correctly signed envelope to one of our routing ids that no
+key will ever open. Three bounds, each with a test that fails when it is removed:
+
+| Bound | Why |
+|---|---|
+| `MaxHeldEnvelopesPerGroup = 256`, **keeping the oldest** | Evicting oldest-first would let a flood push out the legitimate message that arrived before it — precisely what an attacker would be buying. |
+| Retired past `AppMessagePastEpochLimit` epochs from `held_at_epoch` | Still unopenable that far on means we moved and did not find the key; and the message could not be delivered even if it peeled. |
+| Skipped at an epoch already attempted | The key is derived from group state, so asking again where nothing moved asks an answered question. This is what makes a flood free. |
+
+## Tests
+
+`EpochBoundaryPeelTests` is the right home and already covered the *past*-epoch
+direction; the future direction had no case at all. Five added, all fast (≈6 s
+total, no relay, no Docker):
+
+- `AMessageSealedUnderAnEpochWeHaveNotReachedSurvivesUntilTheCommitArrives` —
+  the mirror of the existing `…TheEpochWeJustLeftStillArrives`, and the one that
+  reproduced the defect in 585 ms.
+- `OneSweepIsNotEnoughWhenAHeldCommitIsWhatUnlocksAHeldMessage`
+- `AnEnvelopeStillUnopenableAfterTheWindowIsGivenUpOnRatherThanKept`
+- `TheHeldStoreIsCappedAndTheCapKeepsWhatArrivedFirst`
+- `AHeldEnvelopeIsNotRetriedAtAnEpochItHasAlreadyFailedAt`
+
+**Each was mutation-tested**: removing the cap, the window retirement, the
+same-epoch skip, the re-sweep condition, and the replay call each failed exactly
+one test and only that one.
+
+`FullE2EGroupInteropTests.AMemberWhoNeverCommitsStillReceivesWhatAnothersCommitUnlocked`
+is un-skipped and green. The line that read
 
 ```
-12:02:44  expected refusal, group 91f342e5… (epoch=1): deferred — held for replay once the group can read it
-12:02:48  processed commit for group 91f342e5…, epoch advanced
-12:02:48  expected refusal, event 77517f76… (epoch=1): deferred — held for replay once the group can read it
+After the commit: 0 message(s)      ← the defect
 ```
 
-So: the message is held, the commit that should unlock it is processed, the epoch
-advances — and it is **still** not delivered. A later message is deferred again.
-
-`HandleGroupMessageEventAsync` swallows all of this deliberately, at
-`Information`, via `IsExpectedInboundRefusal`. That is defensible on its own
-terms (a healthy client produces these constantly, and surfacing them would
-raise a false "group may need reset") but it means the entire failure is
-invisible: no banner, no count, no user-visible trace.
-
-## What was fixed, and why it is not enough
-
-`DrainReplayedMessagesAsync` had **seven callers and every one was an operation
-we initiate**: `AddMember`, `RemoveMember`, `UpdateAdminPubkeys`,
-`PerformSelfUpdate`, `InvitePeerToSyncGroup`, `AddPeerDevice`, and the
-merge/rollback helper. The inbound-commit branch advanced the epoch, logged
-`"epoch advanced"`, refreshed the admin list, and returned without asking for
-anything held.
-
-So a member who never commits anything never drained at all. That is a real gap
-and `35e7217` closes it — one call, in that branch.
-
-**It does not fix the reported symptom.** The reproduction still fails with the
-drain in place. The drain fires; the engine does not hand the message over.
-
-The `Buffered` arm's own comment claimed the replay "is now actually scheduled:
-every `MergeStagedAsync` and every rollback … calls
-`DrainReplayedMessagesAsync`". True for our commits, silently untrue for
-everyone else's — and, per the above, insufficient either way.
-
-## Where to look next
-
-The question is why `ReplayBufferedMessagesAsync` does not return the held
-message once the epoch has advanced. Candidates, none verified:
-
-1. **The epoch did not really advance far enough.** The sender may be further
-   ahead than the one commit we processed. In the reproduction there is exactly
-   one intervening commit, so this should not apply — but check the engine's
-   epoch directly rather than `chat.MlsEpoch` (see the trap below).
-2. **The replay is keyed on something the drain does not satisfy** — a horizon,
-   an anchor, a pending-commit precondition. `MessageIngest.ReplayAsync` is the
-   place to read.
-3. **The drain runs too early**, before the engine has committed the epoch
-   transition it just applied. Ordering inside the inbound commit path.
-4. **`ConvergeAsync` has no app caller at all.** `MessageService` carries a
-   `STILL OPEN` note saying a convergence pass adopting a branch is the other
-   event owing a replay, and nothing calls it. If the inbound commit is adopted
-   through convergence rather than applied directly, nothing replays and nothing
-   ever will.
-
-Candidate 4 is the one I would start on.
-
-## Traps found on the way
-
-- **`chat.MlsEpoch` is never updated after an inbound commit.** The refusal log
-  prints it, so a group that has advanced to epoch 2 logs `epoch=1`. Anyone
-  debugging this will be misled. It is stored at join and left.
-- **`ReplayBufferedMessagesAsync` can throw**, and the drain swallows it:
-  `"could not replay buffered messages — any message held during this commit
-  stays unread until the next one"`. A second silent-loss path.
-- **The routing index only goes as deep as our own membership.** The manual
-  "Fetch missing messages" button re-asks every address a group has used, but a
-  freshly joined member has only ever seen one — so that feature cannot help
-  this case, and its report saying "1 address" is how we learned the group had
-  not rotated.
-- **`HistoryFetchReport` overclaims.** With one address and nothing gained it
-  says *"the relay has nothing for this group beyond what you already have"*. It
-  cannot know that: messages refused as `Buffered` or `PreMembership` are
-  invisible to it. A test locks the wrong wording in
-  (`OneAddressAndNothingNew_BlamesTheRelayNotTheClient`). It should count what
-  was discarded and why — that would have said *"87 messages arrived, all held"*
-  on the first press and saved the whole investigation.
+now reads `After the commit: 1 message(s)`.
 
 ## Why CI never caught it
 
-Every interop test has **Scramble as the instigator**. There are exactly two
-shapes, and neither has another member commit while we sit passive:
+Every interop test had **Scramble as the instigator**. Two shapes, neither with
+another member committing while we sit passive:
 
 - `InboundJoinInteropTests.WeJoinAGroupTheReferenceClientCreated`
 - `GroupInteropTests.TheReferenceClientJoinsAGroupScrambleCreated`
 
-Worse, those drive the **engine**, while this defect is at the `MessageService`
-seam — so even a peer-instigated engine test would have missed it. The user
-identified this gap unprompted and it is the most valuable observation in the
-whole investigation.
+The user identified this gap unprompted and it was the most valuable observation
+in the investigation. Note the second-order version of it, which is why the
+engine-level test above is the load-bearing one: those tests drive the engine
+having *already peeled* with the sender's own group, so they step over the
+transport layer where this defect lived. A peer-instigated test that still peeled
+for itself would have missed it too.
 
-Also: `CLAUDE.md` claims `FullE2E` is not in the required gate. It is. The
-Diagnostics filter is an include-list containing `Category=Integration`, and
-`FullE2EGroupInteropTests` carries that trait, so it runs. That doc line is
-wrong again, as it warns it has been before.
+## Candidates from the first investigation, resolved
 
-## The reproduction
+1. **"The epoch did not really advance far enough."** No — it advanced; there was
+   simply nothing stored to replay.
+2. **"The replay is keyed on something the drain does not satisfy."** Correct in
+   spirit, wrong in location: the missing key was a *store*, not a precondition
+   in `MessageIngest.ReplayAsync`.
+3. **"The drain runs too early."** No.
+4. **`ConvergeAsync` has no app caller.** A real gap, but **not this bug** — the
+   inbound commit here applies directly and returns `Processed`, with no
+   convergence involved. Still open; see below.
 
-`FullE2EGroupInteropTests.AMemberWhoNeverCommitsStillReceivesWhatAnothersCommitUnlocked`,
-currently `[Fact(Skip = …)]`.
+## Still open
 
-Three Scramble users, no container beyond the relay. Alice creates a group with
-Bob; Alice later adds Carol; Alice sends a message at the new epoch; Bob must see
-it. **The ordering is forced rather than hoped for** — the bug only bites when
-the message is processed before the commit that unlocks it, and a relay serving
-oldest-first hands them over in the harmless order. So Bob stays unsubscribed
-while both are published, then subscribes with a `since` admitting only the
-message, then with one admitting the commit.
+- **`ConvergeAsync` has no app caller.** `MessageService` carries a `STILL OPEN`
+  note saying a convergence pass adopting a branch is the other event owing a
+  replay. Unrelated to this defect, still true.
+- **`chat.MlsEpoch` is never updated after an inbound commit.** Stored at join
+  and left, so the refusal log prints `epoch=1` for a group that has reached
+  epoch 2. Cost real time in this investigation; worth a one-line fix.
+- **`HistoryFetchReport` overclaims.** With one address and nothing gained it
+  says *"the relay has nothing for this group beyond what you already have"*,
+  which it cannot know: messages refused as `Buffered` or `PreMembership` are
+  invisible to it, and a held envelope now is too. A test locks the wrong wording
+  in (`OneAddressAndNothingNew_BlamesTheRelayNotTheClient`). Counting what was
+  discarded and why would have said *"87 messages arrived, all held"* on the
+  first press and saved the whole investigation.
+- ~~**`HeadlessRealRelayTests` is flaky.**~~ **Fixed 2026-09-30.** Not
+  KeyPackage contention as first guessed: the tests published a KeyPackage
+  straight through `INostrService`, which does not bind the kind-30443 event id
+  to the private material, so a Welcome naming it was refused — correctly. Two
+  KeyPackages reach the relay per user (one from the unawaited
+  `AutoPublishKeyPackageIfNeededAsync` background task, one from the test) and
+  which one the fetch returns is a race, so the failure moved between the three
+  tests. They now publish the way the app does. 6/6 clean runs; removing the
+  binding again reproduces the flake at 2/1/1 failures.
 
-Observed, with the fix in place:
+## An adjacent production bug this turned up — fixed 2026-09-30
+
+`MessageService.AutoPublishKeyPackageIfNeededAsync` publishes the KeyPackage to
+the relay **before** saving it locally and binding its event id:
 
 ```
-Bob joined at epoch 1
-Alice added Carol (a commit Bob did not make)
-After the message alone: 0 message(s) — expected 0, it is held
-After the commit: 0 message(s)      ← the defect
+GenerateKeyPackageAsync -> PublishKeyPackageAsync -> SaveKeyPackageAsync -> MarkKeyPackagePublishedAsync
+                            ^ discoverable here                              ^ resolvable only here
 ```
 
-**Remove the `Skip` as the first step of any fix.** It should go green, and
-nothing else in the suite needed to change to observe this.
+Between those two points the KeyPackage is fetchable by an inviter and
+unresolvable by us, so a Welcome built in that window is refused and the invite
+is dismissed permanently. It is a narrow race — a relay round-trip plus two
+local writes — but it is the same failure the tests were hitting, and on a slow
+device or a first-run database the window is not negligible.
+
+Closing it needs the event id before transmission. That is available: a Nostr
+event id is a SHA-256 over the serialized event, and `PublishEventAsync` already
+computes it before sending — the method splits cleanly at `var eventBytes = …`
+into sign and transmit. The smallest honest fix is an optional
+`Func<string, Task>? bindBeforeSend` on `PublishKeyPackageAsync`, invoked with
+the computed id before any relay sees the event, so a binding failure means
+nothing is published rather than something unhonourable being published.
+
+Done in `b8e2eb9` (the split, as a no-op) and `1877be5` (the fix).
+`PublishKeyPackageAsync` takes an optional `bindBeforeSend`, called with the id
+after signing and before transmission, so the window is unreachable rather than
+merely small — until it returns the event exists nowhere but in memory. Its
+exceptions propagate and nothing is published, which is the right failure mode:
+a KeyPackage nobody can invite us with beats one that looks invitable and is
+not.
+
+Both real publishers use it — `AutoPublishKeyPackageIfNeededAsync` and
+`SettingsViewModel`'s manual publish, which had the same ordering.
+`PublishDummyKeyPackagesAsync` deliberately does not: those are random bytes
+published to mask device count and are never resolvable by design.
+
+Four tests in `KeyPackageBindBeforeSendTests`, none needing a relay — the
+ordering is proven by racing the callback's failure against the no-relays
+transmit failure. Mutation-tested in both directions.
 
 ## What was tried and abandoned
 
 Five attempts at unit coverage from `BufferedReplayWiringTests`. Driving the
 inbound path means pushing through the `_events` Subject; the tests passed, then
-failed at a 5s ceiling, then at 30s, then consistently. The event reaching the
+failed at a 5 s ceiling, then at 30 s, then consistently. The event reaching the
 handler is not reliable there and `OnNostrEventReceived` swallows its own
-failures, so there is nothing to assert against. Every stable test in that class
-avoids that path. The reason is recorded in the test file. Do not retry this
-route — the integration level is the right one, and it works.
+failures, so there is nothing to assert against. Do not retry that route. The
+engine-level `MarmotSession` seam turned out to be the right one and is both
+faster and sharper — it is where the defect actually was.
+
+## A doc correction this produced
+
+`CLAUDE.md` claimed `FullE2E` is not in the required gate. It is: the Diagnostics
+filter is an **include-list** containing `Category=Integration`, and
+`FullE2EGroupInteropTests` carries that trait alongside `FullE2E`. Corrected in
+`CLAUDE.md`, which warns of exactly this drift.

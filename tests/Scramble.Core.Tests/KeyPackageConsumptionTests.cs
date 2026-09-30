@@ -57,7 +57,7 @@ public class KeyPackageConsumptionTests
 
         var nostrMock = new Mock<INostrService>();
         nostrMock.Setup(n => n.Events).Returns(new System.Reactive.Subjects.Subject<NostrEventReceived>());
-        nostrMock.Setup(n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>>()))
+        nostrMock.Setup(n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>>(), It.IsAny<Func<string, Task>?>()))
             .ReturnsAsync("new_kp_event_id_" + Guid.NewGuid().ToString("N")[..16]);
 
         var groupId = new byte[] { 0xAA, 0xBB, 0xCC, 0xDD, 0x11, 0x22, 0x33, 0x44 };
@@ -178,7 +178,7 @@ public class KeyPackageConsumptionTests
         // Assert: a new KeyPackage should be generated and published
         mlsMock.Verify(m => m.GenerateKeyPackageAsync(), Times.Once,
             "Fix 3: Should auto-generate a new KeyPackage when the last one is consumed");
-        nostrMock.Verify(n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>>()), Times.Once,
+        nostrMock.Verify(n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>>(), It.IsAny<Func<string, Task>?>()), Times.Once,
             "Fix 3: Should auto-publish the new KeyPackage to relays");
     }
 
@@ -211,7 +211,7 @@ public class KeyPackageConsumptionTests
         nostrMock.Setup(n => n.Events)
             .Returns(new System.Reactive.Subjects.Subject<NostrEventReceived>());
         nostrMock.Setup(n => n.ConnectedRelayUrls).Returns(new List<string>());
-        nostrMock.Setup(n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>>()))
+        nostrMock.Setup(n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>>(), It.IsAny<Func<string, Task>?>()))
             .ReturnsAsync("rotated_kp_" + Guid.NewGuid().ToString("N")[..16]);
 
         var mlsMock = new Mock<IMlsService>();
@@ -228,7 +228,7 @@ public class KeyPackageConsumptionTests
         mlsMock.Verify(m => m.GenerateKeyPackageAsync(), Times.Once,
             "Proactive rotation: should generate a new KP when all existing ones are expired");
         nostrMock.Verify(
-            n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>>()), Times.Once,
+            n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>>(), It.IsAny<Func<string, Task>?>()), Times.Once,
             "Proactive rotation: should publish the new KP to relays");
     }
 
@@ -276,7 +276,7 @@ public class KeyPackageConsumptionTests
 
         // Assert: should NOT auto-publish since we still have a KP
         mlsMock.Verify(m => m.GenerateKeyPackageAsync(), Times.Never);
-        nostrMock.Verify(n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>>()), Times.Never);
+        nostrMock.Verify(n => n.PublishKeyPackageAsync(It.IsAny<byte[]>(), It.IsAny<string>(), It.IsAny<List<List<string>>>(), It.IsAny<Func<string, Task>?>()), Times.Never);
     }
 
     /// <summary>
