@@ -582,5 +582,123 @@ public class FullE2EGroupInteropTests : IAsyncLifetime
         }
         return events;
     }
-}
 
+    // ══════════════════════════════════════════════════════════════════════════
+    // Test: a commit WE did not make must still deliver what it made readable
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// A member who never commits anything still receives messages that another
+    /// member's commit made readable.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The defect this exists for was reported from a real 45-member group: joined at
+    /// epoch 98, four more members added by other people, messages sent throughout, and
+    /// not one ever displayed. Members were visible the whole time, because those come
+    /// from the Welcome's ratchet tree and need no replay, so it looked like a display
+    /// problem rather than an undelivered one.
+    /// </para>
+    /// <para>
+    /// A message that arrives before this device holds the epoch that can read it is
+    /// Buffered: durable, held, awaiting replay. Every caller of the drain was an
+    /// operation WE initiate -- AddMember, RemoveMember, UpdateAdminPubkeys,
+    /// PerformSelfUpdate -- so the inbound commit branch advanced the epoch and returned
+    /// without asking for anything held. A passive member never drained at all.
+    /// </para>
+    /// <para>
+    /// <b>Why every existing interop test missed it.</b> There are two shapes in the
+    /// suite: we join a group the peer created, and the peer joins a group we created.
+    /// Neither has another member commit while we sit passive, so the path was never
+    /// exercised once. That is the gap this closes, and it is why the bug survived a
+    /// fully green gate.
+    /// </para>
+    /// <para>
+    /// <b>The ordering is forced, not hoped for.</b> The bug only bites when the message
+    /// is processed BEFORE the commit that unlocks it, and a relay serving oldest-first
+    /// hands them over in the opposite, harmless order. So Bob is deliberately not
+    /// subscribed while both are published, then subscribes with a `since` that admits
+    /// only the message -- which buffers -- and only afterwards with one that admits the
+    /// commit. Without the drain, Bob advances an epoch and the held message stays held.
+    /// </para>
+    /// </remarks>
+    [Fact(Skip =
+        "LIVE REPRODUCTION of an unfixed defect -- see ai-tasks/buffered-replay-not-draining-2026-09-30.md. " +
+        "It fails, correctly: a message held at an epoch we cannot yet read is still not delivered after the " +
+        "commit that makes it readable. Skipped so the required gate stays honest rather than red, NOT because " +
+        "it is wrong. Remove the Skip as the first step of fixing this, and it should go green.")]
+    public async Task AMemberWhoNeverCommitsStillReceivesWhatAnothersCommitUnlocked()
+    {
+        _output.WriteLine("═══════════════════════════════════════════════════════════");
+        _output.WriteLine("  Somebody else's commit must drain what it made readable");
+        _output.WriteLine("═══════════════════════════════════════════════════════════");
+
+        var alice = await CreateOCUser("Alice");
+        var bob = await CreateOCUser("Bob");
+        var carol = await CreateOCUser("Carol");
+
+        // Bob and Carol must be invitable.
+        var kpBob = await bob.MlsService.GenerateKeyPackageAsync();
+        await KeyPackagePublishing.PublishAndBindAsync(
+            bob.NostrService, bob.MlsService, kpBob, bob.PrivKeyHex);
+        var kpCarol = await carol.MlsService.GenerateKeyPackageAsync();
+        await KeyPackagePublishing.PublishAndBindAsync(
+            carol.NostrService, carol.MlsService, kpCarol, carol.PrivKeyHex);
+        await Task.Delay(2000);
+
+        // Alice's group, Bob in it. Carol is NOT yet a member: adding her later is the
+        // commit Bob does not make.
+        var chat = await alice.MessageService.CreateGroupAsync("Passive Member Group",
+            new[] { bob.PubKeyHex });
+
+        await bob.NostrService.SubscribeToWelcomesAsync(bob.PubKeyHex, bob.PrivKeyHex);
+        await Task.Delay(2000);
+        await bob.MessageService.RescanInvitesAsync();
+        var invites = (await bob.Storage.GetPendingInvitesAsync()).ToList();
+        Assert.NotEmpty(invites);
+        var chatBob = await bob.MessageService.AcceptInviteAsync(invites[0].Id);
+        _output.WriteLine($"  Bob joined at epoch {chatBob.MlsEpoch}");
+
+        var groupIdHex = chatBob.NostrGroupId is { Length: > 0 }
+            ? Convert.ToHexString(chatBob.NostrGroupId).ToLowerInvariant()
+            : Convert.ToHexString(chatBob.MlsGroupId!).ToLowerInvariant();
+
+        // Bob stays unsubscribed on purpose. AcceptInviteAsync does not subscribe, so
+        // nothing reaches him until we say so, which is what makes the order below ours
+        // to choose rather than the relay's.
+
+        // Alice adds Carol. This is the commit Bob did not make.
+        var beforeCommit = DateTimeOffset.UtcNow.AddSeconds(-5);
+        await alice.MessageService.AddMemberAsync(chat.Id, carol.PubKeyHex);
+        _output.WriteLine("  Alice added Carol (a commit Bob did not make)");
+
+        // Separate the two in time so a `since` can admit one without the other.
+        await Task.Delay(3000);
+        var afterCommit = DateTimeOffset.UtcNow.AddSeconds(-1);
+
+        const string text = "sent after Carol was added";
+        await alice.MessageService.SendMessageAsync(chat.Id, text);
+        _output.WriteLine("  Alice sent a message at the new epoch");
+        await Task.Delay(3000);
+
+        // 1. Bob sees the MESSAGE first, at an epoch he cannot read yet. The engine holds
+        //    it: Buffered, durable, awaiting replay.
+        await bob.NostrService.SubscribeToGroupMessagesAsync([groupIdHex], afterCommit);
+        await Task.Delay(4000);
+
+        var afterMessageOnly = (await bob.MessageService.GetMessagesAsync(chatBob.Id)).ToList();
+        _output.WriteLine($"  After the message alone: {afterMessageOnly.Count} message(s) — expected 0, it is held");
+
+        // 2. Now the COMMIT arrives and advances him. The held message becomes readable
+        //    at this moment, and something has to deliver it.
+        await bob.NostrService.SubscribeToGroupMessagesAsync([groupIdHex], beforeCommit);
+        await Task.Delay(6000);
+
+        var delivered = (await bob.MessageService.GetMessagesAsync(chatBob.Id)).ToList();
+        _output.WriteLine($"  After the commit: {delivered.Count} message(s)");
+        foreach (var m in delivered)
+            _output.WriteLine($"    - {m.Content}");
+
+        Assert.Contains(delivered, m => m.Content == text);
+    }
+}
