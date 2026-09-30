@@ -181,7 +181,7 @@ for itself would have missed it too.
   tests. They now publish the way the app does. 6/6 clean runs; removing the
   binding again reproduces the flake at 2/1/1 failures.
 
-## An adjacent production bug this turned up, NOT fixed
+## An adjacent production bug this turned up — fixed 2026-09-30
 
 `MessageService.AutoPublishKeyPackageIfNeededAsync` publishes the KeyPackage to
 the relay **before** saving it locally and binding its event id:
@@ -205,9 +205,22 @@ into sign and transmit. The smallest honest fix is an optional
 the computed id before any relay sees the event, so a binding failure means
 nothing is published rather than something unhonourable being published.
 
-Left undone deliberately: it touches `NostrService` (fix-density 0.52) and
-`MessageService` (0.34), and it is a separate defect from the one this document
-is about.
+Done in `b8e2eb9` (the split, as a no-op) and `1877be5` (the fix).
+`PublishKeyPackageAsync` takes an optional `bindBeforeSend`, called with the id
+after signing and before transmission, so the window is unreachable rather than
+merely small — until it returns the event exists nowhere but in memory. Its
+exceptions propagate and nothing is published, which is the right failure mode:
+a KeyPackage nobody can invite us with beats one that looks invitable and is
+not.
+
+Both real publishers use it — `AutoPublishKeyPackageIfNeededAsync` and
+`SettingsViewModel`'s manual publish, which had the same ordering.
+`PublishDummyKeyPackagesAsync` deliberately does not: those are random bytes
+published to mask device count and are never resolvable by design.
+
+Four tests in `KeyPackageBindBeforeSendTests`, none needing a relay — the
+ordering is proven by racing the callback's failure against the no-relays
+transmit failure. Mutation-tested in both directions.
 
 ## What was tried and abandoned
 
