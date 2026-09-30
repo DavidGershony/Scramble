@@ -102,7 +102,8 @@ public class HeadlessRealRelayTests : IAsyncLifetime
 
         // B publishes KeyPackage
         var kpB = await userB.Mls.GenerateKeyPackageAsync();
-        await userB.Nostr.PublishKeyPackageAsync(kpB.Data, userB.User.PrivateKeyHex!, kpB.NostrTags);
+        await KeyPackagePublishing.PublishAndBindAsync(
+            userB.Nostr, userB.Mls, kpB, userB.User.PrivateKeyHex!);
         await Task.Delay(1000);
 
         // A creates group, adds B
@@ -152,11 +153,13 @@ public class HeadlessRealRelayTests : IAsyncLifetime
 
         // B and C publish KeyPackages
         var kpB = await userB.Mls.GenerateKeyPackageAsync();
-        await userB.Nostr.PublishKeyPackageAsync(kpB.Data, userB.User.PrivateKeyHex!, kpB.NostrTags);
+        await KeyPackagePublishing.PublishAndBindAsync(
+            userB.Nostr, userB.Mls, kpB, userB.User.PrivateKeyHex!);
         var kpC = await userC.Mls.GenerateKeyPackageAsync();
         // C is added through MessageService.AddMemberAsync, the production path,
         // which selects the KeyPackage itself -- so there is no id to thread here.
-        await userC.Nostr.PublishKeyPackageAsync(kpC.Data, userC.User.PrivateKeyHex!, kpC.NostrTags);
+        await KeyPackagePublishing.PublishAndBindAsync(
+            userC.Nostr, userC.Mls, kpC, userC.User.PrivateKeyHex!);
         await Task.Delay(1000);
 
         // A creates group, adds B
@@ -252,7 +255,8 @@ public class HeadlessRealRelayTests : IAsyncLifetime
 
         // B publishes KeyPackage
         var kpB = await userB.Mls.GenerateKeyPackageAsync();
-        await userB.Nostr.PublishKeyPackageAsync(kpB.Data, userB.User.PrivateKeyHex!, kpB.NostrTags);
+        await KeyPackagePublishing.PublishAndBindAsync(
+            userB.Nostr, userB.Mls, kpB, userB.User.PrivateKeyHex!);
         await Task.Delay(1000);
 
         // Create group, exchange messages
@@ -424,15 +428,33 @@ public class HeadlessRealRelayTests : IAsyncLifetime
         var fetchedKPs = (await creator.Nostr.FetchKeyPackagesAsync(joiner.User.PublicKeyHex)).ToList();
         Assert.NotEmpty(fetchedKPs);
 
-        // NOTE (2026-09-22): selecting by the event id this test published was
-        // tried here and made the suite fail 5/5 with "the relay returned 1
-        // KeyPackage(s) ... none with event id <ours>". The relay holds exactly
-        // one, under a DIFFERENT id than our publish returned -- kind 30443 is
-        // addressable, InitializeAfterLoginAsync above has already published one
-        // for this user, and when two land in the same second NIP-01 keeps the
-        // LOWER id, not the later event. So the id our publish returns is not
-        // necessarily the id the relay serves. Left as [0] deliberately; the
-        // residual flakiness is tracked in remaining-work S13 with this finding.
+        // [0] is safe now, and why is worth keeping because it was not safe
+        // before 2026-09-30.
+        //
+        // Two KeyPackages reach the relay for this user: one from
+        // InitializeAfterLoginAsync, which schedules
+        // AutoPublishKeyPackageIfNeededAsync on an unawaited background task,
+        // and one published explicitly by the test. Which one this fetch returns
+        // first is a race, so [0] is only safe if EVERY KeyPackage on the relay
+        // is one the device can actually resolve.
+        //
+        // The test's own publish used to go straight to INostrService, which
+        // does not bind the event id to the private material -- so when the
+        // fetch happened to return that one, the Welcome named a KeyPackage the
+        // engine had no record of and the join was refused, correctly. That was
+        // the whole of the flakiness: one of three tests in this class failing
+        // per run, a different one each time, reported as "the private key is no
+        // longer available" because that is how AcceptInviteAsync reports any
+        // refusal naming a KeyPackage. It now publishes the way the app does,
+        // via KeyPackagePublishing.PublishAndBindAsync, so both are resolvable
+        // and the race is no longer observable.
+        //
+        // Selecting by the id our own publish returned is still NOT the fix,
+        // and trying it is what produced the earlier note here: kind 30443 is
+        // addressable, and when two land in the same second NIP-01 keeps the
+        // LOWER id, so the id a publish returns is not necessarily the id the
+        // relay serves. Binding every KeyPackage is what makes the choice not
+        // matter.
         var welcome = await creator.Mls.StageAddMemberAsync(groupInfo.GroupId, fetchedKPs[0]);
         await creator.Mls.MergeStagedAsync(groupInfo.GroupId);
         chatA.ParticipantPublicKeys.Add(joiner.User.PublicKeyHex);

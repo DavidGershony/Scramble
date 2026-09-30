@@ -171,12 +171,43 @@ for itself would have missed it too.
   in (`OneAddressAndNothingNew_BlamesTheRelayNotTheClient`). Counting what was
   discarded and why would have said *"87 messages arrived, all held"* on the
   first press and saved the whole investigation.
-- **`HeadlessRealRelayTests` is flaky, pre-existing.** One of its three
-  `Category=Integration` tests fails per run and a *different* one each time,
-  with "the Welcome names KeyPackage event …, which this device never published".
-  Reproduced on a clean tree at `301a54b`, so it is not from this change — the
-  three tests appear to consume each other's KeyPackages on the shared compose
-  relay. Worth its own ticket.
+- ~~**`HeadlessRealRelayTests` is flaky.**~~ **Fixed 2026-09-30.** Not
+  KeyPackage contention as first guessed: the tests published a KeyPackage
+  straight through `INostrService`, which does not bind the kind-30443 event id
+  to the private material, so a Welcome naming it was refused — correctly. Two
+  KeyPackages reach the relay per user (one from the unawaited
+  `AutoPublishKeyPackageIfNeededAsync` background task, one from the test) and
+  which one the fetch returns is a race, so the failure moved between the three
+  tests. They now publish the way the app does. 6/6 clean runs; removing the
+  binding again reproduces the flake at 2/1/1 failures.
+
+## An adjacent production bug this turned up, NOT fixed
+
+`MessageService.AutoPublishKeyPackageIfNeededAsync` publishes the KeyPackage to
+the relay **before** saving it locally and binding its event id:
+
+```
+GenerateKeyPackageAsync -> PublishKeyPackageAsync -> SaveKeyPackageAsync -> MarkKeyPackagePublishedAsync
+                            ^ discoverable here                              ^ resolvable only here
+```
+
+Between those two points the KeyPackage is fetchable by an inviter and
+unresolvable by us, so a Welcome built in that window is refused and the invite
+is dismissed permanently. It is a narrow race — a relay round-trip plus two
+local writes — but it is the same failure the tests were hitting, and on a slow
+device or a first-run database the window is not negligible.
+
+Closing it needs the event id before transmission. That is available: a Nostr
+event id is a SHA-256 over the serialized event, and `PublishEventAsync` already
+computes it before sending — the method splits cleanly at `var eventBytes = …`
+into sign and transmit. The smallest honest fix is an optional
+`Func<string, Task>? bindBeforeSend` on `PublishKeyPackageAsync`, invoked with
+the computed id before any relay sees the event, so a binding failure means
+nothing is published rather than something unhonourable being published.
+
+Left undone deliberately: it touches `NostrService` (fix-density 0.52) and
+`MessageService` (0.34), and it is a separate defect from the one this document
+is about.
 
 ## What was tried and abandoned
 
