@@ -68,7 +68,38 @@ jobs:
   integration:
     name: Integration tests (Ubuntu + Docker)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+
+    # 45, raised from 30 on 2026-09-30 because this job had been finishing in
+    # 26m37s-28m55s on its GREEN runs -- one to three minutes of headroom -- and
+    # the next honest run went over. It was not a slowdown: it was the first run
+    # in a while to get all the way through, because the UI.Tests step had been
+    # failing early (18m17s at 301a54b) and taking the job down before the
+    # Diagnostics step ran at all. Fixing that flake (919d66b) plus one
+    # un-skipped reproduction was enough to exceed 30m, and the job was killed
+    # mid-Diagnostics with two E2E timeouts that pass in 13s locally.
+    #
+    # Where the time actually goes, measured on run 36741787510:
+    #   mdk-cli image build   10m14s
+    #   wn-agent image build   8m09s
+    #   restore + build          45s
+    #   UI.Tests integration   3m02s
+    #   Diagnostics            ~7m30s (7m29s locally, containers up)
+    #
+    # So 18m23s of a 30m budget is spent building two Docker images before a
+    # single test runs. The note on the mdk-cli step below says "Docker layer
+    # caching is what keeps it off the critical path on repeat runs" -- that
+    # premise is false and has always been: GitHub-hosted runners share no
+    # Docker layer cache between runs, and nothing here configures buildx with
+    # a cache backend, so every run pays the full cold cargo release build.
+    # That is the real defect; this number only buys room to live with it.
+    #
+    # Fixing it properly is a choice between giving buildx a GHA cache backend
+    # (keeps the interop suite in the required gate) and moving
+    # DarkMatterInterop to a nightly Ubuntu workflow (what the step comment
+    # below suggests, but it shrinks the gate -- and ANALYSIS.md STEP 6 is the
+    # record of what happened last time Diagnostics sat outside it). Not decided
+    # here on purpose.
+    timeout-minutes: 45
 
     steps:
     - name: Checkout
