@@ -2717,6 +2717,23 @@ public class MessageService : IMessageService, IDisposable
                 _logger.LogWarning(adminEx, "HandleGroupMessage: failed to refresh admin list after commit");
             }
 
+            // Somebody else's commit is a drain moment too, and this call was missing.
+            //
+            // Every other caller of the drain is an operation WE initiate -- AddMember,
+            // RemoveMember, UpdateAdminPubkeys, PerformSelfUpdate. An inbound commit
+            // advanced our epoch and returned right here without asking for anything held,
+            // so a member who never commits anything themselves never drained at all: any
+            // message buffered before the epoch that could read it sat in the engine's
+            // store indefinitely. Reported from a real group -- joined at epoch 98 of 45
+            // members, four more added by other people, messages sent throughout, and not
+            // one of them ever displayed. The members were visible the whole time, because
+            // those come from the Welcome's ratchet tree and need no replay, which is what
+            // made it look like a display bug rather than an undelivered one.
+            //
+            // It is safe here: the drain isolates its own failures, so recovery cannot
+            // turn a commit we have already applied into an error.
+            await DrainReplayedMessagesAsync(chat.MlsGroupId!, "InboundCommit");
+
             return;
         }
 

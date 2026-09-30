@@ -434,4 +434,25 @@ public sealed class BufferedReplayWiringTests : IDisposable
         _mls.Verify(m => m.MergeStagedAsync(GroupId), Times.Once);
         Assert.DoesNotContain(MemberPubKey, _chat.ParticipantPublicKeys);
     }
+
+    // NOT TESTED HERE: that somebody ELSE's commit drains the replay buffer.
+    //
+    // This is the defect reported from a real group -- joined at epoch 98 of 45 members,
+    // four more added by other people, messages sent throughout, none ever displayed --
+    // and the fix is one call added to the inbound commit branch of
+    // HandleGroupMessageEventAsync. Every other drain caller is an operation WE initiate,
+    // so a member who never commits anything never drained.
+    //
+    // Five attempts to cover it from this class were abandoned. Driving the inbound path
+    // means pushing through the `_events` Subject, and the resulting tests passed, then
+    // failed at a 5s ceiling, then at 30s, then consistently -- the event reaching the
+    // handler at all was not reliable here, and the failure is swallowed by
+    // OnNostrEventReceived's own catch, so there is nothing to assert against. Every test
+    // in this class that IS stable avoids that path and calls the service directly.
+    //
+    // Bending it further would have meant asserting the bend. The real coverage belongs at
+    // the integration level, with a peer that instigates the commit -- which is also the
+    // gap that let this ship: every existing interop test has Scramble as the instigator,
+    // so the "somebody else committed" path had never been exercised at all.
+
 }
