@@ -103,11 +103,18 @@ public class EpochBoundaryPeelTests : IDisposable
 
     /// <summary>An application message from the member who is not a session.</summary>
     private static string Says(Pair pair, string text) =>
+        SaysFrom(pair.Them, pair.TheirSigner, text);
+
+    /// <summary>
+    /// The same, from a given copy of that member — so a test can speak from one
+    /// standing at an epoch the session has not reached.
+    /// </summary>
+    private static string SaysFrom(MlsGroup sender, LocalSigner signer, string text) =>
         GroupMessages.Send(
-            pair.Them,
+            sender,
             Peeler,
-            MarmotAppEvent.Chat(pair.TheirSigner.Hex, (long)Now, text),
-            pair.TheirSigner.AccountPublicKey.Span);
+            MarmotAppEvent.Chat(signer.Hex, (long)Now, text),
+            signer.AccountPublicKey.Span);
 
     /// <summary>
     /// A commit from the other member, wrapped at the epoch it was built in.
@@ -299,6 +306,203 @@ public class EpochBoundaryPeelTests : IDisposable
 
         Assert.Equal(
             new IngestOutcome.Ignored(InputRejectionCategory.InvalidEncoding), result.Outcome);
+    }
+
+    // ---- The epoch we have not reached yet ----
+
+    [Fact]
+    public async Task AMessageSealedUnderAnEpochWeHaveNotReachedSurvivesUntilTheCommitArrives()
+    {
+        // The mirror of AMessageSealedUnderTheEpochWeJustLeftStillArrives, and the
+        // half nothing covered. A passive member is behind by construction: every
+        // other member's commit moves the group without them, so a message sent at
+        // the new epoch is sealed under a key they cannot derive and will not hold
+        // until the commit reaches them.
+        //
+        // Reported from a real 45-member group -- joined at epoch 98, four members
+        // added by other people, messages sent throughout, not one displayed.
+        Pair pair = await PairAsync();
+
+        // Their commit, which we deliberately do not see yet.
+        string commit = Commits(pair.Them);
+        Assert.Equal(2UL, pair.Them.Epoch);
+        Assert.Equal(1UL, pair.Us.Group.Epoch);
+
+        // Spoken at the epoch their commit created.
+        string spoken = Says(pair, "after their commit");
+
+        IngestResult early = await pair.Us.ReceiveAsync(spoken);
+
+        // It cannot be read yet, and that much is correct and unavoidable.
+        Assert.IsType<IngestOutcome.TransportDeferred>(early.Outcome);
+        Assert.Null(early.Message);
+
+        // But TransportDeferred promises the bytes were kept, and nothing in the
+        // message store can keep them: every record there is keyed by a content
+        // id over MLS bytes, and there are none until the envelope peels.
+        HeldEnvelope kept = Assert.Single(
+            await _fixture.Provider.ListHeldEnvelopesAsync(pair.GroupId));
+
+        // Held at where WE stood, which is the fact that bounds retention -- not
+        // at the epoch the message was sent in, which nothing has read.
+        Assert.Equal(1UL, kept.HeldAtEpoch.Value);
+
+        IngestResult applied = await pair.Us.ReceiveAsync(commit);
+        Assert.IsType<IngestOutcome.Processed>(applied.Outcome);
+        Assert.Equal(2UL, pair.Us.Group.Epoch);
+
+        ReplayResult replay = await pair.Us.ReplayAsync();
+
+        Assert.Contains(replay.Delivered, m => m.Event.Content == "after their commit");
+    }
+
+    [Fact]
+    public async Task OneSweepIsNotEnoughWhenAHeldCommitIsWhatUnlocksAHeldMessage()
+    {
+        // A commit framed at an epoch we have not reached is held here too, and
+        // peeling it advances the group -- so a message refused earlier in the
+        // same sweep can be readable by the time that sweep ends. One pass would
+        // leave it for the next drain, and a passive member has no next drain to
+        // count on: their epoch moves only when somebody else commits.
+        Pair pair = await PairAsync();
+
+        // Two commits from them. The first is sealed at epoch 1, which we can
+        // open; the second at epoch 2, which we cannot until the first applies.
+        string first = Commits(pair.Them);
+        string second = Commits(pair.Them);
+        Assert.Equal(3UL, pair.Them.Epoch);
+
+        string spoken = SaysFrom(pair.Them, pair.TheirSigner, "at three");
+
+        // Worst order on purpose: the message, then the commit it needs, then
+        // the commit that one needs. Nothing is readable until the last arrives.
+        Assert.IsType<IngestOutcome.TransportDeferred>(
+            (await pair.Us.ReceiveAsync(spoken)).Outcome);
+        Assert.IsType<IngestOutcome.TransportDeferred>(
+            (await pair.Us.ReceiveAsync(second)).Outcome);
+
+        Assert.Equal(2, (await _fixture.Provider.ListHeldEnvelopesAsync(pair.GroupId)).Count);
+
+        Assert.IsType<IngestOutcome.Processed>(
+            (await pair.Us.ReceiveAsync(first)).Outcome);
+        Assert.Equal(2UL, pair.Us.Group.Epoch);
+
+        ReplayResult replay = await pair.Us.ReplayAsync();
+
+        // Both held envelopes resolved in the one pass: the commit took us to
+        // epoch 3, and the re-sweep then opened the message.
+        Assert.Equal(3UL, pair.Us.Group.Epoch);
+        Assert.Contains(replay.Delivered, m => m.Event.Content == "at three");
+        Assert.Empty(await _fixture.Provider.ListHeldEnvelopesAsync(pair.GroupId));
+    }
+
+    // ---- What bounds the held store ----
+
+    [Fact]
+    public async Task AnEnvelopeStillUnopenableAfterTheWindowIsGivenUpOnRatherThanKept()
+    {
+        // Held bytes are not kept forever. An envelope still unopenable this
+        // many epochs after it was held is not waiting on a commit we have yet
+        // to see -- we have moved that far and did not find the key -- and a
+        // message that old could not be delivered even if it did peel.
+        Pair pair = await PairAsync();
+
+        (MlsGroup twin, _) = Ahead(pair.Them);
+
+        // Sealed under an epoch we are never handed the commit for: the commit
+        // that would open it is discarded here, and the steps below fork away
+        // from that branch instead.
+        Assert.IsType<IngestOutcome.TransportDeferred>(
+            (await pair.Us.ReceiveAsync(SaysFrom(twin, pair.TheirSigner, "never"))).Outcome);
+
+        Assert.Single(await _fixture.Provider.ListHeldEnvelopesAsync(pair.GroupId));
+
+        for (int i = 0; i < (int)ConvergencePolicy.V1MaxRewindCommits + 1; i++)
+            await StepAsync(pair);
+
+        await pair.Us.ReplayAsync();
+
+        Assert.Empty(await _fixture.Provider.ListHeldEnvelopesAsync(pair.GroupId));
+    }
+
+    [Fact]
+    public async Task TheHeldStoreIsCappedAndTheCapKeepsWhatArrivedFirst()
+    {
+        // A routing id is public and on every kind-445 event, so anyone can
+        // publish a correctly signed envelope to one of our groups that no key
+        // will ever open. The cap is what makes that cost bounded.
+        //
+        // It keeps the oldest rather than evicting for the newest, which is the
+        // half worth pinning: evicting oldest-first would let a flood push out
+        // the legitimate message that arrived before it, and that is precisely
+        // what an attacker would be buying.
+        Pair pair = await PairAsync();
+
+        (MlsGroup twin, string unlock) = Ahead(pair.Them);
+
+        await pair.Us.ReceiveAsync(SaysFrom(twin, pair.TheirSigner, "first in"));
+
+        for (int i = 0; i < MarmotSession.MaxHeldEnvelopesPerGroup + 8; i++)
+            await pair.Us.ReceiveAsync(SaysFrom(twin, pair.TheirSigner, $"flood {i}"));
+
+        Assert.Equal(
+            MarmotSession.MaxHeldEnvelopesPerGroup,
+            await _fixture.Provider.CountHeldEnvelopesAsync(pair.GroupId));
+
+        // The one that arrived first is still there, so the flood cost it
+        // nothing. Checked by delivering it: the content is inside bytes the
+        // store has never read, so the row alone cannot say which it is.
+        Assert.IsType<IngestOutcome.Processed>(
+            (await pair.Us.ReceiveAsync(unlock)).Outcome);
+
+        ReplayResult replay = await pair.Us.ReplayAsync();
+
+        Assert.Contains(replay.Delivered, m => m.Event.Content == "first in");
+    }
+
+    [Fact]
+    public async Task AHeldEnvelopeIsNotRetriedAtAnEpochItHasAlreadyFailedAt()
+    {
+        // What makes a flood of unopenable junk free rather than a cost paid on
+        // every pass. The key an envelope wants is derived from group state, so
+        // asking again where nothing has moved asks a question already answered.
+        Pair pair = await PairAsync();
+
+        (MlsGroup twin, _) = Ahead(pair.Them);
+
+        await pair.Us.ReceiveAsync(SaysFrom(twin, pair.TheirSigner, "held"));
+
+        HeldEnvelope first = Assert.Single(
+            await _fixture.Provider.ListHeldEnvelopesAsync(pair.GroupId));
+        Assert.Equal(1, first.Attempts);
+
+        await pair.Us.ReplayAsync();
+        await pair.Us.ReplayAsync();
+
+        HeldEnvelope after = Assert.Single(
+            await _fixture.Provider.ListHeldEnvelopesAsync(pair.GroupId));
+
+        // Untouched: two further passes at one epoch cost no peel at all.
+        Assert.Equal(1, after.Attempts);
+        Assert.Equal(first.UpdatedAt, after.UpdatedAt);
+    }
+
+    /// <summary>
+    /// A copy of a member standing one epoch ahead of the session, and the
+    /// commit that would bring the session level with it.
+    /// </summary>
+    /// <remarks>
+    /// The only way to produce an envelope sealed under an epoch we cannot
+    /// reach: the twin speaks from the far side of a commit the session has not
+    /// been handed. Made from an export so the original is left where the
+    /// session expects it, and the commit is returned rather than dropped
+    /// because it is sealed at the epoch <i>before</i> it — the one envelope in
+    /// the arrangement the session can still open, and so the only way back.
+    /// </remarks>
+    private (MlsGroup Twin, string Unlock) Ahead(MlsGroup member)
+    {
+        MlsGroup twin = MlsGroup.Import(member.Export(), _cs);
+        return (twin, Commits(twin));
     }
 
     // ---- The cache behind it ----

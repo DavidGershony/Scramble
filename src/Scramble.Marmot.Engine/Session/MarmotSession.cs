@@ -1,3 +1,4 @@
+using System.Text;
 using DotnetMls.Crypto;
 using DotnetMls.Group;
 using Scramble.Marmot.AppComponents;
@@ -811,6 +812,17 @@ public sealed class MarmotSession
             // them differently, and because the peeler is the only thing that
             // can tell them apart: a malformed or unsigned envelope will never
             // become valid, while one we simply have no key for might.
+            //
+            // A retryable refusal is kept, and that is what makes
+            // TransportDeferred true here rather than merely hopeful. Until
+            // 2026-09-30 this arm returned the promise and stored nothing: a
+            // message sent at an epoch we had not reached was dropped, the
+            // replay it pointed at read an empty store, and the only recovery
+            // left was the relay redelivering -- which the app layer's event
+            // dedup then suppressed. See HoldAsync.
+            if (attempt.Retryable)
+                await HoldAsync(envelope, attempt, ct);
+
             return new IngestResult(
                 attempt.Retryable
                     ? new IngestOutcome.TransportDeferred(GroupId)
@@ -827,6 +839,203 @@ public sealed class MarmotSession
         return await IngestAsync(peeled.MlsBytes, peeled.TransportId, ct);
     }
 
+    /// <summary>
+    /// How many unpeelable envelopes one group will hold at once.
+    /// </summary>
+    /// <remarks>
+    /// <b>A security bound, like <see cref="MessageIngest.MaxAttemptsPerPass"/>.</b>
+    /// A routing id is a public value on every kind-445 event, so anyone can
+    /// publish a correctly signed envelope addressed to one of our groups that
+    /// no key will ever open, and each one held costs disk.
+    /// </remarks>
+    public const int MaxHeldEnvelopesPerGroup = 256;
+
+    /// <summary>
+    /// Keeps an envelope no key we hold will open, so a later epoch can try it
+    /// again.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The case this exists for is an epoch we have not reached.</b> Its
+    /// mirror — an epoch we have <i>left</i> — is handled a few lines above by
+    /// <see cref="RetainedTransportKeys"/> and never gets here. A member who
+    /// never commits is behind by construction: another member's commit moves
+    /// the group without them, so a message sent at the new epoch is sealed
+    /// under a key they cannot derive until that commit arrives. Nothing can be
+    /// read out of it in the meantime, which is exactly why the bytes have to be
+    /// what is kept.
+    /// </para>
+    /// <para>
+    /// <b>No transport id means no hold, and that is fail-safe rather than
+    /// unfortunate.</b> The id keys the store, and
+    /// <see cref="PeelFailedException.TransportId"/> is set only from a value
+    /// the peeler authenticated — so a null one is an envelope whose identity
+    /// nothing can vouch for, and filing it under a self-reported id would let a
+    /// sender choose a key that evicts somebody else's message.
+    /// </para>
+    /// <para>
+    /// <b>Only for an address that is ours.</b> Somebody else's traffic is most
+    /// of what a relay hands a client, and the refusal above already answers
+    /// <see cref="InputRejectionCategory.WrongRecipient"/> for an address no
+    /// retained epoch used — so reaching here means the envelope named an
+    /// address this group has published to. Re-checked rather than assumed,
+    /// because the check above is reached only when the peeler read the tag.
+    /// </para>
+    /// <para>
+    /// <b>A re-hold keeps what the stored row knew.</b> The same envelope
+    /// legitimately arrives more than once — a relay redelivering it, a replay
+    /// pass failing to peel it again — and rewriting it from scratch each time
+    /// would reset the epoch it was first held at, which is the thing that
+    /// bounds how long it is kept. So the provenance is carried forward and only
+    /// the attempt counters move, the same shape and for the same reason as
+    /// <c>MessageIngest.PreserveAsync</c>.
+    /// </para>
+    /// <para>
+    /// <b>The cap keeps the oldest rather than evicting for the newest.</b>
+    /// Evicting oldest-first would let a flood of junk addressed to our routing
+    /// id push out the legitimate message that arrived before it, which is the
+    /// one outcome an attacker would be buying. Refusing past the cap means a
+    /// flood can only ever cost what is already held, and the store drains at
+    /// every epoch advance. An envelope refused here is not lost in the way this
+    /// method exists to prevent — it was never readable, and the relay may
+    /// redeliver it.
+    /// </para>
+    /// </remarks>
+    private async Task HoldAsync(string envelope, PeelAttempt attempt, CancellationToken ct)
+    {
+        if (attempt.TransportId is not { Length: > 0 } transportId)
+            return;
+
+        if (attempt.AddressedTo is not { } address)
+            return;
+
+        IReadOnlyList<RetainedTransportKey> keys =
+            await _keys.NewestFirstAsync(GroupId, _group, ct);
+
+        if (!keys.Any(k => address.SequenceEqual(k.TransportGroupId)))
+            return;
+
+        var epoch = new EpochId(_group.Epoch);
+        HeldEnvelope? existing = await _storage.GetHeldEnvelopeAsync(transportId, ct);
+
+        if (existing is null
+            && await _storage.CountHeldEnvelopesAsync(GroupId, ct) >= MaxHeldEnvelopesPerGroup)
+        {
+            return;
+        }
+
+        DateTimeOffset now = _clock();
+
+        await _storage.PutHeldEnvelopeAsync(
+            existing is { } held
+                ? held with
+                {
+                    UpdatedAt = now,
+                    Attempts = held.Attempts + 1,
+                    LastAttemptEpoch = epoch,
+                }
+                : new HeldEnvelope(
+                    transportId,
+                    GroupId,
+                    Encoding.UTF8.GetBytes(envelope),
+                    epoch,
+                    now,
+                    now)
+                {
+                    Attempts = 1,
+                    LastAttemptEpoch = epoch,
+                },
+            ct);
+    }
+
+    /// <summary>
+    /// Tries the held envelopes again, now that the group stands somewhere else.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Before the message replay, not after.</b> A held envelope can peel
+    /// into a commit, and applying one advances the epoch — which is precisely
+    /// what makes the MLS records held in the message store readable. Running
+    /// this second would leave them for the next pass, and there may not be one.
+    /// </para>
+    /// <para>
+    /// <b>Skipped at an epoch already tried, like a deferred message.</b> The
+    /// key an envelope wants is derived from group state, so asking again where
+    /// nothing has moved asks a question already answered — and that is what
+    /// makes a flood of unpeelable junk free rather than a cost paid on every
+    /// pass.
+    /// </para>
+    /// <para>
+    /// <b>Given up on past the delivery window.</b> An envelope still unopenable
+    /// several epochs after it was held is not waiting on a commit we have yet
+    /// to see: we have moved that far and did not find the key. The bound is
+    /// <see cref="ConvergencePolicy.AppMessagePastEpochLimit"/> rather than a
+    /// new constant, because a message that old could not be delivered even if
+    /// it did peel.
+    /// </para>
+    /// <para>
+    /// <b>It goes back through <see cref="ReceiveAsync"/>.</b> A retry has to
+    /// re-run the whole peel — that is the step that failed — and everything
+    /// after it is the same work a fresh envelope needs. Nothing is
+    /// double-counted by the re-entry: a second failure lands in
+    /// <see cref="HoldAsync"/>, which recognises the row and bumps it rather
+    /// than replacing it.
+    /// </para>
+    /// <para>
+    /// <b>It sweeps again whenever the epoch moved, and one sweep is not
+    /// enough.</b> A commit framed at an epoch we had not reached is held here
+    /// too, and peeling it advances the group — so an envelope tried earlier in
+    /// the same sweep and refused may be readable by the time that sweep ends.
+    /// One pass would leave it for the next drain, and there is no guarantee of
+    /// a next drain: a passive member's epoch moves only when somebody else
+    /// commits. Each extra sweep has to be paid for by an epoch advance, and
+    /// those are bounded by the held commits themselves, so this terminates for
+    /// the same reason the store is capped.
+    /// </para>
+    /// </remarks>
+    private async Task<List<ReceivedGroupMessage>> ReplayHeldEnvelopesAsync(CancellationToken ct)
+    {
+        var delivered = new List<ReceivedGroupMessage>();
+
+        while (true)
+        {
+            ulong before = _group.Epoch;
+
+            IReadOnlyList<HeldEnvelope> held = await _storage.ListHeldEnvelopesAsync(GroupId, ct);
+
+            foreach (HeldEnvelope envelope in held)
+            {
+                if (_group.Epoch > envelope.HeldAtEpoch.Value
+                    && _group.Epoch - envelope.HeldAtEpoch.Value > _policy.AppMessagePastEpochLimit)
+                {
+                    await _storage.DeleteHeldEnvelopeAsync(envelope.TransportId, ct);
+                    continue;
+                }
+
+                if (envelope.LastAttemptEpoch is { } tried && tried.Value == _group.Epoch)
+                    continue;
+
+                IngestResult result = await ReceiveAsync(
+                    Encoding.UTF8.GetString(envelope.Envelope), ct);
+
+                if (result.Outcome is IngestOutcome.TransportDeferred)
+                    continue;
+
+                // Anything else is an answer: it peeled. Whether ingest then
+                // processed it, refused it as a duplicate or filed it for
+                // convergence, the envelope has done its job and a durable
+                // message record now carries it.
+                await _storage.DeleteHeldEnvelopeAsync(envelope.TransportId, ct);
+
+                if (result.Message is { } readable)
+                    delivered.Add(readable);
+            }
+
+            if (_group.Epoch == before)
+                return delivered;
+        }
+    }
+
     /// <summary>One peel attempt under one key.</summary>
     /// <param name="Peeled">What came out, or null if nothing did.</param>
     /// <param name="AddressedTo">
@@ -834,8 +1043,15 @@ public sealed class MarmotSession
     /// before reading it.
     /// </param>
     /// <param name="Retryable">Whether another key could do better.</param>
+    /// <param name="TransportId">
+    /// The envelope's own id, when the peeler got far enough to vouch for one.
+    /// Carried off the failure as well as off the success, because holding an
+    /// envelope needs to key it by something and this is the only identifier it
+    /// has — see <see cref="PeelFailedException.TransportId"/> for why it is safe
+    /// to trust and null when it is not.
+    /// </param>
     private readonly record struct PeelAttempt(
-        PeeledMessage? Peeled, byte[]? AddressedTo, bool Retryable);
+        PeeledMessage? Peeled, byte[]? AddressedTo, bool Retryable, string? TransportId);
 
     private PeelAttempt TryPeel(string envelope, RetainedTransportKey key)
     {
@@ -864,11 +1080,11 @@ public sealed class MarmotSession
                     return id.SequenceEqual(key.TransportGroupId) ? key.ExporterSecret : null;
                 });
 
-            return new PeelAttempt(peeled, addressedTo, false);
+            return new PeelAttempt(peeled, addressedTo, false, peeled.TransportId);
         }
         catch (PeelFailedException ex)
         {
-            return new PeelAttempt(null, addressedTo, ex.Retryable);
+            return new PeelAttempt(null, addressedTo, ex.Retryable, ex.TransportId);
         }
     }
 
@@ -898,12 +1114,22 @@ public sealed class MarmotSession
     {
         ulong before = _group.Epoch;
 
+        // Envelopes first: one of them may peel into a commit, and applying that
+        // is what makes the message store's held records readable in this same
+        // pass. See ReplayHeldEnvelopesAsync.
+        List<ReceivedGroupMessage> unsealed = await ReplayHeldEnvelopesAsync(ct);
+
         ReplayResult result = await _ingest.ReplayAsync(_group, GroupId, ct);
 
         if (_group.Epoch != before)
             await _host.WriteLiveStateAsync(GroupId, _group, ct);
 
-        return result;
+        // Reported as one result, because a caller cannot act on the difference:
+        // both halves are messages that were held and have now come back, and
+        // which store was holding them is an engine detail.
+        return unsealed.Count == 0
+            ? result
+            : result with { Delivered = [.. unsealed, .. result.Delivered] };
     }
 
     /// <summary>
