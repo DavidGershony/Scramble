@@ -6,8 +6,8 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>Scramble.Android</RootNamespace>
     <ApplicationId>app.scramble.chat</ApplicationId>
-    <ApplicationVersion>7006</ApplicationVersion>
-    <ApplicationDisplayVersion>0.7.6</ApplicationDisplayVersion>
+    <ApplicationVersion>7007</ApplicationVersion>
+    <ApplicationDisplayVersion>0.7.7</ApplicationDisplayVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
