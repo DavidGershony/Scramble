@@ -2523,8 +2523,60 @@ public class NostrService : INostrService, IDisposable
         return (accepted, reason);
     }
 
+    /// <summary>
+    /// How long <see cref="FetchKeyPackagesAsync(string,int)"/> waits for relay-list
+    /// discovery before going ahead with the relays it already knows.
+    /// </summary>
+    /// <remarks>
+    /// Discovery only ever widens the relay set, so it must not gate the fetch -- and it
+    /// did. Two lookups ran in series (kind 10051, then kind 10002 as its fallback), each
+    /// fanning out to <see cref="NostrConstants.DiscoveryRelays"/> and waiting for the
+    /// slowest of them or a 10s QueryRelayAsync timeout, and an empty answer is cached by
+    /// neither lookup. For an account that has published no relay list -- a new account,
+    /// or anyone who never set one -- that put up to 20s on the critical path of an invite
+    /// or a KeyPackage audit, spent on relays that by construction hold nothing. A single
+    /// one of those lookups was measured at 10.5s against the two public discovery relays.
+    /// </remarks>
+    private static readonly TimeSpan KeyPackageRelayDiscoveryBudget = TimeSpan.FromSeconds(5);
+
     public Task<IEnumerable<KeyPackage>> FetchKeyPackagesAsync(string publicKeyHex)
         => FetchKeyPackagesAsync(publicKeyHex, limit: 5);
+
+    /// <summary>
+    /// Resolves the relays a user publishes KeyPackages to: their kind 10051 list, or
+    /// their NIP-65 write relays when they have published no kind 10051. Never throws --
+    /// the caller abandons it on a timeout and is not there to observe a fault.
+    /// </summary>
+    private async Task<List<string>> DiscoverKeyPackageRelaysAsync(string publicKeyHex)
+    {
+        try
+        {
+            var kpRelays = await GetOrFetchKeyPackageRelayListAsync(publicKeyHex);
+            if (kpRelays.Count > 0)
+            {
+                _logger.LogInformation("Using {Count} kind 10051 relays for KeyPackage fetch", kpRelays.Count);
+                return kpRelays;
+            }
+
+            // Fall back to NIP-65 write relays
+            var userRelays = await GetOrFetchRelayListAsync(publicKeyHex);
+            var writeRelays = userRelays
+                .Where(r => r.Usage == RelayUsage.Write || r.Usage == RelayUsage.Both)
+                .Select(r => r.Url)
+                .ToList();
+            if (writeRelays.Count > 0)
+            {
+                _logger.LogInformation("Using {Count} NIP-65 write relays for KeyPackage fetch", writeRelays.Count);
+            }
+            return writeRelays;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to discover relays for {PubKey}, using known relays",
+                publicKeyHex[..Math.Min(16, publicKeyHex.Length)]);
+            return new List<string>();
+        }
+    }
 
     public async Task<IEnumerable<KeyPackage>> FetchKeyPackagesAsync(string publicKeyHex, int limit)
     {
@@ -2533,34 +2585,23 @@ public class NostrService : INostrService, IDisposable
 
         var keyPackages = new List<KeyPackage>();
 
-        // Prefer target user's kind 10051 KeyPackage relays, fall back to NIP-65 write relays
+        // Where the target publishes KeyPackages, if they say so. Bounded, because the
+        // connected relays below are queried either way: a slow discovery costs
+        // coverage, where waiting on it costs the whole operation.
         var relaysToTry = new List<string>();
-        try
+        var discovery = DiscoverKeyPackageRelaysAsync(publicKeyHex);
+        if (await Task.WhenAny(discovery, Task.Delay(KeyPackageRelayDiscoveryBudget)) == discovery)
         {
-            var kpRelays = await GetOrFetchKeyPackageRelayListAsync(publicKeyHex);
-            if (kpRelays.Count > 0)
-            {
-                _logger.LogInformation("Using {Count} kind 10051 relays for KeyPackage fetch", kpRelays.Count);
-                relaysToTry.AddRange(kpRelays);
-            }
-            else
-            {
-                // Fall back to NIP-65 write relays
-                var userRelays = await GetOrFetchRelayListAsync(publicKeyHex);
-                var writeRelays = userRelays
-                    .Where(r => r.Usage == RelayUsage.Write || r.Usage == RelayUsage.Both)
-                    .Select(r => r.Url)
-                    .ToList();
-                if (writeRelays.Count > 0)
-                {
-                    _logger.LogInformation("Using {Count} NIP-65 write relays for KeyPackage fetch", writeRelays.Count);
-                    relaysToTry.AddRange(writeRelays);
-                }
-            }
+            relaysToTry.AddRange(await discovery);
         }
-        catch (Exception ex)
+        else
         {
-            _logger.LogWarning(ex, "Failed to discover relays for {PubKey}, using defaults", publicKeyHex[..Math.Min(16, publicKeyHex.Length)]);
+            // Left running, deliberately: it cannot throw, and finishing warms the
+            // relay-list cache for the next fetch.
+            _logger.LogWarning(
+                "Relay discovery for {PubKey} exceeded {Budget}s - fetching KeyPackages from known relays only",
+                publicKeyHex[..Math.Min(16, publicKeyHex.Length)],
+                KeyPackageRelayDiscoveryBudget.TotalSeconds);
         }
 
         // Also try connected/default relays (dedup later)
@@ -2574,28 +2615,44 @@ public class NostrService : INostrService, IDisposable
 
         var seenEventIds = new HashSet<string>();
 
-        foreach (var relayUrl in relaysToTry)
+        // One query per relay, concurrently. In series a fetch cost the sum of every
+        // relay's latency, and a full QueryRelayAsync timeout for every relay that
+        // accepted the REQ without ever finishing it.
+        var perRelay = await Task.WhenAll(relaysToTry.Select(async relayUrl =>
         {
             try
             {
-                var packages = await FetchKeyPackagesFromRelayAsync(relayUrl, publicKeyHex, limit);
-                foreach (var pkg in packages)
-                {
-                    // Deduplicate by NostrEventId across relays
-                    var eventId = pkg.NostrEventId ?? pkg.Id;
-                    if (seenEventIds.Add(eventId))
-                    {
-                        keyPackages.Add(pkg);
-                    }
-                }
-
-                _logger.LogInformation("Found {Count} KeyPackages from {Relay} ({Total} total unique)",
-                    packages.Count, relayUrl, keyPackages.Count);
+                var found = await FetchKeyPackagesFromRelayAsync(relayUrl, publicKeyHex, limit);
+                return (relayUrl, packages: found, error: (Exception?)null);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to fetch KeyPackages from relay {Relay}", relayUrl);
+                return (relayUrl, packages: new List<KeyPackage>(), error: (Exception?)ex);
             }
+        }));
+
+        // Merged in relay order, so the result does not depend on which relay was first
+        // to answer.
+        foreach (var (relayUrl, packages, error) in perRelay)
+        {
+            if (error != null)
+            {
+                _logger.LogWarning(error, "Failed to fetch KeyPackages from relay {Relay}", relayUrl);
+                continue;
+            }
+
+            foreach (var pkg in packages)
+            {
+                // Deduplicate by NostrEventId across relays
+                var eventId = pkg.NostrEventId ?? pkg.Id;
+                if (seenEventIds.Add(eventId))
+                {
+                    keyPackages.Add(pkg);
+                }
+            }
+
+            _logger.LogInformation("Found {Count} KeyPackages from {Relay} ({Total} total unique)",
+                packages.Count, relayUrl, keyPackages.Count);
         }
 
         // NIP-33 addressable events: only the latest event per d-tag (slot ID) is valid.

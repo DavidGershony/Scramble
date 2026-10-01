@@ -226,6 +226,11 @@ public sealed class FaultyRelay : IAsyncDisposable
         foreach (var raw in historical)
             await SendAsync(conn, BuildEventMessage(subId, raw));
 
+        // The subscription stays open and unterminated: the querying side cannot tell
+        // "still sending" from "never going to answer" and has to wait out its own
+        // timeout. See RelayFaults.DropEose.
+        if (Faults.DropEose) return;
+
         await SendAsync(conn, BuildEoseMessage(subId));
     }
 
@@ -415,6 +420,14 @@ public sealed class RelayFaults
     /// broadcast. Useful for the "all relays rejected" path.
     /// </summary>
     public bool RejectAllEvents { get; set; }
+
+    /// <summary>
+    /// Accept the REQ and send the matching stored events, but never send EOSE, so the
+    /// subscription never completes. Models a relay that is reachable and willing but
+    /// does not finish a query -- the condition that made relay-list discovery cost a
+    /// full QueryRelayAsync timeout per lookup against two public discovery relays.
+    /// </summary>
+    public bool DropEose { get; set; }
 
     /// <summary>
     /// Total drop: the relay accepts the EVENT on the wire but does nothing with
