@@ -69,37 +69,20 @@ jobs:
     name: Integration tests (Ubuntu + Docker)
     runs-on: ubuntu-latest
 
-    # 45, raised from 30 on 2026-09-30 because this job had been finishing in
-    # 26m37s-28m55s on its GREEN runs -- one to three minutes of headroom -- and
-    # the next honest run went over. It was not a slowdown: it was the first run
-    # in a while to get all the way through, because the UI.Tests step had been
-    # failing early (18m17s at 301a54b) and taking the job down before the
-    # Diagnostics step ran at all. Fixing that flake (919d66b) plus one
-    # un-skipped reproduction was enough to exceed 30m, and the job was killed
-    # mid-Diagnostics with two E2E timeouts that pass in 13s locally.
+    # Back to 20 now that the mdk image builds are gone -- see the note where
+    # they used to be. It was briefly 45 to survive them.
     #
-    # Where the time actually goes, measured on run 36741787510:
-    #   mdk-cli image build   10m14s
-    #   wn-agent image build   8m09s
-    #   restore + build          45s
-    #   UI.Tests integration   3m02s
-    #   Diagnostics            ~7m30s (7m29s locally, containers up)
-    #
-    # So 18m23s of a 30m budget is spent building two Docker images before a
-    # single test runs. The note on the mdk-cli step below says "Docker layer
-    # caching is what keeps it off the critical path on repeat runs" -- that
-    # premise is false and has always been: GitHub-hosted runners share no
-    # Docker layer cache between runs, and nothing here configures buildx with
-    # a cache backend, so every run pays the full cold cargo release build.
-    # That is the real defect; this number only buys room to live with it.
-    #
-    # Fixing it properly is a choice between giving buildx a GHA cache backend
-    # (keeps the interop suite in the required gate) and moving
-    # DarkMatterInterop to a nightly Ubuntu workflow (what the step comment
-    # below suggests, but it shrinks the gate -- and ANALYSIS.md STEP 6 is the
-    # record of what happened last time Diagnostics sat outside it). Not decided
-    # here on purpose.
-    timeout-minutes: 45
+    # What is left, from the step timings on run 36752717220 minus the two
+    # removed builds:
+    #   checkout + .NET + relay    ~1m
+    #   restore + build              45s
+    #   UI.Tests integration        3m13s
+    #   Diagnostics (no interop)    ~9m
+    # which is about 14m, so 20 leaves room for a slow runner without letting a
+    # genuine hang burn three quarters of an hour. If this starts timing out
+    # again, read the step timings before raising it: last time the number was
+    # not the problem.
+    timeout-minutes: 20
 
     steps:
     - name: Checkout
@@ -116,50 +99,40 @@ jobs:
     - name: Start relay + Whitenoise containers
       run: docker compose -f docker-compose.test.yml up -d nostr-relay
 
-    # The Dark Matter interop peer. Built from a pinned mdk ref rather than
-    # pulled, because upstream publishes no image — which makes this the
-    # slowest step in the workflow by a wide margin: a cold cargo release build
-    # of the mdk workspace. Docker layer caching is what keeps it off the
-    # critical path on repeat runs; if this becomes the reason PRs are slow,
-    # move the whole DarkMatterInterop suite to a nightly Ubuntu workflow
-    # rather than dropping it, and say so here.
+    # REMOVED 2026-10-01: the two mdk interop peers, mdk-cli and wn-agent.
     #
-    # The interop tests SKIP when this container is absent, so a failure to
-    # build here turns the suite green-but-empty. The explicit readiness check
-    # below is what stops that from passing silently.
-    # The Marmot reference CLI - the peer that can actually complete an invite
-    # and exchange messages. Built from the same pinned mdk ref as the agent.
-    # See tests/mdk-cli-docker/Dockerfile for why the other two peers cannot do
-    # this job.
+    # Both were built here from a pinned mdk ref because upstream publishes no
+    # image, which meant a cold cargo release build of the mdk workspace on
+    # every run: 10m14s and 8m09s, measured on run 36752717220. That was
+    # 18m23s of a 30m budget spent before a single test ran, and it is why this
+    # job sat one to three minutes from its own timeout for weeks.
     #
-    # The interop tests SKIP when this container is absent, so a failed build
-    # would turn the suite green-but-empty. The readiness check below is what
-    # stops that passing silently, and must not be removed as redundant.
-    - name: Build and start the mdk-cli interop peer
-      run: |
-        docker compose -f docker-compose.test.yml up -d --build mdk-cli
-        for i in {1..40}; do
-          if docker exec mdk-cli-interop wn --version >/dev/null 2>&1; then
-            echo "mdk-cli ready"; exit 0
-          fi
-          sleep 3
-        done
-        echo "mdk-cli never came up" >&2
-        docker compose -f docker-compose.test.yml logs mdk-cli
-        exit 1
-
-    - name: Build and start the wn-agent interop peer
-      run: |
-        docker compose -f docker-compose.test.yml up -d --build wn-agent
-        for i in {1..40}; do
-          if docker exec wn-agent-interop test -S /run/marmot-agent/wn-agent.sock 2>/dev/null; then
-            echo "wn-agent ready"; exit 0
-          fi
-          sleep 3
-        done
-        echo "wn-agent never came up" >&2
-        docker compose -f docker-compose.test.yml logs wn-agent
-        exit 1
+    # The note that used to live here said layer caching kept this off the
+    # critical path on repeat runs. That was never true: GitHub-hosted runners
+    # share no Docker layer cache between runs, and nothing here configured
+    # buildx with a cache backend. Every run paid the full build.
+    #
+    # It also said to move the DarkMatterInterop suite to a nightly Ubuntu
+    # workflow rather than drop it. Dropped from the required gate instead, by
+    # decision: the MDK does not need to be integrated against on every push,
+    # and the pipeline being fast matters more right now.
+    #
+    # What this costs, stated plainly because ANALYSIS.md STEP 6 is the record
+    # of what happened the last time Diagnostics sat outside the gate: the
+    # DarkMatterInterop tests still exist and still pass locally, but nothing
+    # runs them automatically any more, so cross-MDK interop can now rot
+    # without CI noticing. They skip rather than fail when the peers are
+    # absent, which is what makes this safe to remove and also what makes the
+    # rot silent.
+    #
+    # To run them, bring the peers up and include the category:
+    #   docker compose -f docker-compose.test.yml up -d --build mdk-cli wn-agent
+    #   dotnet test tests/Scramble.Diagnostics/ --filter "Category=DarkMatterInterop"
+    #
+    # To put them back in the gate, restore the two steps from 7f1f4aa and add
+    # Category=DarkMatterInterop to the Diagnostics filter below -- and give
+    # buildx a cache backend at the same time, or this reverts to a job that
+    # spends most of its budget building Rust.
 
     - name: Wait for relay
       run: |
@@ -192,6 +165,10 @@ jobs:
     #   - Category=FullE2E: uses a whitenoise container that isn't reliable
     #     in ephemeral runners.
     #   - Category=WhitenoiseInterop, WebInterop: need external services.
+    #   - Category=DarkMatterInterop: dropped 2026-10-01. Needed the two mdk
+    #     peers, whose image builds were 18m23s of a 30m budget. See the note
+    #     where those steps used to be, including what the drop costs and how
+    #     to run the suite by hand.
     #
     # What's kept: MIP-Compliance / ProtocolCompliance (FaultyRelay
     # in-process), plus the shared-UI Integration category on the Diagnostics
@@ -214,7 +191,7 @@ jobs:
       run: >
         dotnet test tests/Scramble.Diagnostics/Scramble.Diagnostics.csproj
         --configuration Release -p:DesktopOnly=true
-        --filter "Category=Integration|Category=MIP-Compliance|Category=ProtocolCompliance|Category=EpochSync|Category=DeviceSync|Category=OutboxModel|Category=Notifications|Category=RelayHarness|Category=ExporterSecret|Category=DarkMatterInterop"
+        --filter "Category=Integration|Category=MIP-Compliance|Category=ProtocolCompliance|Category=EpochSync|Category=DeviceSync|Category=OutboxModel|Category=Notifications|Category=RelayHarness|Category=ExporterSecret"
         --logger "trx;LogFileName=diagnostics-integration.trx"
         --results-directory TestResults
 
@@ -222,15 +199,11 @@ jobs:
       if: failure()
       run: docker compose -f docker-compose.test.yml logs nostr-relay
 
-    - name: Dump wn-agent logs on failure
-      if: failure()
-      run: docker compose -f docker-compose.test.yml logs wn-agent
-
-    - name: Dump mdk-cli logs on failure
-      if: failure()
-      run: |
-        docker compose -f docker-compose.test.yml logs mdk-cli
-        docker exec mdk-cli-interop sh -c 'cat /logs/wnd.log 2>/dev/null | tail -200' || true
+    # The wn-agent and mdk-cli log dumps went with the steps that started those
+    # peers. Left in, they would have run `docker compose logs` and
+    # `docker exec` against containers this job never starts -- quiet on a good
+    # day, and on a bad one two confusing empty sections in the log of a failure
+    # they cannot explain. Restore them alongside the build steps.
 
     - name: Stop containers
       if: always()

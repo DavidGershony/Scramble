@@ -92,7 +92,7 @@ Any change under these paths triggers the required integration suite:
   `docker-compose.test.yml` up, runs two steps: `Category=Integration` on
   `tests/Scramble.UI.Tests`, and on `tests/Scramble.Diagnostics` the union
   `Category=Integration|MIP-Compliance|ProtocolCompliance|EpochSync|DeviceSync|
-  OutboxModel|Notifications|RelayHarness|ExporterSecret|DarkMatterInterop`.
+  OutboxModel|Notifications|RelayHarness|ExporterSecret`.
   The filter is an **include-list**, so what decides is whether a test carries
   one of those categories — not whether it also carries another. `FullE2E` is
   therefore **in** the gate, because `FullE2EGroupInteropTests` carries
@@ -103,6 +103,14 @@ Any change under these paths triggers the required integration suite:
   a relay URL. This list is the gate's contents, so correct it here when the
   workflow changes; it has been wrong in both directions before — the `FullE2E`
   half above was wrong until 2026-09-30.
+  `DarkMatterInterop` was **removed from the gate on 2026-10-01**: it needed
+  the two mdk interop peers, and building those images cost 18m23s of a 30m
+  budget on every run because GitHub-hosted runners share no Docker layer
+  cache. The suite still exists and still passes locally; nothing runs it
+  automatically now, so cross-MDK interop can rot without CI noticing. That is
+  a known, accepted cost — see the note in `integration.yml` where those steps
+  were, and `docs/ci-setup.md`.
+
 - **Escape hatch:** none. If a new subsystem needs a new category, add it
   to both `integration.yml` and `docs/ci-setup.md`.
 - **Why:** ANALYSIS.md STEP 6 — pre-existing `dotnet-desktop.yml` explicitly
@@ -230,9 +238,15 @@ dotnet test Scramble.Desktop.slnf --filter "Category!=Relay&Category!=Integratio
 docker compose -f docker-compose.test.yml up -d nostr-relay
 # Kept character-for-character in step with integration.yml. It drifted once,
 # in both directions at the same time: this line ran FullE2E, which CI does not,
-# and omitted DarkMatterInterop, which CI does — so "reproducing CI locally"
-# skipped the entire 30-test interop suite while running a category CI ignores.
-dotnet test tests/Scramble.Diagnostics/ --filter "Category=Integration|Category=MIP-Compliance|Category=ProtocolCompliance|Category=EpochSync|Category=DeviceSync|Category=OutboxModel|Category=Notifications|Category=RelayHarness|Category=ExporterSecret|Category=DarkMatterInterop"
+# and omitted DarkMatterInterop, which CI did — so "reproducing CI locally"
+# skipped the entire interop suite while running a category CI ignored.
+# DarkMatterInterop left the gate on 2026-10-01, so it is absent from both now.
+dotnet test tests/Scramble.Diagnostics/ --filter "Category=Integration|Category=MIP-Compliance|Category=ProtocolCompliance|Category=EpochSync|Category=DeviceSync|Category=OutboxModel|Category=Notifications|Category=RelayHarness|Category=ExporterSecret"
+
+# The cross-MDK interop suite, no longer in CI. Needs both mdk peers, whose
+# images take ~18m to build cold and are cached locally after the first time.
+docker compose -f docker-compose.test.yml up -d --build mdk-cli wn-agent
+dotnet test tests/Scramble.Diagnostics/ --filter "Category=DarkMatterInterop"
 
 # Drift check
 ./scripts/check-drift.ps1

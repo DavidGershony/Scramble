@@ -113,7 +113,7 @@ categories.
 |---|---|---|
 | `MarmotEngine` | **Unit** (`Scramble.Desktop.slnf`) | nothing |
 | `ConformanceVector` | **Unit** (`Scramble.Desktop.slnf`) | committed JSON fixtures (live since 2026-08-25) |
-| `DarkMatterInterop` | **Integration** (live since 2026-08-31) | relay + the `wn-agent` container |
+| `DarkMatterInterop` | **None** — manual only (in Integration 2026-08-31 to 2026-10-01) | relay + the `mdk-cli` and `wn-agent` containers |
 
 `MarmotEngine` and `ConformanceVector` are deliberately **not** in
 `integration.yml`'s `--filter` union. Neither needs a relay or Docker, so both
@@ -132,21 +132,40 @@ edit one to make it pass.** Only upstream's byte fixtures are mirrored so far;
 the scenario vectors drive a whole engine through a step list and become
 runnable at P6.
 
-`DarkMatterInterop` joined `integration.yml`'s filter on 2026-08-31, together
-with a step that builds and starts the `wn-agent` container. It runs our
-KeyPackage stack against a KeyPackage the reference implementation actually
-published — upstream ships no byte fixture for kind 30443, so this is the only
-oracle for that codec.
+`DarkMatterInterop` joined `integration.yml`'s filter on 2026-08-31 and **left
+it on 2026-10-01**. It runs our KeyPackage stack against a KeyPackage the
+reference implementation actually published — upstream ships no byte fixture for
+kind 30443, so this is still the only oracle for that codec. It is now run by
+hand:
 
-Two things about it are worth knowing before touching either:
+```bash
+docker compose -f docker-compose.test.yml up -d --build mdk-cli wn-agent
+dotnet test tests/Scramble.Diagnostics/ --filter "Category=DarkMatterInterop"
+```
 
-- **The suite skips when the container is absent**, so a build failure would
-  otherwise turn it green-but-empty. The workflow's explicit readiness check is
-  what prevents that, and it must not be removed as redundant.
-- **It is the slowest step in the workflow**, because the peers are built from a
-  pinned mdk ref with a cargo release build. If that becomes the reason PRs are
-  slow, move the suite to a nightly *Ubuntu* workflow rather than dropping it —
-  the existing nightly is Windows and cannot run the containers at all.
+**Why it was dropped.** The two peers are built from a pinned mdk ref with a
+cargo release build, and that cost 10m14s + 8m09s on every run — 18m23s of a
+30m budget before a single test ran (run 36752716969's predecessor,
+36752717220). The old note here said to move the suite to a nightly *Ubuntu*
+workflow rather than drop it; it was dropped instead, by decision, because the
+MDK does not need integrating against on every push and pipeline speed mattered
+more. The earlier claim that Docker layer caching kept this off the critical
+path was simply wrong: GitHub-hosted runners share no layer cache between runs
+and buildx had no cache backend configured.
+
+**What that costs, and it is not nothing.** Nothing runs these tests
+automatically any more, so cross-MDK interop can rot silently — the suite skips
+rather than fails when the peers are absent, which is what made the removal
+safe and is also what makes the rot invisible. ANALYSIS.md STEP 6 is the record
+of what happened the last time a Diagnostics suite sat outside the gate. If you
+put it back, give buildx a GHA cache backend in the same change, or the job
+returns to spending most of its budget building Rust.
+
+One thing still worth knowing if you run it:
+
+- **The suite skips when the containers are absent**, so it reports
+  green-but-empty rather than failing. When you run it by hand, check the test
+  count — `0 skipped` is the only evidence the peers were actually up.
 
 **There are three peer images and they are not interchangeable.** Reaching for
 the wrong one costs a day, so:
