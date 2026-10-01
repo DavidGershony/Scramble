@@ -26,7 +26,7 @@ public class KeyPackageE2EHeadlessTests : IDisposable
     public KeyPackageE2EHeadlessTests(ITestOutputHelper output)
     {
         _output = output;
-        ProfileConfiguration.SetAllowLocalRelays(true);
+        TestRelayConfig.ApplyToProcess();
     }
 
     public void Dispose()
